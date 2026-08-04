@@ -314,8 +314,11 @@ pub async fn create_browser_session(
             .into_response();
     }
     let mgr = shared_manager();
+    let viewport = body.viewport.as_ref().map(|v| {
+        anycode_browser::ViewportSpec::new(v.width, v.height, v.device_scale_factor.unwrap_or(0.0))
+    });
     match mgr
-        .create(&body.project_id, body.conversation_id.as_deref())
+        .create(&body.project_id, body.conversation_id.as_deref(), viewport)
         .await
     {
         Ok(info) => Json(json!({ "session": info })).into_response(),
@@ -332,6 +335,14 @@ pub struct NavigateBrowserBody {
     pub url: String,
 }
 
+#[derive(Deserialize)]
+pub struct BrowserViewportBody {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub device_scale_factor: Option<f64>,
+}
+
 pub async fn navigate_browser_session(
     Path(session_id): Path<String>,
     Json(body): Json<NavigateBrowserBody>,
@@ -339,6 +350,29 @@ pub async fn navigate_browser_session(
     let mgr = shared_manager();
     match mgr.navigate(&session_id, &body.url).await {
         Ok(state) => Json(json!({ "state": state })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn browser_session_set_viewport(
+    Path(session_id): Path<String>,
+    Json(body): Json<BrowserViewportBody>,
+) -> impl IntoResponse {
+    let mgr = shared_manager();
+    match mgr
+        .set_viewport(
+            &session_id,
+            body.width,
+            body.height,
+            body.device_scale_factor.unwrap_or(0.0),
+        )
+        .await
+    {
+        Ok(viewport) => Json(json!({ "viewport": viewport })).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": e.to_string() })),
@@ -363,6 +397,59 @@ pub async fn browser_session_screenshot(Path(session_id): Path<String>) -> impl 
     let mgr = shared_manager();
     match mgr.screenshot(&session_id).await {
         Ok(shot) => Json(json!({ "screenshot": shot })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BrowserHitTestBody {
+    pub x: f64,
+    pub y: f64,
+}
+
+pub async fn browser_session_hit_test(
+    Path(session_id): Path<String>,
+    Json(body): Json<BrowserHitTestBody>,
+) -> impl IntoResponse {
+    let mgr = shared_manager();
+    match mgr.hit_test(&session_id, body.x, body.y).await {
+        Ok(hit) => Json(json!({ "hit": hit })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BrowserDesignModeBody {
+    pub enabled: bool,
+}
+
+pub async fn browser_session_design_mode(
+    Path(session_id): Path<String>,
+    Json(body): Json<BrowserDesignModeBody>,
+) -> impl IntoResponse {
+    let mgr = shared_manager();
+    match mgr.set_design_mode(&session_id, body.enabled).await {
+        Ok(()) => Json(json!({ "ok": true, "enabled": body.enabled })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn browser_session_design_inspect(Path(session_id): Path<String>) -> impl IntoResponse {
+    let mgr = shared_manager();
+    match mgr.poll_design_inspect(&session_id).await {
+        Ok(state) => Json(json!({ "inspect": state })).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": e.to_string() })),

@@ -32,6 +32,8 @@ setTheme(getTheme());
 if (isTauriDesktop()) {
   document.documentElement.classList.add("dw-tauri");
   initDesktopWindowDrag();
+  // CEF is initialized lazily when the Browser panel mounts (cef_browser_show),
+  // so AppKit/Tauri event-loop startup is not racing CefInitialize.
 }
 
 const queryClient = new QueryClient({

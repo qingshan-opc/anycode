@@ -111,9 +111,9 @@ pub use task_output::DiskTaskOutput;
 pub use task_spec::{AgentPromptPack, ClarifyingQuestion, ExpectedArtifact, TaskFamily, TaskSpec};
 pub use tool_catalog::{
     tool_catalog, tool_catalog_entry, ToolCatalogEntry, DEFAULT_TOOL_IDS,
-    SECURITY_SENSITIVE_TOOL_IDS, TOOL_BROWSER_CDP, TOOL_BROWSER_CLICK, TOOL_BROWSER_NAVIGATE,
-    TOOL_BROWSER_PRESS_KEY, TOOL_BROWSER_SCREENSHOT, TOOL_BROWSER_SCROLL, TOOL_BROWSER_SNAPSHOT,
-    TOOL_BROWSER_TABS, TOOL_BROWSER_TYPE,
+    SECURITY_SENSITIVE_TOOL_IDS, TOOL_BROWSER_CDP, TOOL_BROWSER_CLICK, TOOL_BROWSER_CONSOLE,
+    TOOL_BROWSER_NAVIGATE, TOOL_BROWSER_PRESS_KEY, TOOL_BROWSER_SCREENSHOT, TOOL_BROWSER_SCROLL,
+    TOOL_BROWSER_SNAPSHOT, TOOL_BROWSER_TABS, TOOL_BROWSER_TYPE,
 };
 pub use traits::{Agent, LLMClient, MemoryStore, SubAgentExecutor, Tool};
 pub use verification::{

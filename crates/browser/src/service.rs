@@ -3,8 +3,8 @@
 use crate::error::{BrowserError, BrowserResult};
 use crate::session_actor::SessionActorHandle;
 use crate::types::{
-    BrowserScreenshot, BrowserSessionInfo, BrowserSnapshot, BrowserState, BrowserTabInfo,
-    LockHolder, ScreencastFrame,
+    BrowserHitTestResult, BrowserScreenshot, BrowserSessionInfo, BrowserSnapshot, BrowserState,
+    BrowserTabInfo, BrowserViewport, LockHolder, ScreencastFrame, ViewportSpec,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -49,6 +49,7 @@ impl BrowserService {
         project_id: &str,
         conversation_id: Option<&str>,
         bind_key: Option<&str>,
+        viewport: Option<ViewportSpec>,
     ) -> BrowserResult<BrowserSessionInfo> {
         let session_id = bind_key
             .map(str::to_string)
@@ -56,24 +57,65 @@ impl BrowserService {
         {
             let guard = self.inner.read().await;
             if let Some(existing) = guard.get(&session_id) {
-                return Ok(existing.info.clone());
+                if let Some(vp) = viewport {
+                    let actor = existing.actor.clone();
+                    drop(guard);
+                    let _ = actor
+                        .set_viewport(vp.width, vp.height, vp.device_scale_factor)
+                        .await;
+                }
+                let guard = self.inner.read().await;
+                if let Some(existing) = guard.get(&session_id) {
+                    return Ok(existing.info.clone());
+                }
+                return Err(BrowserError::SessionNotFound(session_id));
             }
         }
-        let actor = SessionActorHandle::spawn().await?;
+        // Panel open + MCP mirror (or React Strict Mode) can race; spawn is
+        // expensive — only one Chromium per bind key may win the insert.
+        let actor = SessionActorHandle::spawn(viewport).await?;
         let info = BrowserSessionInfo {
             session_id: session_id.clone(),
             project_id: project_id.to_string(),
             conversation_id: conversation_id.map(str::to_string),
         };
-        self.inner.write().await.insert(
-            session_id.clone(),
-            LiveSession {
-                info: info.clone(),
-                actor,
-                screencast: None,
-            },
-        );
+        {
+            let mut guard = self.inner.write().await;
+            if let Some(existing) = guard.get(&session_id) {
+                let kept = existing.info.clone();
+                let existing_actor = existing.actor.clone();
+                drop(guard);
+                actor.shutdown().await;
+                if let Some(vp) = viewport {
+                    let _ = existing_actor
+                        .set_viewport(vp.width, vp.height, vp.device_scale_factor)
+                        .await;
+                }
+                return Ok(kept);
+            }
+            guard.insert(
+                session_id,
+                LiveSession {
+                    info: info.clone(),
+                    actor,
+                    screencast: None,
+                },
+            );
+        }
         Ok(info)
+    }
+
+    pub async fn set_viewport(
+        &self,
+        session_id: &str,
+        width: u32,
+        height: u32,
+        device_scale_factor: f64,
+    ) -> BrowserResult<BrowserViewport> {
+        self.actor(session_id)
+            .await?
+            .set_viewport(width, height, device_scale_factor)
+            .await
     }
 
     pub async fn close_session(&self, session_id: &str) -> BrowserResult<()> {
@@ -105,6 +147,18 @@ impl BrowserService {
         self.actor(session_id).await?.navigate(url).await
     }
 
+    pub async fn console_and_network(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> BrowserResult<serde_json::Value> {
+        self.agent_lock(session_id).await?;
+        self.actor(session_id)
+            .await?
+            .console_and_network(limit)
+            .await
+    }
+
     pub async fn navigate_user(&self, session_id: &str, url: &str) -> BrowserResult<BrowserState> {
         self.actor(session_id).await?.navigate(url).await
     }
@@ -124,6 +178,27 @@ impl BrowserService {
 
     pub async fn screenshot(&self, session_id: &str) -> BrowserResult<BrowserScreenshot> {
         self.actor(session_id).await?.screenshot().await
+    }
+
+    /// Hit-test at viewport CSS pixels (screencast device coordinates).
+    pub async fn hit_test(
+        &self,
+        session_id: &str,
+        x: f64,
+        y: f64,
+    ) -> BrowserResult<Option<BrowserHitTestResult>> {
+        self.actor(session_id).await?.hit_test(x, y).await
+    }
+
+    pub async fn set_design_mode(&self, session_id: &str, enabled: bool) -> BrowserResult<()> {
+        self.actor(session_id).await?.set_design_mode(enabled).await
+    }
+
+    pub async fn poll_design_inspect(
+        &self,
+        session_id: &str,
+    ) -> BrowserResult<crate::types::BrowserDesignInspectState> {
+        self.actor(session_id).await?.poll_design_inspect().await
     }
 
     pub async fn click(&self, session_id: &str, ref_id: &str) -> BrowserResult<()> {
@@ -188,6 +263,18 @@ impl BrowserService {
         &self,
         session_id: &str,
     ) -> BrowserResult<broadcast::Receiver<ScreencastFrame>> {
+        // When CEF Alloy embed published a CDP port, the live NSView is the
+        // preview — skip JPEG screencast. Kill-switch ANYCODE_CEF_EMBED=0 clears
+        // the port so this path uses screencast instead.
+        if std::env::var("ANYCODE_CEF_CDP_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .is_some_and(|p| p > 0)
+        {
+            let (tx, rx) = broadcast::channel(1);
+            let _ = tx;
+            return Ok(rx);
+        }
         let mut guard = self.inner.write().await;
         let session = guard
             .get_mut(session_id)

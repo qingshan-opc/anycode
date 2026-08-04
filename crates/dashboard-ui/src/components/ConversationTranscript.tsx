@@ -4,9 +4,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { api } from "@/api/client";
 import type { TranscriptBlock } from "@/api/types";
-import { CopyButton } from "@/components/ui/CopyButton";
 import { SpeakButton } from "@/components/SpeakButton";
 import { Icon } from "@/components/Icon";
+import {
+  chipLabel,
+  parseBrowserDesignMessage,
+} from "@/lib/browserDesignMessage";
 import {
   isCommandBlock,
   TranscriptCommandBlock,
@@ -633,7 +636,9 @@ function ConversationTurnView({
   }, [markerDeliverablesByBlockId, projectId, replyItems]);
   const turnHasDeliverables = turnDeliverables.length > 0;
 
-  const showRecapHeader = isLast && isRunning;
+  // Progress stream lives next to「提交并推送」; keep transcript free of the
+  // duplicate TurnRecapHeader chrome (thinking chain / tools stay below).
+  const showRecapHeader = false;
   const hideBubbleTimestamps = isLast && isRunning;
   const showInlineQuestionInbox =
     isLast && isRunning && pendingQuestionsCount > 0;
@@ -1047,12 +1052,14 @@ function UserBubble({
   const t = useT();
   const isQueued =
     block.meta?.source === "message_queue" && block.meta?.status === "pending";
-  const displayBody = userBubbleDisplayText(block.body);
+  const designMsg = parseBrowserDesignMessage(block.body);
+  const displayBody = designMsg
+    ? designMsg.instruction
+    : userBubbleDisplayText(block.body);
   const visionImages = visionImagesFromMeta(block.meta);
-  const copyText = displayBody || t("conversations.attachImage");
   return (
     <div
-      className={`bubble-user rounded-2xl rounded-br-md px-4 py-3 text-sm shadow-sm group relative ${
+      className={`bubble-user rounded-2xl rounded-br-md px-4 py-3 text-sm shadow-sm ${
         isQueued ? "opacity-80 border border-dashed border-outline-variant" : ""
       }`}
     >
@@ -1061,10 +1068,15 @@ function UserBubble({
           {t("conversations.messageQueueLabel")}
         </span>
       )}
-      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-        <CopyButton text={copyText} label={t("conversations.copyMessage")} />
-      </div>
       <div className="leading-relaxed">
+        {designMsg && (
+          <div className="mb-1.5">
+            <span className="conv-browser-chip" title={designMsg.hit.css_selector}>
+              <Icon name="near_me" size={12} />
+              <span className="truncate max-w-[14rem]">{chipLabel(designMsg.hit)}</span>
+            </span>
+          </div>
+        )}
         {visionImages.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
             {visionImages.map((img, i) => (
@@ -1211,7 +1223,6 @@ const ReplyBubble = memo(function ReplyBubble({
         </Link>
       )}
       {isAssistant && !isError && <SpeakButton text={displayBody} />}
-      <CopyButton text={block.body} label={t("conversations.copyMessage")} />
     </>
   );
 
@@ -1423,6 +1434,7 @@ function isReplyBlock(blockType: string): boolean {
     "tool_result",
     "system_notice",
     "deliverable",
+    "progress_update",
   ].includes(blockType);
 }
 

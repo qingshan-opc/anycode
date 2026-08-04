@@ -29,6 +29,29 @@ pub struct BrowserViewport {
     pub height: u32,
 }
 
+/// Requested layout size + host pixel density for sharp screencasts on Retina.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ViewportSpec {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default = "default_device_scale_factor")]
+    pub device_scale_factor: f64,
+}
+
+fn default_device_scale_factor() -> f64 {
+    1.0
+}
+
+impl ViewportSpec {
+    pub fn new(width: u32, height: u32, device_scale_factor: f64) -> Self {
+        Self {
+            width,
+            height,
+            device_scale_factor,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserScreenshot {
     pub image_base64: String,
@@ -64,4 +87,31 @@ pub struct BrowserSessionInfo {
     pub session_id: String,
     pub project_id: String,
     pub conversation_id: Option<String>,
+}
+
+/// Result of clicking a point on the screencast / viewport (elementFromPoint).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserHitTestResult {
+    pub x: f64,
+    pub y: f64,
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub classes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub css_selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xpath: Option<String>,
+}
+
+/// Polled state from the in-page Design inspect controller (CEF / live page).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BrowserDesignInspectState {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hover: Option<BrowserHitTestResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick: Option<BrowserHitTestResult>,
 }

@@ -5,6 +5,11 @@ mod apple_media;
 #[cfg(not(target_os = "macos"))]
 #[path = "apple_media_stub.rs"]
 mod apple_media;
+#[cfg(target_os = "macos")]
+mod cef_embed;
+#[cfg(not(target_os = "macos"))]
+#[path = "cef_embed_stub.rs"]
+mod cef_embed;
 mod dashboard_backend;
 
 use dashboard_backend::{
@@ -211,6 +216,45 @@ fn show_workbench(app: &tauri::AppHandle, ready: bool) {
     }
     let _ = w.show();
     let _ = w.set_focus();
+
+    // Opt-in CEF smoke: ANYCODE_CEF_SMOKE=1 embeds example.com after the UI settles.
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("ANYCODE_CEF_SMOKE").is_some() {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            let app_for_cmd = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                match cef_embed::cef_browser_show(
+                    app_for_cmd,
+                    420.0,
+                    120.0,
+                    640.0,
+                    480.0,
+                    "https://example.com".into(),
+                ) {
+                    Ok(s) => {
+                        let _ = std::fs::write(
+                            std::path::PathBuf::from(
+                                std::env::var("HOME").unwrap_or_default(),
+                            )
+                            .join(".anycode/cef-smoke.txt"),
+                            format!("ok port={} url={:?}\n", s.remote_debugging_port, s.url),
+                        );
+                    }
+                    Err(e) => {
+                        let _ = std::fs::write(
+                            std::path::PathBuf::from(
+                                std::env::var("HOME").unwrap_or_default(),
+                            )
+                            .join(".anycode/cef-smoke.txt"),
+                            format!("err {e}\n"),
+                        );
+                    }
+                }
+            });
+        });
+    }
 }
 
 fn handle_anycode_deep_link(app: &tauri::AppHandle, url: &Url) {
@@ -273,6 +317,10 @@ fn register_deep_link_handlers(app: &tauri::AppHandle) {
 }
 
 fn main() {
+    // If CEF was explicitly disabled, drop a leftover CDP port so screencast
+    // can run. Default path keeps CEF and publishes the port on show.
+    cef_embed::clear_stale_cdp_port_if_disabled();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -282,6 +330,14 @@ fn main() {
             reveal_in_file_manager,
             open_local_path,
             pick_directory,
+            cef_embed::cef_browser_status,
+            cef_embed::cef_browser_show,
+            cef_embed::cef_browser_resize,
+            cef_embed::cef_browser_hide,
+            cef_embed::cef_browser_navigate,
+            cef_embed::cef_browser_new_tab,
+            cef_embed::cef_browser_select_tab,
+            cef_embed::cef_browser_close_tab,
             apple_media::apple_media_capabilities,
             apple_media::apple_media_transcribe,
             apple_media::apple_media_ocr_image,
@@ -337,6 +393,8 @@ fn main() {
                 if let Some(state) = app.try_state::<DashboardServerState>() {
                     state.stop();
                 }
+                #[cfg(target_os = "macos")]
+                anycode_browser_cef::shutdown_cef();
             }
         });
 }

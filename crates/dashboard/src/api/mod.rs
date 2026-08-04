@@ -356,12 +356,28 @@ pub fn router(state: AppState) -> Router {
             post(handlers::navigate_browser_session),
         )
         .route(
+            "/workbench/browser/sessions/{session_id}/viewport",
+            post(handlers::browser_session_set_viewport),
+        )
+        .route(
             "/workbench/browser/sessions/{session_id}/state",
             get(handlers::browser_session_state),
         )
         .route(
             "/workbench/browser/sessions/{session_id}/screenshot",
             get(handlers::browser_session_screenshot),
+        )
+        .route(
+            "/workbench/browser/sessions/{session_id}/hit-test",
+            post(handlers::browser_session_hit_test),
+        )
+        .route(
+            "/workbench/browser/sessions/{session_id}/design-mode",
+            post(handlers::browser_session_design_mode),
+        )
+        .route(
+            "/workbench/browser/sessions/{session_id}/design-inspect",
+            get(handlers::browser_session_design_inspect),
         )
         .route(
             "/workbench/browser/sessions/{session_id}/stream",

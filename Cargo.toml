@@ -2,6 +2,7 @@
 members = [
     "crates/apple-media",
     "crates/browser",
+    "crates/browser-cef",
     "crates/core",
     "crates/agent",
     "crates/tools",

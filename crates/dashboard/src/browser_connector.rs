@@ -28,8 +28,16 @@ pub fn browser_chromium_present(root: &Path) -> bool {
             .unwrap_or(false)
 }
 
+/// True when desktop CEF is publishing remote debugging for Browser* attach.
+pub fn cef_cdp_ready() -> bool {
+    std::env::var("ANYCODE_CEF_CDP_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .is_some_and(|p| p > 0)
+}
+
 pub fn native_chromium_ready() -> bool {
-    resolve_chromium_executable().is_some()
+    resolve_chromium_executable().is_some() || cef_cdp_ready()
 }
 
 /// True when the user can turn on built-in browser automation (bundled Chromium or system Chrome).
@@ -80,11 +88,13 @@ pub fn set_browser_enabled(cfg: &mut Value, enabled: bool) {
         "browser".into(),
         json!({ "enabled": enabled, "native": true }),
     );
+    // Playwright MCP (`mcp.browser`) is deprecated — keep it off so the agent
+    // uses native Browser* tools that share the Workbench CDP panel.
     let mcp = root
         .entry(CONFIG_KEY)
         .or_insert_with(|| json!({ "browser": { "enabled": false } }));
     if let Some(obj) = mcp.as_object_mut() {
-        obj.insert("browser".into(), json!({ "enabled": enabled }));
+        obj.insert("browser".into(), json!({ "enabled": false }));
     }
 }
 
@@ -128,14 +138,21 @@ pub fn browser_connector_doctor_check(enabled: bool) -> crate::schema::DoctorChe
 
 pub fn browser_connector_status() -> Value {
     let bundle = resolve_browser_mcp_bundle_root();
+    let cef = cef_cdp_ready();
     let bundled = bundle.as_ref().is_some_and(|p| is_browser_bundle(p)) || native_chromium_ready();
     let chromium_ready =
         native_chromium_ready() || bundle.as_ref().is_some_and(|p| browser_chromium_present(p));
     let chromium_path = resolve_chromium_executable().map(|p| p.display().to_string());
+    let cef_port = std::env::var("ANYCODE_CEF_CDP_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .filter(|p| *p > 0);
     json!({
         "bundled": bundled,
         "chromium_ready": chromium_ready,
         "native": true,
+        "cef_embed": cef,
+        "cef_cdp_port": cef_port,
         "bundle_path": bundle.as_ref().map(|p| p.display().to_string()),
         "chromium_path": chromium_path,
         "mcp_browser_deprecated": true,
@@ -152,6 +169,12 @@ mod tests {
         assert!(!read_browser_enabled(&cfg));
         set_browser_enabled(&mut cfg, true);
         assert!(read_browser_enabled(&cfg));
+        assert_eq!(
+            cfg.pointer("/mcp/browser/enabled")
+                .and_then(|v| v.as_bool()),
+            Some(false),
+            "Playwright MCP must stay off when enabling native browser"
+        );
         set_browser_enabled(&mut cfg, false);
         assert!(!read_browser_enabled(&cfg));
     }

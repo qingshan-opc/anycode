@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-code: var(--font-mono);
 
   --color-surface: #faf8ff;
   --color-background: #faf8ff;
@@ -2305,6 +2306,94 @@
     @apply cursor-pointer hover:bg-surface-container-high disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
+  .conv-git-bar__pill--phase {
+    @apply text-secondary pointer-events-none select-none;
+  }
+
+  .conv-git-bar__pill--progress {
+    @apply max-w-[min(28rem,55vw)] min-w-0;
+  }
+
+  .conv-git-bar__progress-text {
+    @apply min-w-0 truncate text-on-surface font-medium;
+  }
+
+  .conv-browser-design-bar {
+    @apply absolute left-3 right-3 bottom-3 z-10 flex items-center gap-2 rounded-full border border-outline-variant/70 bg-surface-container-lowest/95 px-3 py-2 shadow-md backdrop-blur-sm;
+  }
+
+  .conv-browser-design-bar__input {
+    @apply flex-1 min-w-0 border-0 bg-transparent text-xs text-on-surface outline-none placeholder:text-secondary;
+  }
+
+  .conv-browser-chip {
+    @apply inline-flex items-center gap-1 max-w-full rounded-full border border-primary/35 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary;
+  }
+
+  .conv-browser-chip__x {
+    @apply inline-flex items-center justify-center p-0 border-0 bg-transparent text-primary/80 cursor-pointer rounded-full hover:bg-primary/15;
+  }
+
+  .conv-browser-stage {
+    @apply shrink-0;
+  }
+
+  .conv-browser-frame {
+    @apply select-none;
+    /* Downscale Retina screencast (2× bitmap → CSS size) with high-quality filtering. */
+    image-rendering: auto;
+  }
+
+  .conv-browser-inspect-cursor {
+    @apply pointer-events-none absolute z-[5] -translate-x-1/2 -translate-y-1/2;
+    width: 24px;
+    height: 24px;
+  }
+
+  .conv-browser-inspect-cursor__h,
+  .conv-browser-inspect-cursor__v {
+    @apply absolute bg-primary/90;
+  }
+
+  .conv-browser-inspect-cursor__h {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    transform: translateY(-50%);
+  }
+
+  .conv-browser-inspect-cursor__v {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    transform: translateX(-50%);
+  }
+
+  .conv-browser-inspect-cursor__dot {
+    @apply absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary;
+    width: 5px;
+    height: 5px;
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.85);
+  }
+
+  .conv-browser-inspect-tag {
+    @apply pointer-events-none absolute z-[6] max-w-[14rem] truncate rounded px-1.5 py-0.5 text-[10px] font-medium text-white bg-primary shadow-sm;
+  }
+
+  .conv-git-bar__pill--phase-warn {
+    @apply border-warn/40 bg-warn/10 text-warn;
+  }
+
+  .conv-git-bar__phase-elapsed {
+    @apply text-[11px] text-secondary;
+  }
+
+  .conv-git-bar__pill--phase-warn .conv-git-bar__phase-elapsed {
+    @apply text-warn;
+  }
+
   .conv-git-bar__label {
     @apply text-secondary;
   }
@@ -2477,13 +2566,8 @@
     box-sizing: border-box;
   }
 
-  /* Hide transcript while right workbench is open — avoids overlap with narrow chat column. */
-  .conv-thread--workbench-open .conv-thread-transcript-scroll {
-    display: none;
-  }
-
   .conv-thread--workbench-open .conv-thread-composer-dock {
-    @apply flex-1 min-h-0 flex flex-col justify-end;
+    @apply shrink-0;
   }
 
   .conv-thread-body .bubble-user,
@@ -2493,17 +2577,23 @@
   }
 
   .conv-thread-body .dw-transcript-markdown {
-    @apply text-lg leading-relaxed;
+    @apply text-[15px] leading-[1.7];
   }
 
-  .conv-thread-body .dw-transcript-markdown h1,
-  .conv-thread-body .dw-transcript-markdown h2,
+  .conv-thread-body .dw-transcript-markdown h1 {
+    @apply text-xl font-semibold tracking-tight mt-5 mb-2 first:mt-0;
+  }
+
+  .conv-thread-body .dw-transcript-markdown h2 {
+    @apply text-lg font-semibold tracking-tight mt-4 mb-1.5 first:mt-0;
+  }
+
   .conv-thread-body .dw-transcript-markdown h3 {
-    @apply text-lg;
+    @apply text-base font-semibold mt-3.5 mb-1 first:mt-0;
   }
 
   .conv-thread-body .dw-transcript-code {
-    @apply text-base;
+    @apply text-[13px];
   }
 
   .conv-thread-body .dw-transcript-markdown table,
@@ -2739,10 +2829,11 @@
 
   .dw-transcript-markdown {
     @apply text-sm leading-relaxed break-words;
+    font-family: var(--font-sans);
   }
 
   .dw-transcript-markdown p {
-    @apply my-2 first:mt-0 last:mb-0;
+    @apply my-2.5 first:mt-0 last:mb-0;
   }
 
   .dw-transcript-markdown strong {
@@ -2755,18 +2846,35 @@
   }
 
   .dw-transcript-markdown hr {
-    @apply my-3 border-0 border-t border-outline-variant opacity-60;
+    @apply my-4 border-0 border-t border-outline-variant/35;
   }
 
   .dw-transcript-markdown ul,
   .dw-transcript-markdown ol {
-    @apply my-2 pl-5;
+    @apply my-2.5 pl-5;
   }
 
   .dw-transcript-markdown h1,
   .dw-transcript-markdown h2,
   .dw-transcript-markdown h3 {
-    @apply text-sm font-semibold mt-3 mb-1;
+    @apply font-semibold tracking-tight text-on-surface;
+  }
+
+  .dw-transcript-markdown h1 {
+    @apply text-base mt-4 mb-2 first:mt-0;
+  }
+
+  .dw-transcript-markdown h2 {
+    @apply text-[0.95rem] mt-3.5 mb-1.5 first:mt-0;
+  }
+
+  .dw-transcript-markdown h3 {
+    @apply text-sm mt-3 mb-1 first:mt-0;
+  }
+
+  .dw-transcript-markdown a.dw-transcript-path-link {
+    @apply text-primary underline decoration-primary/35 underline-offset-2 hover:decoration-primary;
+    cursor: pointer;
   }
 
   .dw-transcript-code {

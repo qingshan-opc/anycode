@@ -111,23 +111,33 @@ pub async fn build_tools_setup(
         use anycode_tools::{mcp_connected::McpConnected, mcp_rmcp_session::McpRmcpSession};
         let mut entries = mcp_env::mcp_server_entries_merged(&config.mcp.servers, true);
         if config.mcp.browser.enabled {
-            let slug = browser_mcp::browser_mcp_slug().to_string();
-            let already = entries.iter().any(|e| match e {
-                McpServerEntry::Stdio { slug: s, .. } | McpServerEntry::Http { slug: s, .. } => {
-                    s == &slug
-                }
-            });
-            if !already {
-                if let Some(root) = browser_mcp::resolve_browser_mcp_bundle_root() {
-                    entries.push(McpServerEntry::Stdio {
-                        slug,
-                        command: browser_mcp::browser_mcp_stdio_command(&root),
-                    });
-                } else {
-                    tracing::warn!(
-                        target: "anycode_cli",
-                        "mcp.browser.enabled but ANYCODE_BROWSER_MCP_ROOT bundle not found"
-                    );
+            #[cfg(feature = "tools-browser")]
+            let prefer_native = anycode_browser::resolve_chromium_executable().is_some();
+            #[cfg(not(feature = "tools-browser"))]
+            let prefer_native = false;
+            if prefer_native {
+                tracing::info!(
+                    target: "anycode_cli",
+                    "skipping Playwright MCP (mcp.browser) — native CDP Chromium is available; use Browser* tools for the Workbench panel"
+                );
+            } else {
+                let slug = browser_mcp::browser_mcp_slug().to_string();
+                let already = entries.iter().any(|e| match e {
+                    McpServerEntry::Stdio { slug: s, .. }
+                    | McpServerEntry::Http { slug: s, .. } => s == &slug,
+                });
+                if !already {
+                    if let Some(root) = browser_mcp::resolve_browser_mcp_bundle_root() {
+                        entries.push(McpServerEntry::Stdio {
+                            slug,
+                            command: browser_mcp::browser_mcp_stdio_command(&root),
+                        });
+                    } else {
+                        tracing::warn!(
+                            target: "anycode_cli",
+                            "mcp.browser.enabled but ANYCODE_BROWSER_MCP_ROOT bundle not found"
+                        );
+                    }
                 }
             }
         }

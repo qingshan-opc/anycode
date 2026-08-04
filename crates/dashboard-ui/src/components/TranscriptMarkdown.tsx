@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, type MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import hljs from "highlight.js/lib/core";
@@ -12,7 +12,15 @@ import xml from "highlight.js/lib/languages/xml";
 import "highlight.js/styles/github.css";
 import { MermaidDiagram } from "@/components/chat/MermaidDiagram";
 import { TableCard } from "@/components/chat/TableCard";
+import { useDeliverableProject } from "@/components/deliverables/DeliverableProjectContext";
 import { splitMarkdownWithTables } from "@/lib/markdownTable";
+import { boundMarkdownAutolinks } from "@/lib/markdownAutolink";
+import {
+  isExternalHref,
+  isLocalPathHref,
+  resolveMarkdownLocalPath,
+} from "@/lib/markdownLinkPath";
+import { openExternal, openLocalPath, revealInFileManager } from "@/lib/openExternal";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("javascript", javascript);
@@ -31,6 +39,8 @@ type Props = {
    * so incomplete fences stay cheap and stable.
    */
   live?: boolean;
+  /** Project root for resolving relative markdown links. */
+  projectRoot?: string | null;
 };
 
 function MarkdownBlock({
@@ -48,15 +58,42 @@ function MarkdownBlock({
   );
 }
 
+async function openMarkdownHref(
+  href: string,
+  projectRoot?: string | null,
+): Promise<void> {
+  const target = href.trim();
+  if (!target) return;
+  if (isExternalHref(target)) {
+    await openExternal(target);
+    return;
+  }
+  if (isLocalPathHref(target)) {
+    const abs = resolveMarkdownLocalPath(target, projectRoot);
+    try {
+      await openLocalPath(abs);
+    } catch {
+      try {
+        await revealInFileManager(abs);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 export const TranscriptMarkdown = memo(function TranscriptMarkdown({
   text,
   className = "",
   live = false,
+  projectRoot: projectRootProp = null,
 }: Props) {
-  const displayText = useMemo(
-    () => text.replace(/^[ \t]*(\*{3,}|-{3,}|_{3,})[ \t]*$/gm, ""),
-    [text],
-  );
+  const { projectRoot: projectRootFromCtx } = useDeliverableProject();
+  const projectRoot = projectRootProp ?? projectRootFromCtx ?? null;
+  const displayText = useMemo(() => {
+    const stripped = text.replace(/^[ \t]*(\*{3,}|-{3,}|_{3,})[ \t]*$/gm, "");
+    return boundMarkdownAutolinks(stripped);
+  }, [text]);
   const components = useMemo(
     () => ({
       code({ className: codeClass, children, ...props }: React.ComponentProps<"code">) {
@@ -107,14 +144,31 @@ export const TranscriptMarkdown = memo(function TranscriptMarkdown({
         );
       },
       a({ href, children, ...props }: React.ComponentProps<"a">) {
+        const h = href?.trim() ?? "";
+        const local = h.length > 0 && isLocalPathHref(h);
+        const external = h.length > 0 && isExternalHref(h);
         return (
-          <a href={href} target="_blank" rel="noreferrer" {...props}>
+          <a
+            href={h || undefined}
+            target={external ? "_blank" : undefined}
+            rel={external ? "noreferrer" : undefined}
+            className={local ? "dw-transcript-path-link" : undefined}
+            title={local ? resolveMarkdownLocalPath(h, projectRoot) : undefined}
+            onClick={(e: MouseEvent<HTMLAnchorElement>) => {
+              if (!h) return;
+              if (local || external) {
+                e.preventDefault();
+                void openMarkdownHref(h, projectRoot);
+              }
+            }}
+            {...props}
+          >
             {children}
           </a>
         );
       },
     }),
-    [live],
+    [live, projectRoot],
   );
 
   const segments = useMemo(

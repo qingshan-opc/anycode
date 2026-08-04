@@ -57,6 +57,8 @@ rust_sources_newer_than_binary() {
     "$ROOT/crates/dashboard/migrations" \
     "$ROOT/crates/dashboard/build.rs" \
     "$ROOT/crates/setup/src" \
+    "$ROOT/crates/browser/src" \
+    "$ROOT/crates/browser-cef/src" \
     -type f -newer "$BIN" 2>/dev/null | head -1 || true)"
   [[ -n "$marker" ]]
 }
@@ -108,6 +110,8 @@ fi
 if [[ "$NEED_RUST" == "1" ]]; then
   step "cargo build desktop (profile=$PROFILE, skip UI stage)" bash -ec "
     export ANYCODE_DESKTOP_SKIP_UI_STAGE=1
+    export CEF_PATH=\"\${CEF_PATH:-$HOME/.local/share/cef}\"
+    export DYLD_FALLBACK_LIBRARY_PATH=\"\${DYLD_FALLBACK_LIBRARY_PATH:-}:\$CEF_PATH:\$CEF_PATH/Chromium Embedded Framework.framework/Libraries\"
     touch \"$ROOT/apps/anycode-desktop/src/main.rs\"
     cargo build --profile \"$PROFILE\" --manifest-path \"$MANIFEST\"
   "
@@ -118,6 +122,12 @@ if [[ "$NEED_RUST" == "1" ]]; then
       exit 1
     fi
   "
+  CEF_ROOT="${CEF_PATH:-$HOME/.local/share/cef}"
+  if [[ -d "$CEF_ROOT/Chromium Embedded Framework.framework" ]]; then
+    step "stage CEF into app bundle" "$ROOT/scripts/prepare-cef.sh" "$INSTALL"
+  else
+    echo "==> skip CEF staging (CEF_PATH framework missing; run export-cef-dir then prepare-cef.sh)"
+  fi
 else
   echo "==> skip Rust build (UI-only; use --rust if you changed backend code)"
   echo "    (0s)"

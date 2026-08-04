@@ -1,4 +1,8 @@
-//! Navigation URL policy (SSRF-aligned with WebFetch).
+//! Navigation URL policy for the built-in workbench browser.
+//!
+//! Unlike WebFetch (strict SSRF), local Chromium must open loopback / LAN
+//! apps under development (Cursor parity). Still block cloud metadata and
+//! non-http(s) schemes.
 
 use crate::error::{BrowserError, BrowserResult};
 use url::Url;
@@ -18,16 +22,14 @@ fn parse_domain_as_ip_literal(name: &str) -> Option<std::net::IpAddr> {
     None
 }
 
-fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+/// Link-local / cloud metadata ranges that must never be navigated.
+fn is_metadata_or_link_local(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.octets()[0] == 169 && v4.octets()[1] == 254
+            // 169.254.0.0/16 — AWS/GCP metadata & link-local
+            v4.octets()[0] == 169 && v4.octets()[1] == 254 || v4.is_unspecified()
         }
-        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+        std::net::IpAddr::V6(v6) => v6.is_unspecified(),
     }
 }
 
@@ -47,35 +49,36 @@ pub fn validate_navigation_url(raw: &str) -> BrowserResult<Url> {
         match host {
             url::Host::Domain(name) => {
                 let lower = name.to_ascii_lowercase();
-                if lower == "localhost" || lower.ends_with(".localhost") {
-                    return Err(BrowserError::NavigationBlocked(
-                        "localhost not allowed".into(),
-                    ));
-                }
-                if lower == "metadata.google.internal" {
+                if lower == "metadata.google.internal"
+                    || lower.ends_with(".metadata.google.internal")
+                {
                     return Err(BrowserError::NavigationBlocked(
                         "metadata host not allowed".into(),
                     ));
                 }
+                // localhost / *.localhost allowed for local webdev.
+                if lower == "localhost" || lower.ends_with(".localhost") {
+                    return Ok(url);
+                }
                 if let Some(ip) = parse_domain_as_ip_literal(name) {
-                    if is_blocked_ip(ip) {
+                    if is_metadata_or_link_local(ip) {
                         return Err(BrowserError::NavigationBlocked(
-                            "private or link-local IP not allowed".into(),
+                            "link-local or metadata IP not allowed".into(),
                         ));
                     }
                 }
             }
             url::Host::Ipv4(ip) => {
-                if is_blocked_ip(std::net::IpAddr::V4(ip)) {
+                if is_metadata_or_link_local(std::net::IpAddr::V4(ip)) {
                     return Err(BrowserError::NavigationBlocked(
-                        "private or link-local IP not allowed".into(),
+                        "link-local or metadata IP not allowed".into(),
                     ));
                 }
             }
             url::Host::Ipv6(ip) => {
-                if is_blocked_ip(std::net::IpAddr::V6(ip)) {
+                if is_metadata_or_link_local(std::net::IpAddr::V6(ip)) {
                     return Err(BrowserError::NavigationBlocked(
-                        "private or link-local IP not allowed".into(),
+                        "link-local or metadata IP not allowed".into(),
                     ));
                 }
             }
@@ -113,7 +116,21 @@ mod tests {
     }
 
     #[test]
-    fn blocks_localhost() {
-        assert!(validate_navigation_url("http://localhost:8080").is_err());
+    fn allows_localhost_and_loopback() {
+        assert!(validate_navigation_url("http://localhost:43180").is_ok());
+        assert!(validate_navigation_url("http://127.0.0.1:3000").is_ok());
+        assert!(validate_navigation_url("http://[::1]:5173/").is_ok());
+    }
+
+    #[test]
+    fn allows_private_lan() {
+        assert!(validate_navigation_url("http://192.168.1.10:8080").is_ok());
+        assert!(validate_navigation_url("http://10.0.0.2/").is_ok());
+    }
+
+    #[test]
+    fn blocks_metadata() {
+        assert!(validate_navigation_url("http://169.254.169.254/latest").is_err());
+        assert!(validate_navigation_url("http://metadata.google.internal/").is_err());
     }
 }

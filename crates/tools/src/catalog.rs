@@ -64,9 +64,9 @@ pub const TOOL_TEXT_TO_SPEECH: &str = "TextToSpeech";
 pub const TOOL_GENERATE_IMAGE: &str = "GenerateImage";
 pub const TOOL_GENERATE_VIDEO: &str = "GenerateVideo";
 pub use anycode_core::{
-    TOOL_BROWSER_CDP, TOOL_BROWSER_CLICK, TOOL_BROWSER_NAVIGATE, TOOL_BROWSER_PRESS_KEY,
-    TOOL_BROWSER_SCREENSHOT, TOOL_BROWSER_SCROLL, TOOL_BROWSER_SNAPSHOT, TOOL_BROWSER_TABS,
-    TOOL_BROWSER_TYPE,
+    TOOL_BROWSER_CDP, TOOL_BROWSER_CLICK, TOOL_BROWSER_CONSOLE, TOOL_BROWSER_NAVIGATE,
+    TOOL_BROWSER_PRESS_KEY, TOOL_BROWSER_SCREENSHOT, TOOL_BROWSER_SCROLL, TOOL_BROWSER_SNAPSHOT,
+    TOOL_BROWSER_TABS, TOOL_BROWSER_TYPE,
 };
 
 /// general-purpose Agent 暴露的完整工具 id（与 `build_registry` 插入集合一致）。
@@ -390,6 +390,7 @@ mod workspace_assistant_tools_tests {
             TOOL_BROWSER_SCROLL,
             TOOL_BROWSER_SCREENSHOT,
             TOOL_BROWSER_CDP,
+            TOOL_BROWSER_CONSOLE,
         ];
         let mut core = DEFAULT_TOOL_IDS.to_vec();
         local.sort_unstable();

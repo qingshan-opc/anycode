@@ -40,7 +40,7 @@ impl BrowserCtx {
         if let Some(id) = id {
             let pid = project_id.unwrap_or("default");
             browser
-                .create_session(pid, None, Some(&id))
+                .create_session(pid, None, Some(&id), None)
                 .await
                 .map_err(|e| CoreError::Other(anyhow::anyhow!("{e}")))?;
             return Ok(id);
@@ -637,6 +637,66 @@ impl Tool for BrowserCdpTool {
     }
 }
 
+pub struct BrowserConsoleTool {
+    ctx: BrowserCtx,
+}
+impl BrowserConsoleTool {
+    pub fn new(services: Arc<ToolServices>) -> Self {
+        Self {
+            ctx: BrowserCtx::new(services),
+        }
+    }
+}
+#[derive(Deserialize)]
+struct ConsoleInput {
+    #[serde(default = "default_console_limit")]
+    limit: usize,
+    #[serde(flatten)]
+    session: SessionFields,
+}
+fn default_console_limit() -> usize {
+    50
+}
+#[async_trait]
+impl Tool for BrowserConsoleTool {
+    fn name(&self) -> &str {
+        "BrowserConsole"
+    }
+    fn description(&self) -> &str {
+        "Read recent console.log/warn/error lines and network resource timings from the active browser tab. Use after BrowserNavigate/Snapshot when debugging JS errors or failed requests."
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 },
+                "session_id": { "type": "string" },
+                "project_id": { "type": "string" }
+            }
+        })
+    }
+    fn permission_mode(&self) -> PermissionMode {
+        PermissionMode::Default
+    }
+    fn security_policy(&self) -> Option<&SecurityPolicy> {
+        None
+    }
+    async fn execute(&self, input: ToolInput) -> Result<ToolOutput, CoreError> {
+        let t0 = Instant::now();
+        let args: ConsoleInput = serde_json::from_value(input.input)?;
+        let browser = self.ctx.browser()?;
+        let sid = self
+            .ctx
+            .session_id(
+                args.session.session_id.as_deref(),
+                args.session.project_id.as_deref(),
+            )
+            .await?;
+        let out = map_browser_err(browser.console_and_network(&sid, args.limit).await)?;
+        Ok(tool_ok(out, t0))
+    }
+}
+
 pub fn register_browser_tools(
     tools: &mut std::collections::HashMap<ToolName, Box<dyn Tool>>,
     services: Arc<ToolServices>,
@@ -675,7 +735,11 @@ pub fn register_browser_tools(
     );
     tools.insert(
         "BrowserCdp".to_string(),
-        Box::new(BrowserCdpTool::new(services)),
+        Box::new(BrowserCdpTool::new(services.clone())),
+    );
+    tools.insert(
+        "BrowserConsole".to_string(),
+        Box::new(BrowserConsoleTool::new(services)),
     );
 }
 
@@ -692,6 +756,7 @@ pub const BROWSER_TOOL_IDS: &[&str] = &[
     "BrowserScroll",
     "BrowserScreenshot",
     "BrowserCdp",
+    "BrowserConsole",
 ];
 
 #[cfg(test)]

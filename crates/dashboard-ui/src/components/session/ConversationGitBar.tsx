@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "@/api/client";
 import { Icon } from "@/components/Icon";
 import { useT } from "@/i18n/context";
@@ -7,6 +7,8 @@ import type { GitChangeKind, GitFileChange } from "@/api/types/workbench";
 
 type Props = {
   projectId: string;
+  /** Rendered after Commit & Push on the same pill row (e.g. turn phase). */
+  trailing?: ReactNode;
 };
 
 const KIND_BADGE: Record<GitChangeKind, { cls: string; key: string }> = {
@@ -39,7 +41,7 @@ function DiffBody({ diff }: { diff: string }) {
   );
 }
 
-export function ConversationGitBar({ projectId }: Props) {
+export function ConversationGitBar({ projectId, trailing = null }: Props) {
   const t = useT();
   const queryClient = useQueryClient();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -99,7 +101,14 @@ export function ConversationGitBar({ projectId }: Props) {
 
   const busy = commit.isPending || push.isPending;
 
-  if (!git?.is_repo) return null;
+  if (!git?.is_repo) {
+    if (!trailing) return null;
+    return (
+      <div className="conv-git-bar px-1 pb-2">
+        <div className="conv-git-bar__row">{trailing}</div>
+      </div>
+    );
+  }
 
   const branchLabel = git.branch ?? t("git.detached");
   const syncHint =
@@ -203,6 +212,8 @@ export function ConversationGitBar({ projectId }: Props) {
             </div>
           ) : null}
         </div>
+
+        {trailing}
       </div>
 
       {actionError ? (

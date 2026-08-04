@@ -1,7 +1,7 @@
-import { useRef, type ReactNode } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { SessionWithProject } from "@/api/types";
+import type { SessionWithProject, TranscriptBlock } from "@/api/types";
 import { ConversationComposer } from "@/components/ConversationComposer";
 import { ConversationTranscript } from "@/components/ConversationTranscript";
 import { Icon } from "@/components/Icon";
@@ -12,9 +12,13 @@ import { ConversationGitBar } from "@/components/session/ConversationGitBar";
 import { TurnPhaseBanner } from "@/components/TurnPhaseBanner";
 import { SessionStatusBadges, SessionRunningDots } from "@/components/ui/StatusBadge";
 import { formatRelativeTime } from "@/utils/formatTime";
-import { useT } from "@/i18n/context";
+import { useLocale, useT } from "@/i18n/context";
 import { findActiveToolInExecutionLog } from "@/lib/transcriptGrouping";
-import { hasTurnStreamActivity } from "@/lib/liveTranscript";
+import {
+  hasTurnStreamActivity,
+  resolveCanonicalTranscriptBlocks,
+  type ChatStreamEvent,
+} from "@/lib/liveTranscript";
 import { hideComposerWaitingFromSession } from "@/lib/turnLiveStatus";
 import type { SessionLiveState } from "@/lib/sessionLiveStore";
 import type { SseStatus } from "@/hooks/useEventSource";
@@ -23,6 +27,8 @@ import {
   conversationStreamLive,
   conversationThreadRunning,
 } from "@/hooks/useSessionEventStream";
+import { transcriptQueryOptions } from "@/lib/sessionQuery";
+import { computeLatestTurnProgress } from "@/lib/turnProgressSummary";
 
 interface Props {
   sessions: SessionWithProject[];
@@ -193,8 +199,8 @@ export function ConversationThread({
   onFollowUpStarted?: (sessionId: string) => void;
   showHeader?: boolean;
   sseLive?: boolean;
-  liveBlocks?: import("@/api/types").TranscriptBlock[];
-  liveEvents?: import("@/lib/liveTranscript").ChatStreamEvent[];
+  liveBlocks?: TranscriptBlock[];
+  liveEvents?: ChatStreamEvent[];
   chatStreamLive?: boolean;
   sessionLive?: SessionLiveState;
   questionsRespondAllowed?: boolean;
@@ -212,36 +218,42 @@ export function ConversationThread({
   onRenameSession?: (sessionId: string, title: string) => void | Promise<void>;
 }) {
   const t = useT();
+  const locale = useLocale();
   const scrollRef = useRef<HTMLDivElement>(null);
   const { sessionSidebarCollapsed, setSessionSidebarCollapsed } = useConversationShell();
 
-  if (!session) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-secondary p-8">
-        <Icon name="forum" size={40} className="opacity-40 mb-3" />
-        <p className="m-0 text-sm">{t("conversations.selectSession")}</p>
-      </div>
-    );
-  }
-
   const running = conversationThreadRunning(
-    session.status,
-    session.id,
-    isOptimisticStreaming ? session.id : null,
+    session?.status ?? "idle",
+    session?.id ?? "",
+    isOptimisticStreaming && session ? session.id : null,
   );
   const streamLive = conversationStreamLive(chatStreamLive, sseLive, running);
-  // Do not treat a stuck `chatStreamLive` alone as active — only session status
-  // (or optimistic send) should block the composer after the turn ends.
-  const turnActive = running || isOptimisticStreaming;
+  const turnActive = Boolean(session) && (running || isOptimisticStreaming);
 
   const liveLog = useQuery({
-    queryKey: ["session-execution-log-live", session.id],
-    queryFn: () => api.sessionExecutionLog(session.id, { offset: 0, limit: 120 }),
-    enabled: session.status === "running" && !streamLive && sseStatus === "offline",
+    queryKey: ["session-execution-log-live", session?.id],
+    queryFn: () => api.sessionExecutionLog(session!.id, { offset: 0, limit: 120 }),
+    enabled:
+      Boolean(session) &&
+      session!.status === "running" &&
+      !streamLive &&
+      sseStatus === "offline",
     staleTime: 30_000,
     refetchInterval:
-      session.status === "running" && !streamLive && sseStatus === "offline" ? 30_000 : false,
+      session?.status === "running" && !streamLive && sseStatus === "offline" ? 30_000 : false,
     refetchIntervalInBackground: false,
+  });
+  // Share the transcript cache with ConversationTranscript so the pill shows
+  // the same auto-updating progress line as the old TurnRecapHeader title.
+  const transcript = useQuery({
+    ...transcriptQueryOptions(
+      session?.id ?? "",
+      turnActive,
+      chatStreamLive,
+      streamLive,
+    ),
+    enabled: Boolean(session?.id) && turnActive,
+    placeholderData: (prev) => prev,
   });
   const activeTool = streamLive
     ? null
@@ -253,6 +265,42 @@ export function ConversationThread({
     turnPhase: sessionLive?.turnPhase ?? null,
     liveBlocksActive: streamHasActivity,
   });
+
+  // Same auto-updating progress stream as TurnRecapHeader
+  // (e.g. 「继续深入 workbench…」) — shown next to「提交并推送」.
+  const liveProgressText = useMemo(() => {
+    if (!turnActive) return null;
+    const snapshot = transcript.data?.transcript.blocks ?? [];
+    const snapshotMaxSeq = transcript.data?.transcript.max_seq ?? 0;
+    const blocks = resolveCanonicalTranscriptBlocks(
+      snapshot,
+      liveEvents,
+      snapshotMaxSeq,
+      streamLive,
+    );
+    // liveBlocks alone can lag behind persisted + event merge; prefer canonical.
+    if (blocks.length === 0 && liveBlocks.length > 0) {
+      return computeLatestTurnProgress(liveBlocks, locale);
+    }
+    return computeLatestTurnProgress(blocks, locale);
+  }, [turnActive, transcript.data, liveEvents, streamLive, liveBlocks, locale]);
+
+  const progressPill = turnActive ? (
+    <TurnPhaseBanner
+      progressText={liveProgressText}
+      startedAt={sessionLive?.turnPhaseStartedAt ?? null}
+      running={turnActive}
+    />
+  ) : null;
+
+  if (!session) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-secondary p-8">
+        <Icon name="forum" size={40} className="opacity-40 mb-3" />
+        <p className="m-0 text-sm">{t("conversations.selectSession")}</p>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex flex-col h-full min-h-0${headerEnd ? " conv-thread--workbench-host" : ""}`}>
@@ -347,20 +395,18 @@ export function ConversationThread({
               />
             </div>
           )}
-          <div className="conv-thread-phase-banner px-1 pb-2">
-            <TurnPhaseBanner
-              phase={sessionLive?.turnPhase ?? null}
-              startedAt={sessionLive?.turnPhaseStartedAt ?? null}
-            />
-          </div>
           {session.project_id ? (
-            <ConversationGitBar projectId={session.project_id} />
+            <ConversationGitBar projectId={session.project_id} trailing={progressPill} />
+          ) : progressPill ? (
+            <div className="conv-git-bar px-1 pb-2">
+              <div className="conv-git-bar__row">{progressPill}</div>
+            </div>
           ) : null}
           <ConversationComposer
             mode="follow-up"
             session={session}
             onSent={onFollowUpStarted}
-            hideWaitingIndicator={hideComposerWaiting}
+            hideWaitingIndicator={turnActive || hideComposerWaiting}
             onStreamingStart={markSessionStreaming}
             onStreamingEnd={clearOptimisticStreaming}
             waitingForQuestion={(sessionLive?.pendingQuestions.length ?? 0) > 0}

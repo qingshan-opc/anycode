@@ -19,10 +19,15 @@ import { useConversationShell } from "@/context/ConversationShellContext";
 import { useT } from "@/i18n/context";
 import {
   collectBrowserToolCallKeys,
+  extractBrowserNavigateUrl,
   isBrowserToolBlock,
   shouldAutoOpenBrowserForBlock,
+  shouldMirrorNavigateToWorkbench,
   browserToolDedupeKey,
 } from "@/lib/browserToolDetect";
+import { systemBrowserViewport } from "@/lib/browserViewport";
+import { cefBrowserStatus } from "@/lib/cefBrowserEmbed";
+import { isTauriDesktop } from "@/lib/desktopShell";
 
 export function ConversationWorkspace() {
   const t = useT();
@@ -75,6 +80,7 @@ export function ConversationWorkspace() {
 
   const seenBrowserToolKeysRef = useRef<Set<string>>(new Set());
   const browserToolsHydratedRef = useRef(false);
+  const mirroredNavigateUrlsRef = useRef<Set<string>>(new Set());
   const lastPlanAutoKeyRef = useRef<string | null>(null);
   const planStreamHydratedRef = useRef(false);
   const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -83,6 +89,7 @@ export function ConversationWorkspace() {
     setWorkbenchExpanded(false);
     seenBrowserToolKeysRef.current = new Set();
     browserToolsHydratedRef.current = false;
+    mirroredNavigateUrlsRef.current = new Set();
     lastPlanAutoKeyRef.current = null;
     planStreamHydratedRef.current = false;
   }, [displaySessionId, setWorkbenchExpanded]);
@@ -138,6 +145,59 @@ export function ConversationWorkspace() {
       break;
     }
   }, [displaySessionId, liveBlocks, chatStreamLive, sseLive, openTab]);
+
+  // Mirror MCP / native navigate URLs into the shared workbench CDP session so the
+  // right panel shows the same page (Playwright MCP otherwise stays isolated).
+  useEffect(() => {
+    if (!displaySessionId) return;
+    const projectId = selected?.project_id;
+    if (!projectId) return;
+    const streamLive = chatStreamLive || sseLive;
+    if (!streamLive) return;
+
+    const blocks = liveBlocks ?? [];
+    for (const block of blocks) {
+      if (!shouldMirrorNavigateToWorkbench(block)) continue;
+      const url = extractBrowserNavigateUrl(block);
+      if (!url || url === "about:blank") continue;
+      // Dedupe by URL — tool_call + tool_result must not navigate twice.
+      if (mirroredNavigateUrlsRef.current.has(url)) continue;
+      mirroredNavigateUrlsRef.current.add(url);
+      openTab("browser");
+      void (async () => {
+        try {
+          if (isTauriDesktop()) {
+            // Wait for CEF to publish CDP port so mirror navigates the live view.
+            let ready = false;
+            for (let i = 0; i < 40; i++) {
+              const s = await cefBrowserStatus();
+              if (s?.ready && (s.remote_debugging_port ?? 0) > 0) {
+                ready = true;
+                break;
+              }
+              await new Promise((r) => window.setTimeout(r, 100));
+            }
+            if (!ready) return;
+          }
+          const created = await api.createBrowserSession(
+            projectId,
+            displaySessionId,
+            systemBrowserViewport(),
+          );
+          await api.navigateBrowser(created.session.session_id, url);
+        } catch {
+          /* panel poll / agent may still update; ignore mirror failures */
+        }
+      })();
+    }
+  }, [
+    displaySessionId,
+    selected?.project_id,
+    liveBlocks,
+    chatStreamLive,
+    sseLive,
+    openTab,
+  ]);
 
   // New plan revision → open Plan panel for human review (not on initial hydrate).
   useEffect(() => {

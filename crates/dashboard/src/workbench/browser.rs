@@ -9,8 +9,9 @@
 //! 5. **Unavailable:** Panel shows setup steps; Doctor lists `browser_connector` status.
 
 use anycode_browser::{
-    chromium_doctor_message, resolve_chromium_executable, BrowserScreenshot, BrowserService,
-    BrowserSessionInfo, BrowserState, LockHolder, ScreencastFrame,
+    chromium_doctor_message, resolve_chromium_executable, BrowserDesignInspectState,
+    BrowserHitTestResult, BrowserScreenshot, BrowserService, BrowserSessionInfo, BrowserState,
+    LockHolder, ScreencastFrame,
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -54,7 +55,9 @@ impl Default for BrowserSessionManager {
 
 impl BrowserSessionManager {
     pub fn doctor_message() -> String {
-        if resolve_chromium_executable().is_some() {
+        if crate::browser_connector::cef_cdp_ready() {
+            "Embedded Chromium (CEF) remote debugging is available for Browser* tools.".into()
+        } else if resolve_chromium_executable().is_some() {
             chromium_doctor_message()
         } else {
             crate::browser_connector::browser_unavailable_message()
@@ -62,7 +65,7 @@ impl BrowserSessionManager {
     }
 
     pub fn ensure_ready() -> Result<(), String> {
-        if resolve_chromium_executable().is_some() {
+        if crate::browser_connector::native_chromium_ready() {
             Ok(())
         } else {
             Err(crate::browser_connector::browser_unavailable_message())
@@ -77,10 +80,24 @@ impl BrowserSessionManager {
         &self,
         project_id: &str,
         conversation_id: Option<&str>,
+        viewport: Option<anycode_browser::ViewportSpec>,
     ) -> Result<BrowserSessionInfo> {
         let bind = conversation_id.map(str::to_string);
         self.service
-            .create_session(project_id, conversation_id, bind.as_deref())
+            .create_session(project_id, conversation_id, bind.as_deref(), viewport)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn set_viewport(
+        &self,
+        session_id: &str,
+        width: u32,
+        height: u32,
+        device_scale_factor: f64,
+    ) -> Result<anycode_browser::BrowserViewport> {
+        self.service
+            .set_viewport(session_id, width, height, device_scale_factor)
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
@@ -104,6 +121,32 @@ impl BrowserSessionManager {
             .screenshot(session_id)
             .await
             .map(|s| s.into())
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn hit_test(
+        &self,
+        session_id: &str,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<BrowserHitTestResult>> {
+        self.service
+            .hit_test(session_id, x, y)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn set_design_mode(&self, session_id: &str, enabled: bool) -> Result<()> {
+        self.service
+            .set_design_mode(session_id, enabled)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    pub async fn poll_design_inspect(&self, session_id: &str) -> Result<BrowserDesignInspectState> {
+        self.service
+            .poll_design_inspect(session_id)
+            .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
@@ -144,4 +187,14 @@ pub struct CreateBrowserSessionBody {
     pub project_id: String,
     #[serde(default)]
     pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub viewport: Option<CreateBrowserViewport>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateBrowserViewport {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub device_scale_factor: Option<f64>,
 }

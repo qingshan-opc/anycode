@@ -1,0 +1,13 @@
+[[permission]]
+identifier = "cef-embed-default"
+description = "Embedded Chromium (CEF) host for the Workbench Browser panel"
+commands.allow = [
+  "cef_browser_status",
+  "cef_browser_show",
+  "cef_browser_resize",
+  "cef_browser_hide",
+  "cef_browser_navigate",
+  "cef_browser_new_tab",
+  "cef_browser_select_tab",
+  "cef_browser_close_tab",
+]

@@ -52,6 +52,10 @@ import {
   loadComposerDraft,
   saveComposerDraft,
 } from "@/lib/composerDraft";
+import {
+  consumeComposerInject,
+  subscribeComposerInject,
+} from "@/lib/composerInject";
 import { parseComposerSlashInput, composerSlashKeepText, parseSlashQuery } from "@/lib/composerSlash";
 import {
   GOAL_AGENT_ID,
@@ -184,6 +188,24 @@ export function ConversationComposer(props: Props) {
       setAgent(props.initialAgent === "general-purpose" ? "" : props.initialAgent);
     }
   }, [props]);
+
+  // Browser pick / Design Mode → append into the active composer.
+  useEffect(() => {
+    const apply = () => {
+      const payload = consumeComposerInject();
+      if (!payload) return;
+      setMessage((prev) => {
+        const next = prev.trim() ? `${prev.trimEnd()}\n\n${payload.text}` : payload.text;
+        saveComposerDraft(draftScope, next);
+        return next;
+      });
+      if (payload.focus !== false) {
+        window.requestAnimationFrame(() => textareaRef.current?.focus());
+      }
+    };
+    apply();
+    return subscribeComposerInject(apply);
+  }, [draftScope]);
 
   const agentProfiles = useQuery({
     queryKey: ["agent-profiles"],

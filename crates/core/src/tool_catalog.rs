@@ -65,6 +65,7 @@ pub const TOOL_BROWSER_PRESS_KEY: &str = "BrowserPressKey";
 pub const TOOL_BROWSER_SCROLL: &str = "BrowserScroll";
 pub const TOOL_BROWSER_SCREENSHOT: &str = "BrowserScreenshot";
 pub const TOOL_BROWSER_CDP: &str = "BrowserCdp";
+pub const TOOL_BROWSER_CONSOLE: &str = "BrowserConsole";
 
 /// general-purpose Agent 暴露的完整工具 id（与 `build_registry` 插入集合一致）。
 pub const DEFAULT_TOOL_IDS: &[&str] = &[
@@ -133,6 +134,7 @@ pub const DEFAULT_TOOL_IDS: &[&str] = &[
     TOOL_BROWSER_SCROLL,
     TOOL_BROWSER_SCREENSHOT,
     TOOL_BROWSER_CDP,
+    TOOL_BROWSER_CONSOLE,
 ];
 
 /// 需在 CLI `bootstrap` 中套用 `SecurityPolicy::sensitive_mutation()` 的工具 id（与 `FileWrite` / `Bash` 的专用策略并列）。
@@ -622,6 +624,14 @@ pub const TOOL_CATALOG: &[ToolCatalogEntry] = &[
         ALL_AGENTS,
         true,
         "full",
+    ),
+    tool_entry(
+        TOOL_BROWSER_CONSOLE,
+        "browser",
+        "low",
+        ALL_AGENTS,
+        false,
+        "standard",
     ),
 ];
 

@@ -116,6 +116,12 @@ browser_stub_tool!(
     "Run a whitelisted CDP method.",
     true
 );
+browser_stub_tool!(
+    BrowserConsoleStub,
+    "BrowserConsole",
+    "Read console and network timings from the active tab.",
+    false
+);
 
 pub fn register_browser_stub_tools(
     tools: &mut std::collections::HashMap<ToolName, Box<dyn Tool>>,
@@ -136,4 +142,5 @@ pub fn register_browser_stub_tools(
     ins!(BrowserScrollStub);
     ins!(BrowserScreenshotStub);
     ins!(BrowserCdpStub);
+    ins!(BrowserConsoleStub);
 }

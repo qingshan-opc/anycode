@@ -1,0 +1,40 @@
+[package]
+name = "anycode-browser-cef"
+version = "0.40.0"
+edition = "2021"
+description = "Embedded Chromium (CEF) host for anyCode Workbench browser panel"
+license = "MIT"
+publish = false
+
+[lib]
+name = "anycode_browser_cef"
+path = "src/lib.rs"
+
+[[bin]]
+name = "anycode-cef-helper"
+path = "src/bin/anycode_cef_helper.rs"
+required-features = ["helper"]
+
+[features]
+default = []
+# Enable only when linking the helper binary (avoids pulling CEF into every workspace build).
+helper = ["dep:cef"]
+host = ["dep:cef", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+cef = { version = "=151.2.0", default-features = false, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true, features = ["NSGeometry", "NSString", "NSValue"] }
+objc2-app-kit = { version = "0.3", optional = true, features = [
+  "NSView",
+  "NSWindow",
+  "NSApplication",
+  "NSGraphics",
+] }

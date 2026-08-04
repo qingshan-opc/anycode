@@ -32,6 +32,33 @@ export interface BrowserSessionInfo {
   conversation_id?: string | null;
 }
 
+export interface BrowserHitTestResult {
+  x: number;
+  y: number;
+  tag: string;
+  id?: string | null;
+  classes: string[];
+  text?: string | null;
+  css_selector: string;
+  xpath?: string | null;
+}
+
+export interface BrowserDesignInspectState {
+  enabled: boolean;
+  hover?: BrowserHitTestResult | null;
+  pick?: BrowserHitTestResult | null;
+}
+
+export interface ScreencastMetadata {
+  offset_top: number;
+  page_scale_factor: number;
+  device_width: number;
+  device_height: number;
+  scroll_offset_x: number;
+  scroll_offset_y: number;
+  timestamp?: number | null;
+}
+
 export interface TerminalSessionInfo {
   session_id: string;
   project_id: string;

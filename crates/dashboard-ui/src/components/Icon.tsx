@@ -139,6 +139,13 @@ const icons: Record<string, ReactNode> = {
     </>
   ),
   download: <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 20h14" />,
+  /** Inspect / Design Mode — cursor + selection box (not a circle fallback). */
+  design_mode: (
+    <>
+      <path d="M5 5h8v8H5z" />
+      <path d="M14 10.5 20 13l-2.6 1.1L19.5 20l-2.2.7-2.1-5.8L12 16.5z" />
+    </>
+  ),
   edit: (
     <>
       <path d="M4 20h4l10-10-4-4L4 16z" />

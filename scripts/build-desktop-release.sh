@@ -339,6 +339,14 @@ else
   SIGN_APP_BUNDLE="$ROOT/target/release/bundle/macos/anyCode.app"
 fi
 
+# Embed Chromium Embedded Framework + Helper apps (hundreds of MB). Skip when
+# CEF_PATH is unset/missing — headless Chromium remains the fallback.
+if [[ "$(uname -s)" == "Darwin" && -d "${CEF_PATH:-$HOME/.local/share/cef}/Chromium Embedded Framework.framework" ]]; then
+  if [[ -d "$SIGN_APP_BUNDLE" ]]; then
+    step "stage CEF into desktop .app" "$ROOT/scripts/prepare-cef.sh" "$SIGN_APP_BUNDLE"
+  fi
+fi
+
 if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" && "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
   APP_BUNDLE="$SIGN_APP_BUNDLE"
   REL_ENV="${ANYCODE_RELEASE_ENV:-$HOME/.anycode/release.env}"

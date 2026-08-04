@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { TranscriptBlock } from "@/api/types";
-import { CopyButton } from "@/components/ui/CopyButton";
 import { Icon } from "@/components/Icon";
 import { previewLines } from "@/components/ui/CollapsiblePanel";
 import { formatToolPhaseLabel, formatTranscriptBlockTitle } from "@/lib/eventFormat";
@@ -87,7 +86,6 @@ export function TranscriptToolBlock({
           <span className="text-xs text-secondary truncate min-w-0 flex-1">
             {subtitleParts.join(" · ")}
           </span>
-          <CopyButton text={summary.combined} label={t("conversations.copyMessage")} />
         </button>
         {open && (
           <ul className="m-0 p-0 list-none border-t border-outline-variant/50">
@@ -122,7 +120,6 @@ export function TranscriptToolBlock({
         <Icon name="build" size={16} className="text-secondary shrink-0" />
         <span className="font-medium text-sm">{summary.title}</span>
         <span className="text-xs text-secondary truncate flex-1">{summary.status}</span>
-        <CopyButton text={summary.combined} label={t("conversations.copyMessage")} />
       </div>
       <ul className="m-0 p-0 list-none">
         {stepRows.map((row) => (

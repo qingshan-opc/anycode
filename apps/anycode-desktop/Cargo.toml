@@ -39,6 +39,9 @@ tracing = "0.1"
 # Swift helper bridge — macOS host/target only (omit for Windows cross-compile).
 [target.'cfg(target_os = "macos")'.dependencies]
 anycode-apple-media = { path = "../../crates/apple-media" }
+anycode-browser-cef = { path = "../../crates/browser-cef", features = ["host"] }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWindow"] }
 
 [profile.release]
 panic = "abort"

@@ -1,4 +1,6 @@
 import type {
+  BrowserDesignInspectState,
+  BrowserHitTestResult,
   BrowserScreenshot,
   BrowserSessionInfo,
   BrowserState,
@@ -23,11 +25,31 @@ export const workbenchClient = {
       `/api/projects/${encodeURIComponent(projectId)}/fs/read?path=${encodeURIComponent(path)}&max_bytes=${maxBytes}`,
     ),
 
-  createBrowserSession: (projectId: string, conversationId?: string | null) =>
+  createBrowserSession: (
+    projectId: string,
+    conversationId?: string | null,
+    viewport?: { width: number; height: number; device_scale_factor?: number } | null,
+  ) =>
     post<{ session: BrowserSessionInfo }>("/api/workbench/browser/sessions", {
       project_id: projectId,
       conversation_id: conversationId ?? undefined,
+      viewport: viewport ?? undefined,
     }),
+
+  setBrowserViewport: (
+    sessionId: string,
+    width: number,
+    height: number,
+    deviceScaleFactor?: number,
+  ) =>
+    post<{ viewport: { width: number; height: number } }>(
+      `/api/workbench/browser/sessions/${encodeURIComponent(sessionId)}/viewport`,
+      {
+        width,
+        height,
+        device_scale_factor: deviceScaleFactor,
+      },
+    ),
 
   navigateBrowser: (sessionId: string, url: string) =>
     post<{ state: BrowserState }>(
@@ -43,6 +65,23 @@ export const workbenchClient = {
   browserScreenshot: (sessionId: string) =>
     get<{ screenshot: BrowserScreenshot }>(
       `/api/workbench/browser/sessions/${encodeURIComponent(sessionId)}/screenshot`,
+    ),
+
+  browserHitTest: (sessionId: string, x: number, y: number) =>
+    post<{ hit: BrowserHitTestResult | null }>(
+      `/api/workbench/browser/sessions/${encodeURIComponent(sessionId)}/hit-test`,
+      { x, y },
+    ),
+
+  browserDesignMode: (sessionId: string, enabled: boolean) =>
+    post<{ ok: boolean; enabled: boolean }>(
+      `/api/workbench/browser/sessions/${encodeURIComponent(sessionId)}/design-mode`,
+      { enabled },
+    ),
+
+  browserDesignInspect: (sessionId: string) =>
+    get<{ inspect: BrowserDesignInspectState }>(
+      `/api/workbench/browser/sessions/${encodeURIComponent(sessionId)}/design-inspect`,
     ),
 
   deleteBrowserSession: (sessionId: string) =>

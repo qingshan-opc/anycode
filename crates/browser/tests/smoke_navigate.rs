@@ -17,7 +17,7 @@ async fn navigate_example_com_and_snapshot() {
     let svc = BrowserService::new();
     let session_key = format!("smoke-{}", uuid::Uuid::new_v4());
     let info = match svc
-        .create_session("smoke-test", None, Some(&session_key))
+        .create_session("smoke-test", None, Some(&session_key), None)
         .await
     {
         Ok(info) => info,
