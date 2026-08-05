@@ -13,6 +13,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_DEBUG_PORT: u16 = 9333;
+/// How many ports to probe starting at DEFAULT_DEBUG_PORT when it is taken.
+const DEBUG_PORT_PROBE_RANGE: u16 = 20;
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 static DEBUG_PORT: AtomicU16 = AtomicU16::new(0);
@@ -534,10 +536,15 @@ pub fn ensure_initialized(helper_path: &Path, _framework_dir: &Path) -> Result<(
     let mut app = EmbedApp::new();
     let cache_root = std::env::temp_dir().join("anycode-cef-cache");
     let _ = std::fs::create_dir_all(&cache_root);
+    // The CDP port is how the agent's Browser* tools find this CEF instance
+    // (ANYCODE_CEF_CDP_PORT). 9333 may legitimately be taken (another app, a
+    // zombie CEF), so probe for a free port instead of silently failing to
+    // bind the debugging server.
+    let debug_port = pick_debug_port()?;
     let settings = Settings {
         no_sandbox: 1,
         external_message_pump: 1,
-        remote_debugging_port: i32::from(DEFAULT_DEBUG_PORT),
+        remote_debugging_port: i32::from(debug_port),
         browser_subprocess_path: CefString::from(helper_path.to_string_lossy().as_ref()),
         root_cache_path: CefString::from(cache_root.to_string_lossy().as_ref()),
         log_severity: LogSeverity::WARNING,
@@ -554,15 +561,30 @@ pub fn ensure_initialized(helper_path: &Path, _framework_dir: &Path) -> Result<(
         return Err(format!("cef::initialize failed (code={rc})"));
     }
 
-    DEBUG_PORT.store(DEFAULT_DEBUG_PORT, Ordering::SeqCst);
+    DEBUG_PORT.store(debug_port, Ordering::SeqCst);
     INITIALIZED.store(true, Ordering::SeqCst);
     tracing::info!(
         target: "anycode_browser_cef",
-        port = DEFAULT_DEBUG_PORT,
+        port = debug_port,
         helper = %helper_path.display(),
         "CEF initialized (external message pump, Alloy child views)"
     );
     Ok(())
+}
+
+/// First free loopback port in `DEFAULT_DEBUG_PORT..+DEBUG_PORT_PROBE_RANGE`.
+fn pick_debug_port() -> Result<u16, String> {
+    for offset in 0..DEBUG_PORT_PROBE_RANGE {
+        let port = DEFAULT_DEBUG_PORT + offset;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return Ok(port);
+        }
+    }
+    Err(format!(
+        "no free CDP port in {}..{} (another CEF instance?)",
+        DEFAULT_DEBUG_PORT,
+        DEFAULT_DEBUG_PORT + DEBUG_PORT_PROBE_RANGE - 1
+    ))
 }
 
 fn content_view_ptr(ns_window: *mut std::ffi::c_void) -> Result<*mut AnyObject, String> {
@@ -873,4 +895,31 @@ pub fn shutdown_cef() {
         pending.clear();
     }
     shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_debug_port_skips_occupied_ports() {
+        // Skip when 9333 is already taken by something else (e.g. a running
+        // dev instance) — we cannot control the environment in that case.
+        let Ok(blocker) = std::net::TcpListener::bind(("127.0.0.1", DEFAULT_DEBUG_PORT)) else {
+            return;
+        };
+        let port = pick_debug_port().unwrap();
+        assert_eq!(port, DEFAULT_DEBUG_PORT + 1);
+        drop(blocker);
+    }
+
+    #[test]
+    fn pick_debug_port_uses_default_when_free() {
+        // Only meaningful when nothing else holds 9333; guard to avoid flakes
+        // when a real CEF instance is running on the dev machine.
+        if std::net::TcpListener::bind(("127.0.0.1", DEFAULT_DEBUG_PORT)).is_err() {
+            return;
+        }
+        assert_eq!(pick_debug_port().unwrap(), DEFAULT_DEBUG_PORT);
+    }
 }
