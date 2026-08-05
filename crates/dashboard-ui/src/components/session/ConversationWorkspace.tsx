@@ -21,7 +21,6 @@ import {
   collectBrowserToolCallKeys,
   extractBrowserNavigateUrl,
   isBrowserToolBlock,
-  shouldAutoOpenBrowserForBlock,
   shouldMirrorNavigateToWorkbench,
   browserToolDedupeKey,
 } from "@/lib/browserToolDetect";
@@ -115,7 +114,10 @@ export function ConversationWorkspace() {
     staleTime: 5_000,
   });
 
-  // Auto-open Browser only when a *new live* Browser tool call starts (never on hydrate/history).
+  // Auto-open Browser when a live Browser tool call streams in. History replay
+  // (stream not live) is indexed silently so we never auto-open for an old
+  // session; a *live* Browser call must always open the panel so the embedded
+  // CEF creates a page that Agent Browser* tools attach to.
   useEffect(() => {
     if (!displaySessionId) return;
     const browserCalls = (liveBlocks ?? []).filter(
@@ -124,24 +126,23 @@ export function ConversationWorkspace() {
 
     if (!browserToolsHydratedRef.current) {
       const blocks = liveBlocks ?? [];
-      if (blocks.length === 0 && (chatStreamLive || sseLive)) {
+      if (!(chatStreamLive || sseLive)) {
+        // History replay / stream not live → silently index, never auto-open.
+        browserToolsHydratedRef.current = true;
+        seenBrowserToolKeysRef.current = collectBrowserToolCallKeys(blocks);
         return;
       }
+      // Live stream just started: index only non-browser history blocks so the
+      // very first live Browser call below still opens the panel.
       browserToolsHydratedRef.current = true;
-      seenBrowserToolKeysRef.current = collectBrowserToolCallKeys(blocks);
-      return;
+      seenBrowserToolKeysRef.current = new Set();
     }
-
-    const streamLive = chatStreamLive || sseLive;
-    if (!streamLive) return;
 
     for (const call of browserCalls) {
       const key = browserToolDedupeKey(call);
       if (seenBrowserToolKeysRef.current.has(key)) continue;
       seenBrowserToolKeysRef.current.add(key);
-      if (shouldAutoOpenBrowserForBlock(call, { streamLive: true })) {
-        openTab("browser");
-      }
+      openTab("browser");
       break;
     }
   }, [displaySessionId, liveBlocks, chatStreamLive, sseLive, openTab]);

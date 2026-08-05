@@ -11,6 +11,11 @@ use tauri::{AppHandle, Manager, Runtime};
 
 static PUMP_STARTED: AtomicBool = AtomicBool::new(false);
 
+/// 空闲兜底 pump 间隔（约 60fps）。external message pump 模式下 CDP 服务器依赖
+/// do_message_loop_work 被调用才能服务请求；无活动渲染/输入时 CEF 不会调度，
+/// 因此按此间隔强制 pump，避免 9333 端口饿死导致 attach 超时。
+const IDLE_PUMP_INTERVAL_MS: u64 = 16;
+
 fn pump_deadlines() -> &'static (Mutex<Option<Instant>>, Condvar) {
     static CELL: OnceLock<(Mutex<Option<Instant>>, Condvar)> = OnceLock::new();
     CELL.get_or_init(|| (Mutex::new(None), Condvar::new()))
@@ -191,10 +196,17 @@ fn start_message_pump<R: Runtime>(app: &AppHandle<R>) {
                     let now = Instant::now();
                     match *guard {
                         None => {
+                            // 空闲兜底：CEF 在 external message pump 模式下只通过
+                            // OnScheduleMessagePumpWork 请求 pump，若它从不调度（例如
+                            // 没有活动渲染/输入），CDP 服务器会一直饿死导致 attach 超时。
+                            // 因此无 deadline 时也按空闲间隔 pump 一次。
                             guard = cv
-                                .wait_timeout(guard, Duration::from_secs(30))
+                                .wait_timeout(guard, Duration::from_millis(IDLE_PUMP_INTERVAL_MS))
                                 .map(|(g, _)| g)
                                 .unwrap_or_else(|e| e.into_inner().0);
+                            *guard = None;
+                            drop(guard);
+                            break;
                         }
                         Some(at) if at > now => {
                             let wait = at.saturating_duration_since(now);

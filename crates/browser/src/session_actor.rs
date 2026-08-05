@@ -158,7 +158,11 @@ impl SessionActorHandle {
 
         let first_page = {
             let mut existing = Vec::new();
-            for _ in 0..40 {
+            // The desktop panel creates the first CEF page when the Browser
+            // rail opens (cef_browser_show). That happens in parallel with the
+            // agent's first Browser call, so give the frontend a few seconds to
+            // publish a page before giving up — never fall back to headless.
+            for _ in 0..120 {
                 existing = browser
                     .pages()
                     .await
@@ -170,7 +174,8 @@ impl SessionActorHandle {
             }
             let page = existing.into_iter().next().ok_or_else(|| {
                 BrowserError::Other(anyhow::anyhow!(
-                    "CEF CDP connected but no pages yet (port {port})"
+                    "CEF CDP connected but no pages yet (port {port}). \
+                     Open the Browser panel (right rail) and retry the Browser tool."
                 ))
             })?;
             // Alloy already sizes to the NSView. Forcing screen-sized device
