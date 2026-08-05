@@ -41,6 +41,10 @@ struct SessionActorInner {
 }
 
 enum ActorCmd {
+    /// Liveness probe: true when the CDP connection is alive AND at least
+    /// one page target exists. False means the chromiumoxide handler task is
+    /// gone (websocket dropped / CEF browser restarted) or no page is left.
+    Ping(oneshot::Sender<bool>),
     ListTabs(oneshot::Sender<BrowserResult<Vec<BrowserTabInfo>>>),
     NewTab(oneshot::Sender<BrowserResult<String>>),
     CloseTab {
@@ -154,7 +158,13 @@ impl SessionActorHandle {
         let (browser, mut handler) = Browser::connect(url)
             .await
             .map_err(|e| BrowserError::Other(anyhow::Error::from(e)))?;
-        tokio::spawn(async move { while handler.next().await.is_some() {} });
+        tokio::spawn(async move {
+            while handler.next().await.is_some() {}
+            tracing::warn!(
+                target: "anycode_browser",
+                "CEF CDP websocket closed — attached actor is now a zombie until respawn"
+            );
+        });
 
         let first_page = {
             let mut existing = Vec::new();
@@ -251,7 +261,13 @@ impl SessionActorHandle {
             .await
             .map_err(|e| BrowserError::Other(anyhow::Error::from(e)))?;
 
-        tokio::spawn(async move { while handler.next().await.is_some() {} });
+        tokio::spawn(async move {
+            while handler.next().await.is_some() {}
+            tracing::warn!(
+                target: "anycode_browser",
+                "headless Chrome CDP websocket closed — actor is now a zombie until respawn"
+            );
+        });
 
         // Chromium already opens a default blank target on launch. Calling
         // `new_page` again creates a second tab — reuse existing pages first.
@@ -470,6 +486,19 @@ impl SessionActorHandle {
     pub async fn shutdown(&self) {
         let _ = self.inner.cmd_tx.send(ActorCmd::Shutdown).await;
     }
+
+    /// Cheap liveness probe through the CDP connection. Returns false when
+    /// the actor task died, the chromiumoxide handler task ended (websocket
+    /// dropped, CEF browser process restarted), or no page targets remain —
+    /// in all those cases every subsequent command fails instantly with
+    /// "send failed because receiver is gone" and the caller should respawn.
+    pub async fn ping(&self) -> bool {
+        let (tx, rx) = oneshot::channel();
+        if self.inner.cmd_tx.send(ActorCmd::Ping(tx)).await.is_err() {
+            return false;
+        }
+        rx.await.unwrap_or(false)
+    }
 }
 
 async fn session_loop(
@@ -487,6 +516,17 @@ async fn session_loop(
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
+            ActorCmd::Ping(respond) => {
+                let ok = match browser.version().await {
+                    Ok(_) => browser
+                        .pages()
+                        .await
+                        .map(|p| !p.is_empty())
+                        .unwrap_or(false),
+                    Err(_) => false,
+                };
+                let _ = respond.send(ok);
+            }
             ActorCmd::ListTabs(respond) => {
                 let list = tabs
                     .iter()

@@ -54,21 +54,37 @@ impl BrowserService {
         let session_id = bind_key
             .map(str::to_string)
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        {
+        let existing = {
             let guard = self.inner.read().await;
-            if let Some(existing) = guard.get(&session_id) {
+            guard
+                .get(&session_id)
+                .map(|s| (s.info.clone(), s.actor.clone()))
+        };
+        if let Some((info, actor)) = existing {
+            if actor.ping().await {
                 if let Some(vp) = viewport {
-                    let actor = existing.actor.clone();
-                    drop(guard);
                     let _ = actor
                         .set_viewport(vp.width, vp.height, vp.device_scale_factor)
                         .await;
                 }
-                let guard = self.inner.read().await;
-                if let Some(existing) = guard.get(&session_id) {
-                    return Ok(existing.info.clone());
-                }
-                return Err(BrowserError::SessionNotFound(session_id));
+                return Ok(info);
+            }
+            // Zombie session: the CDP handler died (CEF browser restarted, last
+            // page closed, websocket dropped) or the actor task is gone. Keeping
+            // it means every Browser* call fails instantly with "send failed
+            // because receiver is gone" — evict and respawn below so the next
+            // call re-attaches (CEF spawn waits for the panel to publish a page).
+            tracing::warn!(
+                target: "anycode_browser",
+                %session_id,
+                "browser session actor unresponsive; evicting and respawning"
+            );
+            let stale = {
+                let mut guard = self.inner.write().await;
+                guard.remove(&session_id)
+            };
+            if let Some(session) = stale {
+                session.actor.shutdown().await;
             }
         }
         // Panel open + MCP mirror (or React Strict Mode) can race; spawn is
