@@ -60,16 +60,13 @@ export function progressPhase(block: TranscriptBlock): AgentPhaseKind {
   return "execute";
 }
 
-/** Format `[delivery_preflight] …` for Workbench display. */
-export function formatDeliveryPreflight(summary: string): string | null {
-  if (!summary.includes("[delivery_preflight]")) return null;
-  const family = summary.match(/family=([^\s]+)/)?.[1] ?? "—";
-  const skill = summary.match(/skill=([^\s]+)/)?.[1] ?? "—";
-  const brand = summary.match(/brand=([^\s]+)/)?.[1] ?? "—";
-  const scenario = summary.match(/scenario=([^\s]+)/)?.[1] ?? "—";
-  const artifacts = summary.match(/artifacts=\[([^\]]*)\]/)?.[1] ?? "";
-  const gates = summary.match(/gates=(\d+)/)?.[1] ?? "0";
-  return `交付预检 · ${family} → ${skill} · brand ${brand} · scenario ${scenario} · [${artifacts}] · ${gates} gates`;
+/**
+ * Delivery preflight markers (`[delivery_preflight] …`) are internal diagnostics —
+ * never rendered as visible text in the conversation. Kept as a no-op so callers
+ * (e.g. ToolTraceCluster) fall back to their own snippet text.
+ */
+export function formatDeliveryPreflight(_summary: string): string | null {
+  return null;
 }
 
 export function progressSummary(block: TranscriptBlock, localeBody?: string): string {
@@ -78,7 +75,8 @@ export function progressSummary(block: TranscriptBlock, localeBody?: string): st
     typeof metaSummary === "string" && metaSummary.trim()
       ? metaSummary.trim()
       : (localeBody ?? block.body ?? "").trim();
-  return formatDeliveryPreflight(raw) ?? raw;
+  if (raw.includes("[delivery_preflight]")) return "";
+  return raw;
 }
 
 export function progressNext(block: TranscriptBlock): string | null {

@@ -80,6 +80,26 @@ pub const EXPLORE_PLAN_TOOL_IDS: [&str; 4] = [TOOL_FILE_READ, TOOL_GLOB, TOOL_GR
 /// Extra tool ids denied for explore/plan agents (browser screenshot is vision-heavy).
 pub const EXPLORE_PLAN_EXTRA_DENY_TOOL_IDS: &[&str] = &[TOOL_BROWSER_SCREENSHOT];
 
+/// 所有子代理默认禁止的工具 id（对齐 Claude Code `ALL_AGENT_DISALLOWED_TOOLS`）：
+/// 子代理不应自己切换计划/退出计划、不该向用户提问、不该再嵌套 worktree 隔离、
+/// 也不该用 `TaskStop` 终止自身（终止权在父级 `TaskStop` 对后台任务）。
+pub const SUBAGENT_ALL_DISALLOWED_TOOL_IDS: &[&str] = &[
+    TOOL_ENTER_PLAN,
+    TOOL_EXIT_PLAN,
+    TOOL_TASK_STOP,
+    TOOL_ASK_USER_QUESTION,
+    TOOL_ENTER_WORKTREE,
+    TOOL_EXIT_WORKTREE,
+];
+
+/// 子代理任务（`run_nested_task`）的默认工具 deny 列表。
+pub fn subagent_default_tool_denies() -> Vec<String> {
+    SUBAGENT_ALL_DISALLOWED_TOOL_IDS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
 pub fn explore_plan_extra_tool_denies() -> Vec<String> {
     EXPLORE_PLAN_EXTRA_DENY_TOOL_IDS
         .iter()
@@ -551,6 +571,47 @@ mod tests {
         assert!(!names.iter().any(|n| n == "Glob"));
         assert!(names.iter().any(|n| n == "Bash"));
         assert!(prefixes.iter().any(|p| p == "mcp__"));
+    }
+
+    #[test]
+    fn subagent_default_denies_plan_question_stop_worktree() {
+        let denies = subagent_default_tool_denies();
+        for id in SUBAGENT_ALL_DISALLOWED_TOOL_IDS {
+            assert!(
+                denies.iter().any(|d| d == id),
+                "子代理默认 deny 应包含 {id}"
+            );
+        }
+        // 明确覆盖 Claude Code `ALL_AGENT_DISALLOWED_TOOLS` 的关键成员。
+        for expected in [
+            TOOL_ENTER_PLAN,
+            TOOL_EXIT_PLAN,
+            TOOL_TASK_STOP,
+            TOOL_ASK_USER_QUESTION,
+            TOOL_ENTER_WORKTREE,
+            TOOL_EXIT_WORKTREE,
+        ] {
+            assert!(denies.iter().any(|d| d == expected));
+        }
+        // 子代理应仍可嵌套再派子代理、可写计划、可读任务输出（不在禁止集内）。
+        assert!(!denies.iter().any(|d| d == TOOL_AGENT));
+        assert!(!denies.iter().any(|d| d == TOOL_PLAN_WRITE));
+        assert!(!denies.iter().any(|d| d == TOOL_TASK_OUTPUT));
+    }
+
+    #[test]
+    fn merge_agent_type_tool_denies_keeps_subagent_default_denies() {
+        // 模拟 execute_task 对子代理任务的合并：先 profile 合并，再并入默认子代理 deny。
+        let mut merged = merge_agent_type_tool_denies("explore", &[]);
+        merged.extend(subagent_default_tool_denies());
+        for id in SUBAGENT_ALL_DISALLOWED_TOOL_IDS {
+            assert!(
+                merged.iter().filter(|d| *d == id).count() == 1,
+                "{id} 合并后应恰好出现一次（无重复）"
+            );
+        }
+        // explore 额外 deny（浏览器截图）也应保留。
+        assert!(merged.iter().any(|d| d == TOOL_BROWSER_SCREENSHOT));
     }
 
     #[test]

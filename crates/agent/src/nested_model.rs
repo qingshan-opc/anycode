@@ -4,7 +4,8 @@ use anycode_core::{LLMProvider, ModelConfig};
 
 /// Apply a nested-agent model hint on top of the parent session config.
 ///
-/// Recognizes **`sonnet`**, **`opus`**, **`haiku`** (case-insensitive). For **`Anthropic`**
+/// Recognizes **`inherit`** (reuse the parent model verbatim — Claude Code `model: "inherit"`),
+/// **`sonnet`**, **`opus`**, **`haiku`** (case-insensitive). For **`Anthropic`**
 /// provider, uses Messages API model ids; for OpenAI-compatible gateways, uses
 /// **`anthropic/<id>`** qualified refs. Any other non-empty string sets **`model`** verbatim.
 pub fn resolve_nested_model_hint(base: &ModelConfig, hint: &str) -> ModelConfig {
@@ -14,6 +15,10 @@ pub fn resolve_nested_model_hint(base: &ModelConfig, hint: &str) -> ModelConfig 
         return out;
     }
     let lower = h.to_ascii_lowercase();
+    if lower == "inherit" {
+        // Claude Code `model: "inherit"`: reuse the parent's model configuration unchanged.
+        return out;
+    }
     let family = match lower.as_str() {
         "sonnet" => Some("claude-sonnet-4-5-20250929"),
         "opus" => Some("claude-opus-4-5-20250929"),
@@ -68,5 +73,40 @@ mod tests {
         };
         let o = resolve_nested_model_hint(&base, "haiku");
         assert_eq!(o.model, "anthropic/claude-haiku-4-5-20251001");
+    }
+
+    #[test]
+    fn inherit_reuses_parent_model_verbatim() {
+        let base = ModelConfig {
+            provider: LLMProvider::Anthropic,
+            model: "claude-opus-4-5-20250929".into(),
+            base_url: Some("https://api.example/v1".into()),
+            temperature: Some(0.2),
+            max_tokens: Some(8192),
+            api_key: None,
+            ..Default::default()
+        };
+        let o = resolve_nested_model_hint(&base, "inherit");
+        assert_eq!(o.model, base.model);
+        assert_eq!(o.provider, LLMProvider::Anthropic);
+        assert_eq!(o.base_url, base.base_url);
+        assert_eq!(o.temperature, base.temperature);
+        assert_eq!(o.max_tokens, base.max_tokens);
+    }
+
+    #[test]
+    fn inherit_is_case_insensitive_and_trimmed() {
+        let base = ModelConfig {
+            provider: LLMProvider::OpenAI,
+            model: "gpt-4o".into(),
+            base_url: None,
+            temperature: None,
+            max_tokens: None,
+            api_key: None,
+            ..Default::default()
+        };
+        let o = resolve_nested_model_hint(&base, "  INHERIT  ");
+        assert_eq!(o.model, "gpt-4o");
+        assert_eq!(o.model, base.model);
     }
 }

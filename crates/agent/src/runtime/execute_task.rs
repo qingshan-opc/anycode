@@ -197,6 +197,13 @@ impl AgentRuntime {
             task.agent_type.as_str(),
             &task.context.tool_deny_names,
         );
+        // 嵌套子代理默认禁止工具集（对齐 Claude Code `ALL_AGENT_DISALLOWED_TOOLS`）：
+        // 子代理不应切换/退出计划、向用户提问、自我终止、再嵌套 worktree 隔离。
+        if task.context.system_prompt_append.as_deref()
+            == Some(super::nested_task::SUBAGENT_SYSTEM_APPEND)
+        {
+            merged_denies.extend(anycode_tools::subagent_default_tool_denies());
+        }
         merged_denies.extend(skill_denies);
         let names = tool_surface::prepare_tool_names_for_llm(
             raw,

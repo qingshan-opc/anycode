@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 /// 子代理默认追加提示词（D6：对齐 Claude Code `appendSubagentSystemPrompt`）。
 /// 提示子代理聚焦任务、避免重复上下文与冗长回执。
-const SUBAGENT_SYSTEM_APPEND: &str = "\
+/// 该常量同时作为「是否为嵌套子代理任务」的判定标记（见 `execute_task` 子代理工具过滤）。
+pub(crate) const SUBAGENT_SYSTEM_APPEND: &str = "\
 你是被父任务派出的子代理，只完成父任务交给你的这个任务。\
 请保持专注：不要重复描述父任务已提供的上下文，不要主动扩大任务范围。\
 输出只包含任务要求的结果；完成后用简短一句话总结即可。";

@@ -9,11 +9,10 @@ import {
 import type { TranscriptBlock } from "@/api/types";
 
 describe("delivery preflight formatting", () => {
-  it("formats delivery_preflight marker", () => {
+  it("never renders delivery_preflight marker", () => {
     const raw =
       "[delivery_preflight] family=office_delivery skill=anycode-ppt brand=fde-editorial scenario=anycode-ppt artifacts=[deck_html_slides:html] gates=2";
-    expect(formatDeliveryPreflight(raw)).toContain("交付预检");
-    expect(formatDeliveryPreflight(raw)).toContain("anycode-ppt");
+    expect(formatDeliveryPreflight(raw)).toBeNull();
   });
 
   it("maps compile work_stage to intent phase", () => {
@@ -26,7 +25,7 @@ describe("delivery preflight formatting", () => {
     expect(progressPhase(block)).toBe("intent");
   });
 
-  it("progressSummary rewrites preflight", () => {
+  it("progressSummary suppresses preflight", () => {
     const block = {
       id: "1",
       block_type: "progress_update",
@@ -36,7 +35,7 @@ describe("delivery preflight formatting", () => {
           "[delivery_preflight] family=office_delivery skill=anycode-docx brand=fde-editorial scenario=work-report artifacts=[report_docx:docx] gates=3",
       },
     } as TranscriptBlock;
-    expect(progressSummary(block)).toContain("交付预检");
+    expect(progressSummary(block)).toBe("");
   });
 
   it("marks progress_update and narration status as static (no fold chevron)", () => {
