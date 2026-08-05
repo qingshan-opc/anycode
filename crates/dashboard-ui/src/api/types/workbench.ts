@@ -65,7 +65,9 @@ export interface TerminalSessionInfo {
   conversation_id: string;
 }
 
-export type WorkbenchTab = "files" | "browser" | "terminal" | "artifacts" | "plan";
+// The tab union is derived from the panel registry (single source of truth).
+// Type-only re-export — no runtime dependency on the registry module.
+export type { WorkbenchTab } from "@/components/workbench/registry";
 
 export interface GitStatusSummary {
   is_repo: boolean;

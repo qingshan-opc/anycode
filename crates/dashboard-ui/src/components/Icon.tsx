@@ -468,6 +468,8 @@ const icons: Record<string, ReactNode> = {
     </>
   ),
   send: <path d="M4 4l17 8-17 8 3-8zM7 12h8" />,
+  /** Material "near me" — navigation arrow pointing up-right (follow/send cue). */
+  near_me: <path d="M12 3 4.5 21l7.5-4.5L19.5 21z" />,
   /** Keyboard return / "to Send" cue (Cursor-style queue header). */
   keyboard_return: (
     <path d="M9 10 5 14l4 4M5 14h10a4 4 0 0 0 0-8h-1" />

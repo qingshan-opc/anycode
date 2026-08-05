@@ -25,9 +25,10 @@ test.describe("workbench sidebar UI", () => {
       test.skip(true, "no sessions");
     }
     await sessionItem.click();
-    const rail = page.locator(".conv-workbench-rail");
-    await expect(rail).toBeVisible({ timeout: 10_000 });
-    await rail.locator("button").first().click();
+    // Tab switcher lives in the conversation header (icon toolbar).
+    const icons = page.locator(".conv-workbench-header-icons");
+    await expect(icons).toBeVisible({ timeout: 10_000 });
+    await icons.locator("button").first().click();
     await expect(page.locator(".conv-workbench-panel")).toBeVisible();
   });
 });

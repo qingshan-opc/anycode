@@ -2,14 +2,7 @@ import type { ReactNode } from "react";
 import type { WorkbenchTab } from "@/api/types/workbench";
 import { Icon } from "@/components/Icon";
 import { useT } from "@/i18n/context";
-
-const TAB_TITLE: Record<WorkbenchTab, string> = {
-  files: "workbench.tabFiles",
-  browser: "workbench.tabBrowser",
-  terminal: "workbench.tabTerminal",
-  artifacts: "workbench.tabArtifacts",
-  plan: "workbench.tabPlan",
-};
+import { workbenchPanelById } from "./registry";
 
 type Props = {
   activeTab: WorkbenchTab;
@@ -45,7 +38,7 @@ export function WorkbenchPanel({
       >
         <span className="inline-flex items-center gap-1.5">
           <Icon name="view_sidebar" size={16} />
-          {t(TAB_TITLE[activeTab] as "workbench.tabFiles")}
+          {t(workbenchPanelById(activeTab).titleKey)}
         </span>
         <button
           type="button"

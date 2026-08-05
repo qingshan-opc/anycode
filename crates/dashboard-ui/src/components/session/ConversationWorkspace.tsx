@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { Suspense, useCallback, useEffect, useRef } from "react";
 import { Link } from "@tanstack/react-router";
-import { api } from "@/api/client";
 import type { WorkbenchTab } from "@/api/types/workbench";
 import { ConversationThread } from "@/components/ConversationThread";
 import { ProjectGroupedSessionList } from "@/components/session/ProjectGroupedSessionList";
@@ -10,23 +8,11 @@ import { Icon } from "@/components/Icon";
 import { ConversationWorkbenchHeaderIcons } from "@/components/workbench/ConversationWorkbenchHeaderIcons";
 import { WorkbenchPanel } from "@/components/workbench/WorkbenchPanel";
 import { useWorkbenchSidebarState } from "@/components/workbench/hooks/useWorkbenchSidebarState";
-import { FilesPanel } from "@/components/workbench/panels/FilesPanel";
-import { BrowserPanel } from "@/components/workbench/panels/BrowserPanel";
-import { TerminalPanel } from "@/components/workbench/panels/TerminalPanel";
-import { ArtifactsPanel } from "@/components/workbench/panels/ArtifactsPanel";
-import { PlanTreePanel } from "@/components/workbench/panels/PlanTreePanel";
+import { useWorkbenchAutoOpen } from "@/components/workbench/hooks/useWorkbenchAutoOpen";
+import { workbenchPanelById } from "@/components/workbench/registry";
 import { useConversationShell } from "@/context/ConversationShellContext";
 import { useT } from "@/i18n/context";
-import {
-  collectBrowserToolCallKeys,
-  extractBrowserNavigateUrl,
-  isBrowserToolBlock,
-  shouldMirrorNavigateToWorkbench,
-  browserToolDedupeKey,
-} from "@/lib/browserToolDetect";
-import { systemBrowserViewport } from "@/lib/browserViewport";
-import { cefBrowserStatus } from "@/lib/cefBrowserEmbed";
-import { isTauriDesktop } from "@/lib/desktopShell";
+import { isBrowserToolBlock } from "@/lib/browserToolDetect";
 
 export function ConversationWorkspace() {
   const t = useT();
@@ -77,20 +63,10 @@ export function ConversationWorkspace() {
     openTab,
   } = useWorkbenchSidebarState();
 
-  const seenBrowserToolKeysRef = useRef<Set<string>>(new Set());
-  const browserToolsHydratedRef = useRef(false);
-  const mirroredNavigateUrlsRef = useRef<Set<string>>(new Set());
-  const lastPlanAutoKeyRef = useRef<string | null>(null);
-  const planStreamHydratedRef = useRef(false);
   const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
 
   useEffect(() => {
     setWorkbenchExpanded(false);
-    seenBrowserToolKeysRef.current = new Set();
-    browserToolsHydratedRef.current = false;
-    mirroredNavigateUrlsRef.current = new Set();
-    lastPlanAutoKeyRef.current = null;
-    planStreamHydratedRef.current = false;
   }, [displaySessionId, setWorkbenchExpanded]);
 
   useEffect(() => {
@@ -107,118 +83,17 @@ export function ConversationWorkspace() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [workbenchExpanded, setWorkbenchExpanded]);
 
-  const planTreeQuery = useQuery({
-    queryKey: ["session-plan-tree", displaySessionId],
-    queryFn: () => api.sessionPlanTree(displaySessionId!),
-    enabled: Boolean(displaySessionId),
-    staleTime: 5_000,
-  });
+  const projectId = selected?.project_id ?? null;
 
-  // Auto-open Browser when a live Browser tool call streams in. History replay
-  // (stream not live) is indexed silently so we never auto-open for an old
-  // session; a *live* Browser call must always open the panel so the embedded
-  // CEF creates a page that Agent Browser* tools attach to.
-  useEffect(() => {
-    if (!displaySessionId) return;
-    const browserCalls = (liveBlocks ?? []).filter(
-      (b) => b.block_type === "tool_call" && isBrowserToolBlock(b),
-    );
-
-    if (!browserToolsHydratedRef.current) {
-      const blocks = liveBlocks ?? [];
-      if (!(chatStreamLive || sseLive)) {
-        // History replay / stream not live → silently index, never auto-open.
-        browserToolsHydratedRef.current = true;
-        seenBrowserToolKeysRef.current = collectBrowserToolCallKeys(blocks);
-        return;
-      }
-      // Live stream just started: index only non-browser history blocks so the
-      // very first live Browser call below still opens the panel.
-      browserToolsHydratedRef.current = true;
-      seenBrowserToolKeysRef.current = new Set();
-    }
-
-    for (const call of browserCalls) {
-      const key = browserToolDedupeKey(call);
-      if (seenBrowserToolKeysRef.current.has(key)) continue;
-      seenBrowserToolKeysRef.current.add(key);
-      openTab("browser");
-      break;
-    }
-  }, [displaySessionId, liveBlocks, chatStreamLive, sseLive, openTab]);
-
-  // Mirror MCP / native navigate URLs into the shared workbench CDP session so the
-  // right panel shows the same page (Playwright MCP otherwise stays isolated).
-  useEffect(() => {
-    if (!displaySessionId) return;
-    const projectId = selected?.project_id;
-    if (!projectId) return;
-    const streamLive = chatStreamLive || sseLive;
-    if (!streamLive) return;
-
-    const blocks = liveBlocks ?? [];
-    for (const block of blocks) {
-      if (!shouldMirrorNavigateToWorkbench(block)) continue;
-      const url = extractBrowserNavigateUrl(block);
-      if (!url || url === "about:blank") continue;
-      // Dedupe by URL — tool_call + tool_result must not navigate twice.
-      if (mirroredNavigateUrlsRef.current.has(url)) continue;
-      mirroredNavigateUrlsRef.current.add(url);
-      openTab("browser");
-      void (async () => {
-        try {
-          if (isTauriDesktop()) {
-            // Wait for CEF to publish CDP port so mirror navigates the live view.
-            let ready = false;
-            for (let i = 0; i < 40; i++) {
-              const s = await cefBrowserStatus();
-              if (s?.ready && (s.remote_debugging_port ?? 0) > 0) {
-                ready = true;
-                break;
-              }
-              await new Promise((r) => window.setTimeout(r, 100));
-            }
-            if (!ready) return;
-          }
-          const created = await api.createBrowserSession(
-            projectId,
-            displaySessionId,
-            systemBrowserViewport(),
-          );
-          await api.navigateBrowser(created.session.session_id, url);
-        } catch {
-          /* panel poll / agent may still update; ignore mirror failures */
-        }
-      })();
-    }
-  }, [
-    displaySessionId,
-    selected?.project_id,
+  // Panel auto-open behaviors (browser CEF attach timing, plan review) live in
+  // each panel's `*.autoOpen.ts`, composed here in a fixed order.
+  useWorkbenchAutoOpen({
+    sessionId: displaySessionId,
+    projectId,
     liveBlocks,
-    chatStreamLive,
-    sseLive,
+    streamLive: chatStreamLive || sseLive,
     openTab,
-  ]);
-
-  // New plan revision → open Plan panel for human review (not on initial hydrate).
-  useEffect(() => {
-    if (!displaySessionId) return;
-    const updatedAt = planTreeQuery.data?.updated_at;
-    const roots = planTreeQuery.data?.tree?.roots ?? [];
-    if (roots.length === 0 || !updatedAt) {
-      lastPlanAutoKeyRef.current = null;
-      planStreamHydratedRef.current = false;
-      return;
-    }
-    if (!planStreamHydratedRef.current) {
-      planStreamHydratedRef.current = true;
-      lastPlanAutoKeyRef.current = updatedAt;
-      return;
-    }
-    if (lastPlanAutoKeyRef.current === updatedAt) return;
-    lastPlanAutoKeyRef.current = updatedAt;
-    openTab("plan");
-  }, [displaySessionId, planTreeQuery.data, openTab]);
+  });
 
   const onResizeStart = useCallback(
     (e: React.PointerEvent) => {
@@ -240,11 +115,6 @@ export function ConversationWorkspace() {
     [panelWidth, setPanelWidth],
   );
 
-  const projectId = selected?.project_id ?? null;
-  const needsProject =
-    workbenchTab === "files" || workbenchTab === "browser" || workbenchTab === "terminal";
-  const projectReady = Boolean(projectId);
-
   const renderWorkbenchPanel = () => {
     if (!displaySessionId) {
       return (
@@ -253,52 +123,30 @@ export function ConversationWorkspace() {
         </p>
       );
     }
-    if (needsProject && !projectReady) {
+    const def = workbenchPanelById(workbenchTab);
+    if (def.needsProject && !projectId) {
       return (
         <p className="text-sm text-secondary px-4 py-6 m-0 text-center">
           {t("workbench.noProject")}
         </p>
       );
     }
-
-    switch (workbenchTab) {
-      case "files":
-        return <FilesPanel projectId={projectId!} />;
-      case "browser":
-        return (
-          <BrowserPanel
-            projectId={projectId!}
-            conversationSessionId={displaySessionId}
-            active={workbenchExpanded}
-          />
-        );
-      case "terminal":
-        return (
-          <TerminalPanel
-            projectId={projectId!}
-            conversationSessionId={displaySessionId}
-            active={workbenchExpanded}
-          />
-        );
-      case "plan":
-        return (
-          <PlanTreePanel
-            sessionId={displaySessionId}
-            isRunning={selected?.status === "running"}
-            onBuildStarted={() => setWorkbenchExpanded(false)}
-          />
-        );
-      case "artifacts":
-        return (
-          <ArtifactsPanel
-            sessionId={displaySessionId}
-            live={sseLive}
-            isRunning={selected?.status === "running"}
-          />
-        );
-      default:
-        return null;
-    }
+    const PanelComponent = def.component;
+    return (
+      <Suspense
+        fallback={
+          <p className="text-xs text-secondary text-center py-8 m-0">{t("common.loading")}</p>
+        }
+      >
+        <PanelComponent
+          projectId={projectId}
+          sessionId={displaySessionId}
+          active={workbenchExpanded}
+          isRunning={selected?.status === "running"}
+          collapse={() => setWorkbenchExpanded(false)}
+        />
+      </Suspense>
+    );
   };
 
   if (sessionsError) {
@@ -343,9 +191,7 @@ export function ConversationWorkspace() {
             ? t("conversations.emptyNeedsApproval")
             : t("conversations.emptyFilter")
         }
-        description={
-          active === "needs_approval" ? t("conversations.emptyNeedsApprovalDesc") : undefined
-        }
+        description={active === "needs_approval" ? t("conversations.emptyNeedsApprovalDesc") : undefined}
         icon="forum"
       />
     );
