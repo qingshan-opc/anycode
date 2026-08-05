@@ -695,6 +695,7 @@ export const en = {
     browserDesignPlaceholder: "Describe the change…",
     browserDesignSend: "Send",
     noProject: "Session has no project root",
+    locateInArtifacts: "Locate in Deliverables panel",
   },
   git: {
     changes: "Changes",
@@ -868,6 +869,7 @@ export const en = {
     artifactsGroupOther: "Other",
     artifactsShowScanned: "Show all scanned files",
     artifactsHideScanned: "Show deliverables only",
+    artifactNeedsVerify: "Needs verification",
     renameSession: "Rename session",
     handoffToColleague: "Hand off to colleague",
     copySession: "Copy conversation",

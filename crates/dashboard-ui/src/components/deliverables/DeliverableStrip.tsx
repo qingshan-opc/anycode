@@ -3,6 +3,8 @@ import {
   DeliverableCard,
   type DeliverableCardProps,
 } from "@/components/deliverables/DeliverableCard";
+import { Icon } from "@/components/Icon";
+import { workbenchSidebarStore } from "@/components/workbench/hooks/useWorkbenchSidebarState";
 import { useT } from "@/i18n/context";
 import { isProcessArtifactPath } from "@/lib/deliverablePath";
 
@@ -46,6 +48,19 @@ export function DeliverableStrip({ items, projectId }: Props) {
               {...item}
               projectId={item.projectId ?? projectId}
             />
+            <button
+              type="button"
+              className="deliverable-strip__locate"
+              title={t("workbench.locateInArtifacts")}
+              aria-label={t("workbench.locateInArtifacts")}
+              onClick={(event) => {
+                event.stopPropagation();
+                event.preventDefault();
+                workbenchSidebarStore.openTab("artifacts", { focus: item.path });
+              }}
+            >
+              <Icon name="near_me" size={14} />
+            </button>
           </div>
         ))}
         {hiddenCount > 0 ? (

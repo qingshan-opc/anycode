@@ -684,6 +684,7 @@ export const zh = {
     browserDesignPlaceholder: "描述想改的地方…",
     browserDesignSend: "发送",
     noProject: "会话未绑定项目根目录",
+    locateInArtifacts: "在交付物面板中定位",
   },
   git: {
     changes: "变更",
@@ -854,6 +855,7 @@ export const zh = {
     artifactsGroupOther: "其他",
     artifactsShowScanned: "显示全部扫描文件",
     artifactsHideScanned: "仅显示交付物",
+    artifactNeedsVerify: "待核验",
     renameSession: "重命名会话",
     handoffToColleague: "交接同事",
     copySession: "复制会话",

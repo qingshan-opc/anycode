@@ -9,6 +9,7 @@ import { ConversationWorkbenchHeaderIcons } from "@/components/workbench/Convers
 import { WorkbenchPanel } from "@/components/workbench/WorkbenchPanel";
 import { useWorkbenchSidebarState } from "@/components/workbench/hooks/useWorkbenchSidebarState";
 import { useWorkbenchAutoOpen } from "@/components/workbench/hooks/useWorkbenchAutoOpen";
+import { useWorkbenchBadges } from "@/components/workbench/hooks/useWorkbenchBadges";
 import { workbenchPanelById } from "@/components/workbench/registry";
 import { useConversationShell } from "@/context/ConversationShellContext";
 import { useT } from "@/i18n/context";
@@ -61,6 +62,7 @@ export function ConversationWorkspace() {
     setExpanded: setWorkbenchExpanded,
     setPanelWidth,
     openTab,
+    markSeen,
   } = useWorkbenchSidebarState();
 
   const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -94,6 +96,17 @@ export function ConversationWorkspace() {
     streamLive: chatStreamLive || sseLive,
     openTab,
   });
+
+  // Unread badges on the tab icons (artifacts: new deliverables since the
+  // user last opened the panel).
+  const workbenchBadges = useWorkbenchBadges(displaySessionId);
+
+  // Opening the Artifacts panel marks its deliverables as seen (badge clears).
+  useEffect(() => {
+    if (workbenchExpanded && workbenchTab === "artifacts") {
+      markSeen("artifacts");
+    }
+  }, [workbenchExpanded, workbenchTab, markSeen]);
 
   const onResizeStart = useCallback(
     (e: React.PointerEvent) => {
@@ -261,6 +274,7 @@ export function ConversationWorkspace() {
                   expanded={workbenchExpanded}
                   onSelectTab={onSelectWorkbenchTab}
                   disabled={!displaySessionId}
+                  badges={workbenchBadges}
                 />
               }
             />

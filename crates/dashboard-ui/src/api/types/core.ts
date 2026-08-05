@@ -155,7 +155,7 @@ export interface ReportGateRow {
 export interface ReportArtifactRow {
   path: string;
   kind: string;
-  trust_level: string;
+  trust_level: import("./artifacts").ArtifactTrustLevel | (string & {});
 }
 
 export interface ReportDocument {

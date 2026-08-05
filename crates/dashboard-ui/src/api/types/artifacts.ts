@@ -7,12 +7,19 @@ export interface GateRecord {
   session_id: string | null;
 }
 
+export type ArtifactTrustLevel =
+  | "verified"
+  | "trusted"
+  | "needs_verify"
+  | "unknown"
+  | "unverified";
+
 export interface ArtifactRecord {
   id: string;
   path: string;
   kind: string;
   title: string;
-  trust_level: string;
+  trust_level: ArtifactTrustLevel | (string & {});
   verified_by_gate_id: string | null;
   session_id?: string | null;
   project_id?: string | null;
@@ -75,7 +82,7 @@ export interface AssetItem {
   project_id?: string | null;
   project_name?: string | null;
   session_id?: string | null;
-  trust_level: string;
+  trust_level: ArtifactTrustLevel | (string & {});
   source_type: AssetSourceType | string;
   reuse_state: AssetReuseState | string;
   path?: string | null;

@@ -6,6 +6,7 @@ import type { ArtifactRecord, ReportDocument } from "@/api/types";
 import { EmptyState } from "@/components/EmptyState";
 import { Icon } from "@/components/Icon";
 import { ReportPreview } from "@/components/ReportPreview";
+import { useWorkbenchSidebarState } from "@/components/workbench/hooks/useWorkbenchSidebarState";
 import { useI18n, useT } from "@/i18n/context";
 import { SESSION_QUERY_GC_MS, TRANSCRIPT_STALE_RUNNING_MS } from "@/lib/sessionQuery";
 
@@ -31,6 +32,10 @@ export function ArtifactsPanel({ sessionId, live, isRunning = false }: Props) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryReport, setSummaryReport] = useState<ReportDocument | null>(null);
   const autoScanKey = useRef<string | null>(null);
+  const { focus, consumeFocus } = useWorkbenchSidebarState();
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null);
+  const [highlightPath, setHighlightPath] = useState<string | null>(null);
 
   const artifacts = useQuery({
     queryKey: ["session-artifacts", sessionId, showScanned ? "all" : "final"],
@@ -71,6 +76,40 @@ export function ArtifactsPanel({ sessionId, live, isRunning = false }: Props) {
     });
   }, [queryClient, running, sessionId]);
 
+  // Focus channel (E3): a deliverable strip card's "locate" action requests
+  // focus by artifact path; consume it once, then scroll + flash the row.
+  useEffect(() => {
+    if (!focus || focus.tab !== "artifacts") return;
+    const payload = consumeFocus("artifacts");
+    if (typeof payload === "string" && payload.trim()) {
+      setHighlightPath(null);
+      setPendingFocus(payload);
+    }
+  }, [focus, consumeFocus]);
+
+  const rows = artifacts.data?.artifacts ?? [];
+
+  useEffect(() => {
+    if (!pendingFocus || artifacts.isPending || artifacts.isFetching) return;
+    if (!rows.some((row) => row.path === pendingFocus)) {
+      if (!showScanned) {
+        // Not in the final-only list — reveal scanned rows and retry.
+        setShowScanned(true);
+      } else {
+        setPendingFocus(null);
+      }
+      return;
+    }
+    const escaped =
+      typeof CSS !== "undefined" && CSS.escape ? CSS.escape(pendingFocus) : pendingFocus;
+    const el = listRef.current?.querySelector(`[data-artifact-path="${escaped}"]`);
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightPath(pendingFocus);
+    setPendingFocus(null);
+    const timer = window.setTimeout(() => setHighlightPath(null), 1500);
+    return () => window.clearTimeout(timer);
+  }, [pendingFocus, rows, showScanned, artifacts.isPending, artifacts.isFetching]);
+
   const exportSummary = useMutation({
     mutationFn: () => api.sessionReport(sessionId, locale),
     onSuccess: (data) => {
@@ -79,7 +118,6 @@ export function ArtifactsPanel({ sessionId, live, isRunning = false }: Props) {
     },
   });
 
-  const rows = artifacts.data?.artifacts ?? [];
   const deliverableRows = rows.filter(isDeliverableArtifact);
   const visibleRows = showScanned
     ? deliverableRows.length > 0
@@ -181,7 +219,7 @@ export function ArtifactsPanel({ sessionId, live, isRunning = false }: Props) {
 
   return (
     <div className="flex flex-col min-h-0 flex-1">
-      <div className="py-1 overflow-y-auto min-h-0 flex-1">
+      <div ref={listRef} className="py-1 overflow-y-auto min-h-0 flex-1">
         <div className="px-3 pb-2 flex items-center justify-end">
           <button
             type="button"
@@ -206,7 +244,10 @@ export function ArtifactsPanel({ sessionId, live, isRunning = false }: Props) {
                   <Link
                     to="/assets/$artifactId"
                     params={{ artifactId: item.id }}
-                    className="flex items-start gap-2 px-3 py-2 no-underline hover:bg-surface-container-low transition-colors"
+                    data-artifact-path={item.path}
+                    className={`flex items-start gap-2 px-3 py-2 no-underline hover:bg-surface-container-low transition-colors${
+                      highlightPath === item.path ? " conv-artifact-focus" : ""
+                    }`}
                   >
                     <Icon
                       name={artifactIcon(item.kind, item.path)}
@@ -214,8 +255,19 @@ export function ArtifactsPanel({ sessionId, live, isRunning = false }: Props) {
                       className="text-secondary shrink-0 mt-0.5"
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-medium text-on-surface truncate">
-                        {item.title || item.path.split("/").pop() || item.path}
+                      <span className="flex items-center gap-1 text-sm font-medium text-on-surface">
+                        <span className="truncate">
+                          {item.title || item.path.split("/").pop() || item.path}
+                        </span>
+                        {item.trust_level === "needs_verify" && (
+                          <span
+                            className="shrink-0 inline-flex items-center gap-0.5 text-[10px] text-warn"
+                            title={t("conversations.artifactNeedsVerify")}
+                          >
+                            <Icon name="warning" size={12} />
+                            {t("conversations.artifactNeedsVerify")}
+                          </span>
+                        )}
                       </span>
                       <span className="block text-[11px] text-secondary truncate font-code">
                         {item.path}

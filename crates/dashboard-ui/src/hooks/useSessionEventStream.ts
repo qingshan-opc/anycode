@@ -228,6 +228,14 @@ export function useSessionEventStream(
 
   const applyChatEvent = useCallback(
     (evt: ChatStreamEvent) => {
+      // A new deliverable landed → refresh the Artifacts panel immediately
+      // (bypass the heavy-invalidate throttle so the badge/list stay live).
+      if (evt.kind === "deliverable" && sessionId) {
+        void queryClient.invalidateQueries({
+          queryKey: ["session-artifacts", sessionId],
+        });
+      }
+
       if (evt.kind === "question_request" && sessionId) {
         void queryClient.invalidateQueries({
           queryKey: ["pending-questions-rehydrate", sessionId],
