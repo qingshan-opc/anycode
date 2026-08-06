@@ -377,7 +377,10 @@ if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" && "${APPLE_
       "
       step "sign updater tarball" bash -ec "
         cd '$ROOT/apps/anycode-desktop'
-        cargo tauri signer sign '$(dirname "$APP_BUNDLE")/anyCode.app.tar.gz'
+        # release.env exports TAURI_SIGNING_PRIVATE_KEY (path form, required by the
+        # build-time bundler in tauri-cli bundle.rs) AND TAURI_SIGNING_PRIVATE_KEY_PATH;
+        # clap marks the two as conflicting, so drop the content var for this subcommand.
+        env -u TAURI_SIGNING_PRIVATE_KEY cargo tauri signer sign '$(dirname "$APP_BUNDLE")/anyCode.app.tar.gz'
       "
     fi
   fi
