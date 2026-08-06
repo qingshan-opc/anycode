@@ -35,30 +35,55 @@ impl AgentRuntime {
             tool_call,
             "pending",
             None,
+            None,
         );
-        let tool = tools
-            .get(&tool_call.name)
-            .ok_or_else(|| CoreError::ToolNotFound(tool_call.name.clone()))?;
-
-        match self
-            .security
-            .check_tool_call(&tool_call.name, &tool_call.input)
-            .await
-        {
-            Ok(_) => {}
-            Err(CoreError::PermissionDenied(reason)) => {
+        // auto-memory fork 的输入级工具面门控（只读 Bash + 目录内 Edit/Write），
+        // 优先于常规安全策略，保证后台记忆代理不能越权。门控通过即视为已在沙箱内
+        // 授权（该白名单严格严于通用审批策略），跳过交互审批 —— 后台 fork 无人应答，
+        // 审批弹窗会永久阻塞 fork（对齐 Claude `createAutoMemCanUseTool` 的自动授权）。
+        let automem_sandboxed = if let Some(dir) = self.automem_gate_dir(task_id) {
+            if let Err(reason) = anycode_memory::automem::automem_can_use_tool(
+                &tool_call.name,
+                &tool_call.input,
+                &dir,
+            ) {
                 return self.tool_invocation_deny(
                     task_id,
                     working_directory,
                     tool_call,
-                    "policy",
+                    "automem",
                     &reason,
                 );
             }
-            Err(e) => return Err(e),
+            true
+        } else {
+            false
+        };
+        let tool = tools
+            .get(&tool_call.name)
+            .ok_or_else(|| CoreError::ToolNotFound(tool_call.name.clone()))?;
+
+        if !automem_sandboxed {
+            match self
+                .security
+                .check_tool_call(&tool_call.name, &tool_call.input)
+                .await
+            {
+                Ok(_) => {}
+                Err(CoreError::PermissionDenied(reason)) => {
+                    return self.tool_invocation_deny(
+                        task_id,
+                        working_directory,
+                        tool_call,
+                        "policy",
+                        &reason,
+                    );
+                }
+                Err(e) => return Err(e),
+            }
         }
 
-        if !self.security.is_bypass_permissions().await {
+        if !automem_sandboxed && !self.security.is_bypass_permissions().await {
             if let Some(rules) = &self.claude_gating.rules {
                 let args_json =
                     serde_json::to_string(&tool_call.input).unwrap_or_else(|_| "{}".into());
@@ -114,6 +139,7 @@ impl AgentRuntime {
             },
             sandbox_mode: self.sandbox_mode,
             dashboard_session_id: anycode_core::current_dashboard_session_id(),
+            task_id: Some(task_id),
         };
 
         if let Ok(guard) = self.tool_services.lock() {
@@ -129,8 +155,11 @@ impl AgentRuntime {
             tool_call,
             "allowed",
             None,
+            None,
         );
+        let started = std::time::Instant::now();
         let out = tool.execute(input).await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
         match &out {
             Ok(o) => tool_audit::append_tool_audit(
                 task_id,
@@ -143,6 +172,7 @@ impl AgentRuntime {
                     "ok"
                 },
                 o.error.as_deref(),
+                Some(elapsed_ms),
             ),
             Err(e) => tool_audit::append_tool_audit(
                 task_id,
@@ -151,6 +181,7 @@ impl AgentRuntime {
                 tool_call,
                 "runtime_error",
                 Some(&e.to_string()),
+                Some(elapsed_ms),
             ),
         }
         match out {
@@ -186,6 +217,7 @@ impl AgentRuntime {
             tool_call,
             "denied",
             Some(reason),
+            None,
         );
         self.log_task_line(
             task_id,

@@ -190,6 +190,8 @@ fn profile_spec_from_record(profile: &AgentProfileRecord) -> AgentProfileSpec {
         } else {
             Some(profile.prompt_overlay.clone())
         },
+        // dashboard 的 profile 记录尚无 system_prompt 列（文件式 agent 才用）。
+        system_prompt: None,
     }
 }
 

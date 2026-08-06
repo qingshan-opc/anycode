@@ -87,6 +87,10 @@ pub struct ToolInput {
     /// Dashboard `sessions.id` when the tool runs inside embedded Workbench chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard_session_id: Option<String>,
+    /// Owning task id, populated at dispatch（模型不可见；供 StructuredOutput 等
+    /// 按任务键控的工具使用，嵌套并发兄弟互不串扰）。
+    #[serde(skip, default)]
+    pub task_id: Option<uuid::Uuid>,
 }
 
 impl Default for ToolInput {
@@ -97,6 +101,7 @@ impl Default for ToolInput {
             working_directory: None,
             sandbox_mode: false,
             dashboard_session_id: None,
+            task_id: None,
         }
     }
 }
@@ -151,5 +156,18 @@ pub enum StreamEvent {
     Reasoning(String),
     ToolCall(ToolCall),
     Usage(Usage),
+    /// 流式传输失败：建连/HTTP 错误、读取中断，或字节流在未收到终止标记
+    ///（`[DONE]` / `message_stop` / `finish_reason`）前结束。
+    ///
+    /// 收到该事件表示已累计的部分内容**不可信**（可能截断在 tool_call 中途），
+    /// 消费方必须丢弃部分结果并走重试/降级路径，而不是把它当作正常完成。
+    Failed(String),
+    /// Responses API：服务端 response id 与链式 prefix hash。
+    /// 仅支持 `previous_response_id` 的端点会在 `response.completed` 时发出；
+    /// runtime 将其写入 assistant metadata（`anycode_response_id`）供下次链式续接。
+    ResponseId {
+        id: String,
+        prefix_hash: String,
+    },
     Done,
 }

@@ -36,6 +36,10 @@ pub struct RuntimeMemoryOptions {
     pub memory_project_autosave_enabled: bool,
     /// 外向会话通知（`config.notifications`）；与 `memory_pipeline` 无耦合。
     pub session_notifications: Option<SessionNotificationSettings>,
+    /// auto-memory（LLM 驱动提取/巩固）；`None` = 关闭或回退本地规则引擎。
+    pub automem: Option<anycode_core::AutomemSettings>,
+    /// auto-memory 根路径；`None` 时默认 `~/.anycode`。
+    pub automem_base_path: Option<std::path::PathBuf>,
 }
 
 /// Tool listing policy: deny patterns, Claude permission rules, skill exposure on explore/plan agents.

@@ -6,6 +6,18 @@ export type ToolStep = {
   result?: TranscriptBlock;
 };
 
+export type SubagentGroupItem = {
+  kind: "subagent_group";
+  id: string;
+  taskId: string;
+  agentType: string;
+  /** null while the nested task is still running. */
+  status: string | null;
+  /** Inner timeline, grouped with the same rules as a flat segment. */
+  items: TurnReplyItem[];
+  toolCount: number;
+};
+
 export type TurnReplyItem =
   | { kind: "block"; block: TranscriptBlock }
   | {
@@ -15,7 +27,18 @@ export type TurnReplyItem =
       processMessageCount: number;
       /** Collapsed intermediate assistant snippets (thinking). */
       processSnippets: string[];
-    };
+    }
+  | SubagentGroupItem;
+
+/** Subagent scope tag written by the dashboard bridge (`meta.subagent`). */
+export function subagentTaskIdOf(block: TranscriptBlock): string | null {
+  const sa = block.meta?.subagent as
+    | { task_id?: unknown }
+    | null
+    | undefined;
+  const id = sa?.task_id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
 
 function isIntermediateAssistantNotice(block: TranscriptBlock): boolean {
   return (
@@ -133,8 +156,87 @@ export function mergeFinalAssistantBlocks(replies: TranscriptBlock[]): Transcrip
  * Group tool blocks into per-segment clusters (Cursor/Codex-style interleaving).
  * Agent narration is a user-facing progress update, so it remains a first-class
  * transcript block. Only transport/system notices fold into tool details.
+ *
+ * Subagent-tagged blocks (`meta.subagent.task_id`) are first split into
+ * per-child groups; each group renders as a collapsible nested timeline.
  */
 export function groupTurnReplies(replies: TranscriptBlock[]): TurnReplyItem[] {
+  // Aggregate subagent-tagged blocks per child task_id (group placed at first
+  // sight) so interleaved parallel children still render as one card each;
+  // untagged blocks keep flat timeline grouping.
+  type Marker = { type: "normal"; blocks: TranscriptBlock[] } | { type: "group"; taskId: string };
+  const markers: Marker[] = [];
+  const groupBlocks = new Map<string, TranscriptBlock[]>();
+  let normal: TranscriptBlock[] = [];
+  const flushNormal = () => {
+    if (normal.length > 0) {
+      markers.push({ type: "normal", blocks: normal });
+      normal = [];
+    }
+  };
+  for (const block of replies) {
+    const taskId = subagentTaskIdOf(block);
+    if (taskId === null) {
+      normal.push(block);
+      continue;
+    }
+    let blocks = groupBlocks.get(taskId);
+    if (!blocks) {
+      flushNormal();
+      blocks = [];
+      groupBlocks.set(taskId, blocks);
+      markers.push({ type: "group", taskId });
+    }
+    blocks.push(block);
+  }
+  flushNormal();
+
+  const out: TurnReplyItem[] = [];
+  for (const marker of markers) {
+    if (marker.type === "normal") {
+      out.push(...groupFlatTurnReplies(marker.blocks));
+    } else {
+      out.push(buildSubagentGroup(marker.taskId, groupBlocks.get(marker.taskId)!));
+    }
+  }
+  return out;
+}
+
+function buildSubagentGroup(
+  taskId: string,
+  blocks: TranscriptBlock[],
+): SubagentGroupItem {
+  let agentType = "subagent";
+  let status: string | null = null;
+  const inner: TranscriptBlock[] = [];
+  for (const block of blocks) {
+    const sa = block.meta?.subagent as { agent_type?: unknown } | undefined;
+    if (typeof sa?.agent_type === "string" && sa.agent_type) {
+      agentType = sa.agent_type;
+    }
+    const source = block.meta?.source;
+    if (source === "subagent_start") {
+      continue; // header → group chrome
+    }
+    if (source === "subagent_done") {
+      status =
+        typeof block.meta?.status === "string" ? block.meta.status : "completed";
+      continue; // done marker → group status
+    }
+    inner.push(block);
+  }
+  return {
+    kind: "subagent_group",
+    id: `subagent-group:${taskId}`,
+    taskId,
+    agentType,
+    status,
+    items: groupFlatTurnReplies(inner),
+    toolCount: countLogicalToolSteps(inner.filter(isToolBlock)),
+  };
+}
+
+function groupFlatTurnReplies(replies: TranscriptBlock[]): TurnReplyItem[] {
   const out: TurnReplyItem[] = [];
   let toolBuffer: TranscriptBlock[] = [];
   let processCount = 0;

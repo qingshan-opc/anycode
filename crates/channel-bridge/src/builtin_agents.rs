@@ -17,9 +17,10 @@ pub const BUILTIN_AGENT_IDS: [&str; 5] = [
 ];
 
 /// Shipped declarative role profiles (always registered at runtime).
-pub const SHIPPED_PROFILE_IDS: [&str; 6] = [
+pub const SHIPPED_PROFILE_IDS: [&str; 7] = [
     "verifier",
     "reviewer",
+    "critic",
     "office-writer",
     "data-analyst",
     "researcher",

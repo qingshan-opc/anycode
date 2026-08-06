@@ -5,8 +5,8 @@ use super::agentic_loop::{
     rehydrate_stream_llm_response,
 };
 use super::agentic_turn::{
-    MessageAppendSink, TurnToolBatchOutcome, TurnToolCancel, TurnToolCancelOutcome, TurnToolCtx,
-    TurnToolState,
+    MessageAppendSink, NoToolRecovery, TurnToolBatchOutcome, TurnToolCancel, TurnToolCancelOutcome,
+    TurnToolCtx, TurnToolState,
 };
 use super::budget::{
     record_llm_usage, tick_budget, token_budget_context_section, RuntimeBudgetState,
@@ -61,6 +61,10 @@ impl AgentRuntime {
             task_id,
             &format!("[task_start] agent_type={}", agent_type.as_str()),
         );
+        // Step 3b：嵌入式聊天（execute_turn）同样是 Agent 工具的父任务——注册任务级
+        // live trace 通道，嵌套子代理的时间线才能按 task id 经 ToolServices 接线到父通道。
+        let _live_trace_guard =
+            super::LiveTraceRegistrationGuard::register(self, task_id, live_trace_tx.clone());
 
         // 1) 工具名与 schema（与 `execute_task` 共用 tool_surface，避免漂移）
         let agent_tools = {
@@ -85,6 +89,12 @@ impl AgentRuntime {
             &merged_denies,
             tool_deny_prefixes,
         );
+        // 零工具面 fail-fast：与 execute_task 对齐——deny 清空工具面时立即失败，
+        // 避免带零工具空跑 LLM（模型会在纯文本里幻觉工具调用）。
+        if let Err(zero) = tool_surface::ensure_nonempty_tool_surface(&names, agent_type.as_str()) {
+            tracing::warn!(kind = "zero_tool_surface", agent_type = %agent_type.as_str(), "{zero}");
+            return Err(CoreError::LLMError(zero));
+        }
         let mut tool_schemas = tool_surface::build_tool_schemas(&names, &tools);
         drop(tools);
 
@@ -142,10 +152,23 @@ impl AgentRuntime {
                         &merged_denies,
                         tool_deny_prefixes,
                     );
+                    // 零工具面 fail-fast：skill deny 收窄后可能清空工具面。
+                    if let Err(zero) =
+                        tool_surface::ensure_nonempty_tool_surface(&names, agent_type.as_str())
+                    {
+                        tracing::warn!(kind = "zero_tool_surface", agent_type = %agent_type.as_str(), "{zero}");
+                        return Err(CoreError::LLMError(zero));
+                    }
                     tool_schemas = tool_surface::build_tool_schemas(&names, &tools);
                     drop(tools);
                 }
                 let mut sections = compiled.sections.clone();
+                // auto-memory 召回：按项目的 MEMORY.md 索引（截断 + point-in-time 告诫）。
+                if let Some(section) =
+                    self.automem_index_section(agent_type.as_str(), working_directory)
+                {
+                    sections.push(section);
+                }
                 if let Some(section) = token_budget_context_section(&budget) {
                     sections.push(section);
                 }
@@ -224,23 +247,13 @@ impl AgentRuntime {
                                         || t.starts_with("## Gate Plan")
                                         || t.starts_with("## Preferences")
                                         || t.starts_with("## Memories (")
+                                        || t.starts_with("## Persistent Memory Index")
                                 }
                                 _ => false,
                             })
                     });
                     for section in sections {
-                        let mut metadata = HashMap::new();
-                        metadata.insert(
-                            ANYCODE_CONTEXT_USER_METADATA_KEY.to_string(),
-                            serde_json::Value::Bool(true),
-                        );
-                        g.push(Message {
-                            id: Uuid::new_v4(),
-                            role: MessageRole::User,
-                            content: MessageContent::Text(section),
-                            timestamp: chrono::Utc::now(),
-                            metadata,
-                        });
+                        g.push(super::context_user_message(section));
                     }
                 }
                 (
@@ -250,12 +263,10 @@ impl AgentRuntime {
                 )
             }
         };
-        let mut repairs_used: u32 = 0;
-        let mut last_repair_diagnostics: Option<String> = None;
+        let mut guard_state = super::guard_verdict::GuardLoopState::default();
         let verification_shared = Arc::new(std::sync::Mutex::new(
             super::discoverable_verification::SessionVerificationState::default(),
         ));
-        let mut evidence_repairs_used: u32 = 0;
 
         // 2) agentic loop：保持与 execute_task 的语义一致
         let model_config = self.model_for_task(agent_type).clone();
@@ -270,6 +281,28 @@ impl AgentRuntime {
         let mut termination_reason = TerminationReason::MaxTurns;
         let mut progress_seq: u32 = 0;
         let mut stream_progress_seq: Option<u32>;
+
+        // 收尾参数的不可变部分只绑定一次；各提前出口仅传可变部分（Builder 风格闭包）。
+        let finalize_params = |last_model_turn: usize,
+                               total_tool_calls: usize,
+                               artifacts: Vec<Artifact>,
+                               turn_usage: TurnTokenUsage,
+                               termination_reason: TerminationReason|
+         -> TurnFinalizeParams<'_> {
+            TurnFinalizeParams {
+                task_id,
+                agent_type,
+                messages: &messages,
+                working_directory,
+                live_trace_tx: &live_trace_tx,
+                loop_limits,
+                last_model_turn,
+                total_tool_calls,
+                artifacts,
+                turn_usage,
+                termination_reason,
+            }
+        };
 
         for turn in 1..=loop_limits.max_agent_turns {
             last_model_turn = turn;
@@ -286,37 +319,25 @@ impl AgentRuntime {
             );
             live_trace_emit::emit_turn_start(&live_trace_tx, turn);
             if opt_coop_cancelled(&coop_cancel) {
-                self.emit_cancelled_turn_receipt(TurnFinalizeParams {
-                    task_id,
-                    agent_type,
-                    messages: &messages,
-                    working_directory,
-                    live_trace_tx: &live_trace_tx,
-                    loop_limits,
-                    last_model_turn: turn.saturating_sub(1).max(1),
+                self.emit_cancelled_turn_receipt(finalize_params(
+                    turn.saturating_sub(1).max(1),
                     total_tool_calls,
-                    artifacts: artifacts.clone(),
+                    artifacts.clone(),
                     turn_usage,
-                    termination_reason: TerminationReason::Cancelled,
-                })
+                    TerminationReason::Cancelled,
+                ))
                 .await;
                 return Err(CoreError::CooperativeCancel);
             }
             if tick_budget(&logger, task_id, &mut budget_state) {
                 return Ok(self
-                    .finalize_incomplete_turn(TurnFinalizeParams {
-                        task_id,
-                        agent_type,
-                        messages: &messages,
-                        working_directory,
-                        live_trace_tx: &live_trace_tx,
-                        loop_limits,
-                        last_model_turn: turn.saturating_sub(1).max(1),
+                    .finalize_incomplete_turn(finalize_params(
+                        turn.saturating_sub(1).max(1),
                         total_tool_calls,
                         artifacts,
                         turn_usage,
-                        termination_reason: TerminationReason::Budget,
-                    })
+                        TerminationReason::Budget,
+                    ))
                     .await);
             }
             {
@@ -378,19 +399,13 @@ impl AgentRuntime {
                             task_id,
                             "[llm_response_end] status=cancelled reason=cooperative_in_flight",
                         );
-                        self.emit_cancelled_turn_receipt(TurnFinalizeParams {
-                            task_id,
-                            agent_type,
-                            messages: &messages,
-                            working_directory,
-                            live_trace_tx: &live_trace_tx,
-                            loop_limits,
-                            last_model_turn: turn,
+                        self.emit_cancelled_turn_receipt(finalize_params(
+                            turn,
                             total_tool_calls,
-                            artifacts: artifacts.clone(),
+                            artifacts.clone(),
                             turn_usage,
-                            termination_reason: TerminationReason::Cancelled,
-                        })
+                            TerminationReason::Cancelled,
+                        ))
                         .await;
                         return Err(CoreError::CooperativeCancel);
                     }
@@ -483,6 +498,35 @@ impl AgentRuntime {
                                             received_any = true;
                                             stream_usage = Some(u);
                                         }
+                                        StreamEvent::ResponseId { id, prefix_hash } => {
+                                            // Responses API 链式状态：写入 assistant 占位消息
+                                            // metadata，供下次请求 previous_response_id 续接。
+                                            let mut g = messages.lock().await;
+                                            if let Some(last) = g.last_mut() {
+                                                if last.id == assistant_id {
+                                                    last.metadata.insert(
+                                                        ANYCODE_RESPONSE_ID_METADATA_KEY
+                                                            .to_string(),
+                                                        serde_json::json!({
+                                                            "id": id,
+                                                            "prefix_hash": prefix_hash,
+                                                        }),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        StreamEvent::Failed(reason) => {
+                                            // 部分内容不可信：丢弃占位消息，走非流式重试。
+                                            logger.line(
+                                                task_id,
+                                                &format!(
+                                                    "[llm_stream_failed] turn={} reason={}",
+                                                    turn, reason
+                                                ),
+                                            );
+                                            streamed = false;
+                                            break;
+                                        }
                                         StreamEvent::Done => break,
                                     },
                                 }
@@ -495,19 +539,13 @@ impl AgentRuntime {
                             task_id,
                             "[llm_response_end] status=cancelled reason=cooperative_in_flight",
                         );
-                        self.emit_cancelled_turn_receipt(TurnFinalizeParams {
-                            task_id,
-                            agent_type,
-                            messages: &messages,
-                            working_directory,
-                            live_trace_tx: &live_trace_tx,
-                            loop_limits,
-                            last_model_turn: turn,
+                        self.emit_cancelled_turn_receipt(finalize_params(
+                            turn,
                             total_tool_calls,
-                            artifacts: artifacts.clone(),
+                            artifacts.clone(),
                             turn_usage,
-                            termination_reason: TerminationReason::Cancelled,
-                        })
+                            TerminationReason::Cancelled,
+                        ))
                         .await;
                         return Err(CoreError::CooperativeCancel);
                     }
@@ -544,19 +582,13 @@ impl AgentRuntime {
                                 task_id,
                                 "[llm_response_end] status=cancelled reason=cooperative_in_flight",
                             );
-                            self.emit_cancelled_turn_receipt(TurnFinalizeParams {
-                                task_id,
-                                agent_type,
-                                messages: &messages,
-                                working_directory,
-                                live_trace_tx: &live_trace_tx,
-                                loop_limits,
-                                last_model_turn: turn,
+                            self.emit_cancelled_turn_receipt(finalize_params(
+                                turn,
                                 total_tool_calls,
-                                artifacts: artifacts.clone(),
+                                artifacts.clone(),
                                 turn_usage,
-                                termination_reason: TerminationReason::Cancelled,
-                            })
+                                TerminationReason::Cancelled,
+                            ))
                             .await;
                             return Err(CoreError::CooperativeCancel);
                         }
@@ -657,92 +689,50 @@ impl AgentRuntime {
                 && anycode_llm::capabilities_for_model_config(&model_config).weak_local_model
                 && !turn_tool_schemas.is_empty();
             if should_recover_no_tool {
-                for attempt in 1..=2u8 {
-                    logger.line(
+                let mut sink = MessageAppendSink::Shared(&messages);
+                match self
+                    .recover_no_tool_response(
+                        &logger,
                         task_id,
-                        &format!(
-                            "[tool_recovery] turn=1 attempt={} reason=no_tool_response",
-                            attempt
-                        ),
-                    );
-                    turn_usage.max_input_tokens =
-                        turn_usage.max_input_tokens.max(response.usage.input_tokens);
-                    turn_usage.total_output_tokens += response.usage.output_tokens;
-                    if record_llm_usage(&logger, task_id, &mut budget_state, &response.usage) {
+                        response,
+                        &turn_tool_schemas,
+                        &llm_config,
+                        &mut budget_state,
+                        &mut sink,
+                        Some(&mut turn_usage),
+                    )
+                    .await
+                {
+                    NoToolRecovery::Recovered(r) => {
+                        response = r;
+                        llm_streamed = false;
+                    }
+                    NoToolRecovery::BudgetExceeded => {
                         return Ok(self
-                            .finalize_incomplete_turn(TurnFinalizeParams {
-                                task_id,
-                                agent_type,
-                                messages: &messages,
-                                working_directory,
-                                live_trace_tx: &live_trace_tx,
-                                loop_limits,
-                                last_model_turn: turn,
+                            .finalize_incomplete_turn(finalize_params(
+                                turn,
                                 total_tool_calls,
                                 artifacts,
                                 turn_usage,
-                                termination_reason: TerminationReason::Budget,
-                            })
+                                TerminationReason::Budget,
+                            ))
                             .await);
                     }
-                    {
-                        let mut history = messages.lock().await;
-                        if history
-                            .last()
-                            .is_none_or(|m| m.role != MessageRole::Assistant)
-                        {
-                            history.push(response.message.clone());
-                        }
-                        history.push(Message {
-                            id: Uuid::new_v4(),
-                            role: MessageRole::User,
-                            content: MessageContent::Text(if attempt == 1 {
-                                anycode_llm::TOOL_RECOVERY_NUDGE.to_string()
-                            } else {
-                                anycode_llm::TOOL_RECOVERY_NUDGE_FORCE_GLOB.to_string()
-                            }),
-                            timestamp: chrono::Utc::now(),
-                            metadata: HashMap::new(),
+                    NoToolRecovery::LlmFailed(e) => return Err(e),
+                    NoToolRecovery::Exhausted(refusal) => {
+                        logger.line(task_id, "[task_end] status=failed reason=refusal_no_tool");
+                        live_trace_emit::emit_turn_done(&live_trace_tx, "refusal_no_tool");
+                        return Ok(TurnOutput {
+                            final_text: refusal,
+                            artifacts,
+                            usage: turn_usage,
+                            termination_reason: TerminationReason::RefusalNoTool,
                         });
                     }
-                    let snapshot = messages.lock().await.clone();
-                    response = self
-                        .chat_with_failover(
-                            &snapshot,
-                            turn_tool_schemas.clone(),
-                            &llm_config,
-                            task_id,
-                            &logger,
-                        )
-                        .await?;
-                    llm_streamed = false;
-                    messages.lock().await.push(response.message.clone());
-                    if !response.tool_calls.is_empty() {
-                        break;
-                    }
-                }
-                if response.tool_calls.is_empty() {
-                    let refusal = match &response.message.content {
-                        MessageContent::Text(text) => text.clone(),
-                        _ => String::new(),
-                    };
-                    logger.line(task_id, "[task_end] status=failed reason=refusal_no_tool");
-                    live_trace_emit::emit_turn_done(&live_trace_tx, "refusal_no_tool");
-                    return Ok(TurnOutput {
-                        final_text: refusal,
-                        artifacts,
-                        usage: turn_usage,
-                        termination_reason: TerminationReason::RefusalNoTool,
-                    });
                 }
             }
 
-            turn_usage.max_input_tokens =
-                turn_usage.max_input_tokens.max(response.usage.input_tokens);
-            turn_usage.total_output_tokens += response.usage.output_tokens;
-            turn_usage.total_cache_read_tokens += response.usage.cache_read_tokens.unwrap_or(0);
-            turn_usage.total_cache_creation_tokens +=
-                response.usage.cache_creation_tokens.unwrap_or(0);
+            turn_usage.record(&response.usage);
 
             logger.line(
                 task_id,
@@ -757,19 +747,13 @@ impl AgentRuntime {
             );
             if record_llm_usage(&logger, task_id, &mut budget_state, &response.usage) {
                 return Ok(self
-                    .finalize_incomplete_turn(TurnFinalizeParams {
-                        task_id,
-                        agent_type,
-                        messages: &messages,
-                        working_directory,
-                        live_trace_tx: &live_trace_tx,
-                        loop_limits,
-                        last_model_turn: turn,
+                    .finalize_incomplete_turn(finalize_params(
+                        turn,
                         total_tool_calls,
                         artifacts,
                         turn_usage,
-                        termination_reason: TerminationReason::Budget,
-                    })
+                        TerminationReason::Budget,
+                    ))
                     .await);
             }
 
@@ -780,7 +764,14 @@ impl AgentRuntime {
                     ANYCODE_TOOL_CALLS_METADATA_KEY.to_string(),
                     serde_json::to_value(&response.tool_calls)?,
                 );
-                // Also update the in-place message in history with metadata.
+            }
+            // Responses API 链式状态等非流式 metadata 无条件合并回历史（流式路径
+            // 已在占位消息上实时写入；非流式回退路径不能丢，否则链式只在流式生效）。
+            let has_tool_calls = !response.tool_calls.is_empty();
+            let has_response_chain = assistant_msg
+                .metadata
+                .contains_key(ANYCODE_RESPONSE_ID_METADATA_KEY);
+            if has_tool_calls || has_response_chain {
                 let mut g = messages.lock().await;
                 if let Some(last) = g.last_mut() {
                     if last.id == assistant_msg.id {
@@ -834,156 +825,51 @@ impl AgentRuntime {
             let turn_tool_calls = response.tool_calls.clone();
             used_tools.extend(turn_tool_calls.iter().map(|tc| tc.name.clone()));
             if turn_tool_calls.is_empty() {
-                let guard_out = self
-                    .completion_guard
-                    .evaluate(
-                        &task_id.to_string(),
-                        task_family,
-                        gate_plan.as_ref(),
-                        &expected_artifacts,
-                        &artifacts,
-                        std::path::Path::new(working_directory),
-                        repairs_used,
-                        last_repair_diagnostics.as_deref(),
-                    )
-                    .await;
-                match guard_out.decision {
-                    super::completion_guard::GuardDecision::Complete => {
-                        let verification_snapshot = verification_shared
-                            .lock()
-                            .map(|g| g.clone())
-                            .unwrap_or_default();
-                        if let Some(msg) = super::discoverable_verification::maybe_evidence_repair(
-                            &verification_snapshot,
-                            &last_assistant_text,
-                            evidence_repairs_used,
-                        ) {
-                            evidence_repairs_used += 1;
-                            last_repair_diagnostics = Some(msg.clone());
-                            let marker = format!(
-                                "[evidence_repair_requested] repairs_used={evidence_repairs_used}"
-                            );
-                            logger.line(task_id, &marker);
-                            live_trace_emit::try_emit(
-                                &live_trace_tx,
-                                LiveTraceEvent::ProgressUpdate {
-                                    turn: turn as u32,
-                                    seq: progress_seq.saturating_add(1),
-                                    phase: "verify".into(),
-                                    work_stage: Some("discover".into()),
-                                    summary: marker,
-                                    next: Some("discover and run official verification".into()),
-                                    discovery: None,
-                                    evidence_refs: vec![],
-                                },
-                            );
-                            let mut g = messages.lock().await;
-                            let mut metadata = HashMap::new();
-                            metadata.insert(
-                                ANYCODE_CONTEXT_USER_METADATA_KEY.to_string(),
-                                serde_json::Value::Bool(true),
-                            );
-                            g.push(Message {
-                                id: Uuid::new_v4(),
-                                role: MessageRole::User,
-                                content: MessageContent::Text(msg),
-                                timestamp: chrono::Utc::now(),
-                                metadata,
-                            });
-                            continue;
-                        }
-                        let marker = format!(
-                            "[verification_finished] passed=1 results={}",
-                            guard_out
-                                .report
-                                .as_ref()
-                                .map(|r| r.results.len())
-                                .unwrap_or(0)
-                        );
-                        logger.line(task_id, &marker);
-                        live_trace_emit::try_emit(
-                            &live_trace_tx,
-                            LiveTraceEvent::ProgressUpdate {
-                                turn: turn as u32,
-                                seq: progress_seq.saturating_add(1),
-                                phase: "verify".into(),
-                                work_stage: Some("complete".into()),
-                                summary: marker,
-                                next: None,
-                                discovery: None,
-                                evidence_refs: vec![],
-                            },
-                        );
+                let guard_input = super::guard_verdict::GuardEvalInput {
+                    task_id,
+                    agent_type,
+                    working_directory,
+                    session_label: &session_label,
+                    turn,
+                    task_family,
+                    gate_plan: gate_plan.as_ref(),
+                    expected_artifacts: &expected_artifacts,
+                    artifacts: &artifacts,
+                    assistant_text: &last_assistant_text,
+                    live_trace_tx: &live_trace_tx,
+                    verification: &verification_shared,
+                    progress_seq,
+                    turn_style_verify_markers: true,
+                };
+                let mut sink = MessageAppendSink::Shared(&messages);
+                match self
+                    .evaluate_completion_guard(&logger, &guard_input, &mut guard_state, &mut sink)
+                    .await
+                {
+                    super::guard_verdict::GuardVerdict::Completed => {
                         termination_reason = TerminationReason::Completed;
-                        self.pipeline_memory_hook_agent_turn(
-                            &session_label,
-                            task_id,
-                            turn,
-                            &last_assistant_text,
-                        )
-                        .await;
-                        self.maybe_session_notify_agent_turn(
-                            &session_label,
-                            task_id,
-                            turn,
-                            &last_assistant_text,
-                            Some(working_directory),
-                        );
-                        logger.line(task_id, &format!("[turn_end] turn={} tool_calls=0", turn));
                         break;
                     }
-                    super::completion_guard::GuardDecision::Repair => {
-                        let msg = guard_out.repair_message.unwrap_or_default();
-                        last_repair_diagnostics = Some(msg.clone());
-                        repairs_used += 1;
-                        let marker = format!(
-                            "[repair_requested] repairs_used={repairs_used} verification_started=1"
-                        );
-                        logger.line(task_id, &marker);
-                        live_trace_emit::try_emit(
-                            &live_trace_tx,
-                            LiveTraceEvent::ProgressUpdate {
-                                turn: turn as u32,
-                                seq: progress_seq.saturating_add(1),
-                                phase: "verify".into(),
-                                work_stage: Some("repair".into()),
-                                summary: marker,
-                                next: Some("fix gate failures then re-check".into()),
-                                discovery: None,
-                                evidence_refs: vec![],
-                            },
-                        );
-                        let mut g = messages.lock().await;
-                        let mut metadata = HashMap::new();
-                        metadata.insert(
-                            ANYCODE_CONTEXT_USER_METADATA_KEY.to_string(),
-                            serde_json::Value::Bool(true),
-                        );
-                        g.push(Message {
-                            id: Uuid::new_v4(),
-                            role: MessageRole::User,
-                            content: MessageContent::Text(msg),
-                            timestamp: chrono::Utc::now(),
-                            metadata,
-                        });
-                        continue;
-                    }
-                    super::completion_guard::GuardDecision::Partial
-                    | super::completion_guard::GuardDecision::Failed => {
+                    super::guard_verdict::GuardVerdict::RepairInjected => continue,
+                    super::guard_verdict::GuardVerdict::Partial { repair_message } => {
                         termination_reason = TerminationReason::Partial;
-                        if let Some(msg) = guard_out.repair_message {
+                        if let Some(msg) = repair_message {
                             last_assistant_text = format!("{last_assistant_text}\n\n{msg}");
                         }
                         logger.line(
                             task_id,
-                            &format!(
-                                "[turn_end] turn={} tool_calls=0 verification={}",
-                                turn,
-                                match guard_out.decision {
-                                    super::completion_guard::GuardDecision::Partial => "partial",
-                                    _ => "failed",
-                                }
-                            ),
+                            &format!("[turn_end] turn={} tool_calls=0 verification=partial", turn),
+                        );
+                        break;
+                    }
+                    super::guard_verdict::GuardVerdict::Failed { repair_message } => {
+                        termination_reason = TerminationReason::Partial;
+                        if let Some(msg) = repair_message {
+                            last_assistant_text = format!("{last_assistant_text}\n\n{msg}");
+                        }
+                        logger.line(
+                            task_id,
+                            &format!("[turn_end] turn={} tool_calls=0 verification=failed", turn),
                         );
                         break;
                     }
@@ -1037,36 +923,24 @@ impl AgentRuntime {
                 }
                 TurnToolBatchOutcome::MaxToolCalls => {
                     return Ok(self
-                        .finalize_incomplete_turn(TurnFinalizeParams {
-                            task_id,
-                            agent_type,
-                            messages: &messages,
-                            working_directory,
-                            live_trace_tx: &live_trace_tx,
-                            loop_limits,
-                            last_model_turn: turn,
-                            total_tool_calls: tool_state.total_tool_calls,
-                            artifacts: tool_state.artifacts,
+                        .finalize_incomplete_turn(finalize_params(
+                            turn,
+                            tool_state.total_tool_calls,
+                            tool_state.artifacts,
                             turn_usage,
-                            termination_reason: TerminationReason::MaxTools,
-                        })
+                            TerminationReason::MaxTools,
+                        ))
                         .await);
                 }
                 TurnToolBatchOutcome::BudgetExceeded => {
                     return Ok(self
-                        .finalize_incomplete_turn(TurnFinalizeParams {
-                            task_id,
-                            agent_type,
-                            messages: &messages,
-                            working_directory,
-                            live_trace_tx: &live_trace_tx,
-                            loop_limits,
-                            last_model_turn: turn,
-                            total_tool_calls: tool_state.total_tool_calls,
-                            artifacts: tool_state.artifacts,
+                        .finalize_incomplete_turn(finalize_params(
+                            turn,
+                            tool_state.total_tool_calls,
+                            tool_state.artifacts,
                             turn_usage,
-                            termination_reason: TerminationReason::Budget,
-                        })
+                            TerminationReason::Budget,
+                        ))
                         .await);
                 }
             }
@@ -1111,6 +985,16 @@ impl AgentRuntime {
             }
             self.maybe_autosave_memory(task_id, &user_line, &last_assistant_text)
                 .await;
+            {
+                let snapshot = messages.lock().await.clone();
+                self.maybe_automem_after_turn(
+                    agent_type.as_str(),
+                    working_directory,
+                    None,
+                    task_id,
+                    &snapshot,
+                );
+            }
             return Ok(TurnOutput {
                 final_text: last_assistant_text,
                 artifacts,
@@ -1120,19 +1004,13 @@ impl AgentRuntime {
         }
 
         let output = self
-            .finalize_incomplete_turn(TurnFinalizeParams {
-                task_id,
-                agent_type,
-                messages: &messages,
-                working_directory,
-                live_trace_tx: &live_trace_tx,
-                loop_limits,
+            .finalize_incomplete_turn(finalize_params(
                 last_model_turn,
                 total_tool_calls,
                 artifacts,
                 turn_usage,
                 termination_reason,
-            })
+            ))
             .await;
 
         Ok(output)

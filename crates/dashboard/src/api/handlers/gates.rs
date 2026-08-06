@@ -166,6 +166,37 @@ pub async fn execute_project_gate(
             return (code, Json(json!({ "error": msg }))).into_response();
         }
     };
+    if command.starts_with(crate::gate_runner::LLM_GATE_COMMAND_PREFIX) {
+        let result = if crate::control::chat_runtime::ChatRuntimeHost::enabled() {
+            match crate::control::llm_gate::execute_critic_gate(&state.chat_runtime, root).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": e.to_string() })),
+                    )
+                        .into_response();
+                }
+            }
+        } else {
+            crate::gate_runner::GateExecuteResult {
+                name,
+                command,
+                status: "failed".into(),
+                output_excerpt: "embedded runtime disabled; cannot run LLM gate".into(),
+                elapsed_ms: 0,
+            }
+        };
+        let required = body.required.unwrap_or(false);
+        if let Err(e) = persist_manual_gate_run(&state.db, &project_id, &result, required).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+        return Json(json!({ "result": result })).into_response();
+    }
     match crate::gate_runner::execute_gate(root, &name, &command).await {
         Ok(result) => {
             let required = body.required.unwrap_or(false);
@@ -220,6 +251,49 @@ pub async fn execute_project_gate_stream(
     let required = body.required.unwrap_or(false);
     let db = state.db.clone();
     let pid = project_id.clone();
+
+    if command.starts_with(crate::gate_runner::LLM_GATE_COMMAND_PREFIX) {
+        // LLM 门禁没有增量行：一条提示 + done/error
+        let host = state.chat_runtime.clone();
+        let root_owned = root_path.clone();
+        let stream = stream! {
+            yield Ok::<Event, Infallible>(Event::default().event("gate").data(
+                json!({ "type": "line", "line": "critic review running (LLM)..." }).to_string(),
+            ));
+            let result = if crate::control::chat_runtime::ChatRuntimeHost::enabled() {
+                crate::control::llm_gate::execute_critic_gate(&host, std::path::Path::new(&root_owned)).await
+            } else {
+                Ok(crate::gate_runner::GateExecuteResult {
+                    name,
+                    command,
+                    status: "failed".into(),
+                    output_excerpt: "embedded runtime disabled; cannot run LLM gate".into(),
+                    elapsed_ms: 0,
+                })
+            };
+            match result {
+                Ok(result) => {
+                    if let Err(e) = persist_manual_gate_run(&db, &pid, &result, required).await {
+                        yield Ok::<Event, Infallible>(Event::default().event("gate").data(
+                            json!({ "type": "error", "error": e.to_string() }).to_string(),
+                        ));
+                    } else {
+                        yield Ok::<Event, Infallible>(Event::default().event("gate").data(
+                            json!({ "type": "done", "result": result }).to_string(),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    yield Ok::<Event, Infallible>(Event::default().event("gate").data(
+                        json!({ "type": "error", "error": e.to_string() }).to_string(),
+                    ));
+                }
+            }
+        };
+        return Sse::new(stream)
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+            .into_response();
+    }
 
     let stream = stream! {
         let (line_tx, mut line_rx) = tokio::sync::mpsc::channel(256);

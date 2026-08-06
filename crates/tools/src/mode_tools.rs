@@ -368,7 +368,69 @@ impl Tool for SleepTool {
     }
 }
 
-pub struct StructuredOutputTool;
+/// 轻量 JSON schema 校验（顶层 type / required / 逐属性 type），不引新依赖。
+/// 允许多余键；失败返回人类可读清单，供模型自愈重试。
+fn validate_structured_against_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Result<(), Vec<String>> {
+    fn type_ok(v: &serde_json::Value, ty: &str) -> bool {
+        match ty {
+            "object" => v.is_object(),
+            "array" => v.is_array(),
+            "string" => v.is_string(),
+            "boolean" => v.is_boolean(),
+            "number" => v.is_number(),
+            "integer" => v.is_i64() || v.is_u64(),
+            "null" => v.is_null(),
+            _ => true,
+        }
+    }
+    let mut issues = Vec::new();
+    if let Some(ty) = schema.get("type").and_then(|t| t.as_str()) {
+        if !type_ok(value, ty) {
+            issues.push(format!("top-level value must be of type `{ty}`"));
+        }
+    }
+    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+        if let Some(obj) = value.as_object() {
+            for req in required.iter().filter_map(|r| r.as_str()) {
+                if !obj.contains_key(req) {
+                    issues.push(format!("missing required key `{req}`"));
+                }
+            }
+        }
+    }
+    if let (Some(obj), Some(props)) = (
+        value.as_object(),
+        schema.get("properties").and_then(|p| p.as_object()),
+    ) {
+        for (key, prop_schema) in props {
+            let Some(v) = obj.get(key) else { continue };
+            let Some(ty) = prop_schema.get("type").and_then(|t| t.as_str()) else {
+                continue;
+            };
+            if !type_ok(v, ty) {
+                issues.push(format!("property `{key}` must be of type `{ty}`"));
+            }
+        }
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+pub struct StructuredOutputTool {
+    services: Arc<ToolServices>,
+}
+
+impl StructuredOutputTool {
+    pub fn new(services: Arc<ToolServices>) -> Self {
+        Self { services }
+    }
+}
 
 #[async_trait]
 impl Tool for StructuredOutputTool {
@@ -376,7 +438,7 @@ impl Tool for StructuredOutputTool {
         "StructuredOutput"
     }
     fn description(&self) -> &str {
-        "Return structured JSON output (passthrough)."
+        "Return structured JSON output. When the parent agent attached an output schema to this task, the JSON must match it (top-level type, required keys, declared property types); mismatches return an error so you can correct and retry. Call exactly once as the final action."
     }
     fn schema(&self) -> serde_json::Value {
         json!({
@@ -392,10 +454,165 @@ impl Tool for StructuredOutputTool {
     }
     async fn execute(&self, input: ToolInput) -> Result<ToolOutput, CoreError> {
         let start = Instant::now();
+        let value = input.input.clone();
+        if let Some(task_id) = input.task_id {
+            if let Some(schema) = self.services.structured_output_schema(task_id) {
+                if let Err(issues) = validate_structured_against_schema(&value, &schema) {
+                    return Ok(ToolOutput {
+                        result: json!({ "recorded": false, "issues": issues }),
+                        error: Some(format!(
+                            "structured output does not match schema: {}",
+                            issues.join("; ")
+                        )),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+            }
+            self.services
+                .record_structured_output(task_id, value.clone());
+        }
         Ok(ToolOutput {
-            result: input.input,
+            result: json!({ "recorded": true, "value": value }),
             error: None,
             duration_ms: start.elapsed().as_millis() as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod structured_output_tests {
+    use super::*;
+    use crate::services::ToolServices;
+
+    fn schema_obj() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "required": ["verdict"],
+            "properties": {
+                "verdict": { "type": "string" },
+                "count": { "type": "integer" },
+                "score": { "type": "number" }
+            }
+        })
+    }
+
+    #[test]
+    fn validate_accepts_valid_and_extra_keys() {
+        let v = json!({ "verdict": "ok", "count": 3, "score": 1.5, "extra": [1, 2] });
+        assert!(validate_structured_against_schema(&v, &schema_obj()).is_ok());
+    }
+
+    #[test]
+    fn validate_missing_required() {
+        let v = json!({ "count": 1 });
+        let err = validate_structured_against_schema(&v, &schema_obj()).unwrap_err();
+        assert!(
+            err.iter()
+                .any(|i| i.contains("missing required key `verdict`")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_wrong_property_type() {
+        let v = json!({ "verdict": 42 });
+        let err = validate_structured_against_schema(&v, &schema_obj()).unwrap_err();
+        assert!(
+            err.iter()
+                .any(|i| i.contains("`verdict`") && i.contains("string")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_integer_vs_number() {
+        // integer 拒绝浮点
+        let v = json!({ "verdict": "ok", "count": 1.5 });
+        assert!(validate_structured_against_schema(&v, &schema_obj()).is_err());
+        // number 接受整数与浮点
+        let v2 = json!({ "verdict": "ok", "score": 5 });
+        assert!(validate_structured_against_schema(&v2, &schema_obj()).is_ok());
+    }
+
+    #[test]
+    fn validate_top_level_type_mismatch() {
+        let v = json!(["not", "an", "object"]);
+        let err = validate_structured_against_schema(&v, &schema_obj()).unwrap_err();
+        assert!(err.iter().any(|i| i.contains("top-level")), "{err:?}");
+    }
+
+    fn ti(value: serde_json::Value, task_id: Option<uuid::Uuid>) -> ToolInput {
+        ToolInput {
+            name: "StructuredOutput".into(),
+            input: value,
+            working_directory: None,
+            sandbox_mode: false,
+            dashboard_session_id: None,
+            task_id,
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_records_without_schema() {
+        let services = Arc::new(ToolServices::default());
+        let tool = StructuredOutputTool::new(services.clone());
+        let tid = uuid::Uuid::new_v4();
+        let out = tool
+            .execute(ti(json!({ "a": 1 }), Some(tid)))
+            .await
+            .unwrap();
+        assert!(out.error.is_none());
+        assert_eq!(out.result["recorded"], true);
+        assert_eq!(
+            services.take_structured_output(tid),
+            Some(json!({ "a": 1 }))
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_mismatch_and_does_not_record() {
+        let services = Arc::new(ToolServices::default());
+        let tid = uuid::Uuid::new_v4();
+        services.set_structured_output_schema(tid, schema_obj());
+        let tool = StructuredOutputTool::new(services.clone());
+        let out = tool
+            .execute(ti(json!({ "count": "no" }), Some(tid)))
+            .await
+            .unwrap();
+        assert!(
+            out.error.is_some(),
+            "mismatch should surface as error for self-heal retry"
+        );
+        assert_eq!(out.result["recorded"], false);
+        assert!(
+            services.take_structured_output(tid).is_none(),
+            "rejected value must not be captured"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_accepts_match_and_records() {
+        let services = Arc::new(ToolServices::default());
+        let tid = uuid::Uuid::new_v4();
+        services.set_structured_output_schema(tid, schema_obj());
+        let tool = StructuredOutputTool::new(services.clone());
+        let out = tool
+            .execute(ti(json!({ "verdict": "ok" }), Some(tid)))
+            .await
+            .unwrap();
+        assert!(out.error.is_none());
+        assert_eq!(
+            services.take_structured_output(tid),
+            Some(json!({ "verdict": "ok" }))
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_without_task_id_is_passthrough() {
+        let services = Arc::new(ToolServices::default());
+        let tool = StructuredOutputTool::new(services.clone());
+        let out = tool.execute(ti(json!({ "x": true }), None)).await.unwrap();
+        assert!(out.error.is_none());
+        assert_eq!(out.result["recorded"], true);
     }
 }

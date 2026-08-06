@@ -1,5 +1,6 @@
 pub mod chat_events;
 pub mod chat_turn_log;
+pub mod efficiency_report;
 pub mod event_tier;
 pub mod execution_log;
 pub mod ingest;

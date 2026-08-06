@@ -257,6 +257,8 @@ async fn run_inner(
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "compliance audit upload failed"),
             }
+            sweep_uploads_once_per_day();
+            maybe_generate_efficiency_report(&db_audit).await;
         }
     });
     if crate::service_governance::is_loopback_host(&config.host) {
@@ -337,6 +339,38 @@ async fn run_inner(
         })
         .await
         .context("dashboard server stopped")
+}
+
+/// 每日一次清理闲置超过 7 天的 `uploads/<session_id>` 目录（best-effort）。
+fn sweep_uploads_once_per_day() {
+    static LAST_SWEEP_DAY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let day = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86_400)
+        .unwrap_or(0);
+    if LAST_SWEEP_DAY.swap(day, std::sync::atomic::Ordering::Relaxed) == day {
+        return;
+    }
+    crate::control::text_upload::sweep_uploads_dir(std::time::Duration::from_secs(7 * 24 * 3600));
+}
+
+/// 每周一次效能报告（确定性聚合；文件已存在则跳过，错误仅 log）。
+async fn maybe_generate_efficiency_report(db: &crate::db::DashboardDb) {
+    static LAST_REPORT_WEEK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    use chrono::Datelike;
+    let now = chrono::Utc::now();
+    let week = now.iso_week();
+    let key = week.year() as u64 * 100 + week.week() as u64;
+    if LAST_REPORT_WEEK.swap(key, std::sync::atomic::Ordering::Relaxed) == key {
+        return;
+    }
+    match crate::observability::efficiency_report::generate_weekly_report(db).await {
+        Ok(Some(path)) => {
+            tracing::info!(path = %path.display(), "weekly efficiency report generated")
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "weekly efficiency report failed"),
+    }
 }
 
 pub async fn app_for_test(db_path: &Path) -> Result<Router> {

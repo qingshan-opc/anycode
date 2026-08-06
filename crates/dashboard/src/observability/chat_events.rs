@@ -737,6 +737,140 @@ pub fn chat_event_from_live_trace(
             payload: json!({ "turn": turn, "user_turn_id": user_turn_id }),
             at,
         }),
+        // `Subagent` 包装由 bridge 解包后按 scope 递归映射（见
+        // `apply_subagent_scope`）；直接到达这里说明调用方未解包，忽略。
+        anycode_core::LiveTraceEvent::Subagent { .. } => None,
+    }
+}
+
+/// 子代理作用域：嵌套任务事件映射到父时间线时携带的身份与命名空间。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentScope {
+    pub task_id: uuid::Uuid,
+    pub agent_type: String,
+    pub parent_task_id: Option<uuid::Uuid>,
+}
+
+impl SubagentScope {
+    /// 写入 `payload["subagent"]` / `block.meta["subagent"]` 的身份标记。
+    #[must_use]
+    pub fn meta_json(&self) -> Value {
+        json!({
+            "task_id": self.task_id.to_string(),
+            "agent_type": self.agent_type,
+            "parent_task_id": self.parent_task_id.map(|id| id.to_string()),
+        })
+    }
+}
+
+/// 把已映射的 chat 事件按子代理身份命名空间化：key / 块 id 由
+/// `u{user_turn_id}:{…}` 改写为 `u{user_turn_id}:sa{task_id}:{…}`，
+/// 并在 payload 与 block.meta 打上 `subagent` 标记。
+/// 无 scope 路径（`chat_event_from_live_trace` 直接返回）保持逐字节不变。
+pub fn apply_subagent_scope(evt: &mut ChatStreamEvent, scope: &SubagentScope) {
+    let user_turn_id = evt.conversation_turn_id.unwrap_or(0);
+    let from = format!("u{user_turn_id}:");
+    let to = format!("u{user_turn_id}:sa{}:", scope.task_id);
+    if let Some(k) = evt.tool_key.as_mut() {
+        *k = k.replacen(&from, &to, 1);
+    }
+    if let Some(block) = evt.block.as_mut() {
+        block.id = block.id.replacen(&from, &to, 1);
+        if let Value::Object(ref mut map) = block.meta {
+            map.insert("subagent".into(), scope.meta_json());
+        }
+    }
+    if let Value::Object(ref mut map) = evt.payload {
+        map.insert("subagent".into(), scope.meta_json());
+    }
+}
+
+/// 子代理组头：bridge 首次见到某 `task_id` 时发布（时间线可折叠组容器）。
+pub fn subagent_header_event(
+    session_id: &str,
+    project_id: &str,
+    user_turn_id: u32,
+    scope: &SubagentScope,
+) -> ChatStreamEvent {
+    let at = Utc::now().to_rfc3339();
+    ChatStreamEvent {
+        session_id: session_id.to_string(),
+        project_id: project_id.to_string(),
+        kind: "subagent_start".into(),
+        turn: None,
+        conversation_turn_id: Some(user_turn_id),
+        seq: None,
+        event_id: None,
+        tool_key: None,
+        tool_name: None,
+        text: Some(scope.agent_type.clone()),
+        block: Some(TranscriptBlock {
+            id: format!("subagent:u{user_turn_id}:sa{}", scope.task_id),
+            block_type: "system_notice".into(),
+            at: at.clone(),
+            title: format!("Subagent {}", scope.agent_type),
+            body: String::new(),
+            meta: json!({
+                "source": "subagent_start",
+                "live": true,
+                "user_turn_id": user_turn_id.to_string(),
+                "subagent": scope.meta_json(),
+            }),
+            collapsible: true,
+            default_collapsed: false,
+            event_id: None,
+        }),
+        payload: json!({
+            "user_turn_id": user_turn_id,
+            "subagent": scope.meta_json(),
+        }),
+        at,
+    }
+}
+
+/// 子代理组尾：内部 `TurnDone` 时发布（不冒泡为父级 `turn_done`，
+/// 避免 UI 误判父轮次结束）。
+pub fn subagent_done_event(
+    session_id: &str,
+    project_id: &str,
+    user_turn_id: u32,
+    scope: &SubagentScope,
+    status: &str,
+) -> ChatStreamEvent {
+    let at = Utc::now().to_rfc3339();
+    ChatStreamEvent {
+        session_id: session_id.to_string(),
+        project_id: project_id.to_string(),
+        kind: "subagent_done".into(),
+        turn: None,
+        conversation_turn_id: Some(user_turn_id),
+        seq: None,
+        event_id: None,
+        tool_key: None,
+        tool_name: None,
+        text: Some(status.to_string()),
+        block: Some(TranscriptBlock {
+            id: format!("subagent-done:u{user_turn_id}:sa{}", scope.task_id),
+            block_type: "system_notice".into(),
+            at: at.clone(),
+            title: format!("Subagent {} {status}", scope.agent_type),
+            body: String::new(),
+            meta: json!({
+                "source": "subagent_done",
+                "status": status,
+                "user_turn_id": user_turn_id.to_string(),
+                "subagent": scope.meta_json(),
+            }),
+            collapsible: true,
+            default_collapsed: true,
+            event_id: None,
+        }),
+        payload: json!({
+            "user_turn_id": user_turn_id,
+            "status": status,
+            "subagent": scope.meta_json(),
+        }),
+        at,
     }
 }
 
@@ -1362,6 +1496,142 @@ mod tests {
         assert_eq!(
             block.meta.get("phase").and_then(|v| v.as_str()),
             Some("waiting_first_token")
+        );
+    }
+
+    fn map_tool_start_scoped(scope_task: uuid::Uuid) -> (ChatStreamEvent, SubagentScope) {
+        let scope = SubagentScope {
+            task_id: scope_task,
+            agent_type: "explore".into(),
+            parent_task_id: Some(uuid::Uuid::new_v4()),
+        };
+        let mut raw = std::collections::HashMap::new();
+        let mut display = std::collections::HashMap::new();
+        let mut chat = chat_event_from_live_trace(
+            "s1",
+            "p1",
+            3,
+            &anycode_core::LiveTraceEvent::ToolCallStart {
+                turn: 2,
+                idx: 1,
+                name: "Grep".into(),
+                input_preview: "needle".into(),
+            },
+            &mut raw,
+            &mut display,
+        )
+        .expect("mapped");
+        apply_subagent_scope(&mut chat, &scope);
+        (chat, scope)
+    }
+
+    #[test]
+    fn subagent_scope_namespaces_keys_and_tags_meta() {
+        let tid = uuid::Uuid::new_v4();
+        let (chat, scope) = map_tool_start_scoped(tid);
+        assert_eq!(
+            chat.tool_key.as_deref(),
+            Some(format!("u3:sa{tid}:2:1").as_str())
+        );
+        let block = chat.block.as_ref().expect("block");
+        assert_eq!(block.id, format!("tool-live:u3:sa{tid}:2:1:call"));
+        assert_eq!(
+            block.meta.get("subagent").and_then(|v| v.get("task_id")),
+            Some(&json!(tid.to_string()))
+        );
+        assert_eq!(
+            block.meta.get("subagent").and_then(|v| v.get("agent_type")),
+            Some(&json!("explore"))
+        );
+        assert_eq!(chat.payload.get("subagent"), Some(&scope.meta_json()));
+    }
+
+    #[test]
+    fn subagent_scope_keys_do_not_collide_across_children() {
+        let (a, _) = map_tool_start_scoped(uuid::Uuid::new_v4());
+        let (b, _) = map_tool_start_scoped(uuid::Uuid::new_v4());
+        assert_ne!(a.tool_key, b.tool_key);
+        assert_ne!(a.block.unwrap().id, b.block.unwrap().id);
+    }
+
+    #[test]
+    fn live_trace_without_scope_stays_byte_identical() {
+        // 无 scope 路径的形状钉死：subagent 改动不得影响既有事件映射。
+        let mut raw = std::collections::HashMap::new();
+        let mut display = std::collections::HashMap::new();
+        let mut chat = chat_event_from_live_trace(
+            "s1",
+            "p1",
+            3,
+            &anycode_core::LiveTraceEvent::ToolCallStart {
+                turn: 2,
+                idx: 1,
+                name: "Grep".into(),
+                input_preview: "needle".into(),
+            },
+            &mut raw,
+            &mut display,
+        )
+        .expect("mapped");
+        chat.at = "<at>".into();
+        if let Some(block) = chat.block.as_mut() {
+            block.at = "<at>".into();
+        }
+        let value = serde_json::to_value(&chat).expect("serialize");
+        let expected = json!({
+            "session_id": "s1",
+            "project_id": "p1",
+            "kind": "tool_start",
+            "turn": 2,
+            "conversation_turn_id": 3,
+            "tool_key": "u3:2:1",
+            "tool_name": "Grep",
+            "text": "needle",
+            "block": {
+                "id": "tool-live:u3:2:1:call",
+                "block_type": "tool_call",
+                "at": "<at>",
+                "title": "Grep started",
+                "body": "needle",
+                "meta": {
+                    "turn": "2",
+                    "idx": "1",
+                    "name": "Grep",
+                    "user_turn_id": "3",
+                    "tool_key": "u3:2:1",
+                    "phase": "start",
+                },
+                "collapsible": true,
+                "default_collapsed": true,
+            },
+            "payload": { "turn": 2, "idx": 1, "name": "Grep", "user_turn_id": 3 },
+            "at": "<at>",
+        });
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn subagent_header_and_done_events_carry_scope_meta() {
+        let scope = SubagentScope {
+            task_id: uuid::Uuid::new_v4(),
+            agent_type: "plan".into(),
+            parent_task_id: None,
+        };
+        let header = subagent_header_event("s1", "p1", 3, &scope);
+        assert_eq!(header.kind, "subagent_start");
+        let block = header.block.as_ref().expect("block");
+        assert_eq!(block.block_type, "system_notice");
+        assert!(block.collapsible);
+        assert!(!block.default_collapsed);
+        assert_eq!(
+            block.meta.get("subagent").and_then(|v| v.get("agent_type")),
+            Some(&json!("plan"))
+        );
+        let done = subagent_done_event("s1", "p1", 3, &scope, "completed");
+        assert_eq!(done.kind, "subagent_done");
+        assert_eq!(
+            done.payload.get("status").and_then(|v| v.as_str()),
+            Some("completed")
         );
     }
 }

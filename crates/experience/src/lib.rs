@@ -5,9 +5,10 @@
 use anycode_core::{ExperienceCard, ExperiencePack, ExperiencePackMeta, TaskFamily};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 use std::path::Path;
+
+pub mod trajectory_extract;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeacherTrajectory {
@@ -56,12 +57,19 @@ pub fn filter_validated(trajs: &[TeacherTrajectory], min_gain: f64) -> Vec<&Teac
         .collect()
 }
 
+/// `sha256(secret ‖ payload)` 前 16 个 hex 字符 — 与 `scripts/compile-experience-pack.py`
+/// 的 `sign()` 逐字节对齐（黄金向量见 tests）。
+fn signature_hex_for(payload: &[u8], secret: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(secret.as_bytes());
+    h.update(payload);
+    let hex = format!("{:x}", h.finalize());
+    hex[..16].to_string()
+}
+
 pub fn sign_pack_hmac_like(pack: &mut ExperiencePack, secret: &str) {
     let payload = pack.signing_payload().unwrap_or_default();
-    let mut h = DefaultHasher::new();
-    secret.hash(&mut h);
-    payload.hash(&mut h);
-    pack.meta.signature_hex = format!("{:016x}", h.finish());
+    pack.meta.signature_hex = signature_hex_for(&payload, secret);
     pack.meta.signer = "offline-teacher-lab".into();
     if pack.meta.created_at.is_none() {
         pack.meta.created_at = Some(Utc::now());
@@ -76,10 +84,7 @@ pub fn verify_pack_hmac_like(pack: &ExperiencePack, secret: &str) -> bool {
         Ok(p) => p,
         Err(_) => return false,
     };
-    let mut h = DefaultHasher::new();
-    secret.hash(&mut h);
-    payload.hash(&mut h);
-    pack.meta.signature_hex == format!("{:016x}", h.finish())
+    pack.meta.signature_hex == signature_hex_for(&payload, secret)
 }
 
 pub fn build_pack_from_trajectories(
@@ -145,5 +150,26 @@ mod tests {
         sign_pack_hmac_like(&mut pack, "test-secret");
         assert!(verify_pack_hmac_like(&pack, "test-secret"));
         assert!(!verify_pack_hmac_like(&pack, "other"));
+    }
+
+    /// 跨语言黄金向量：与 Python `sha256(secret+payload).hexdigest()[:16]` 对拍
+    /// （python3 -c 'import hashlib; h=hashlib.sha256(); h.update(b"test-secret");
+    /// h.update(b"{\"id\":\"lab\",\"version\":\"0.1.0\",\"cards\":[]}"); print(h.hexdigest()[:16])'）。
+    #[test]
+    fn golden_signature_vector_matches_python() {
+        let mut pack = ExperiencePack {
+            meta: ExperiencePackMeta {
+                id: "lab".into(),
+                version: "0.1.0".into(),
+                model_compat: vec![],
+                regression_score: 0.0,
+                created_at: None,
+                signature_hex: String::new(),
+                signer: String::new(),
+            },
+            cards: vec![],
+        };
+        sign_pack_hmac_like(&mut pack, "test-secret");
+        assert_eq!(pack.meta.signature_hex, "0422e0f29004e956");
     }
 }

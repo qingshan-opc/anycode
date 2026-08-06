@@ -83,3 +83,32 @@ export interface SavedHoursKpi {
   estimated_value_cny: number;
   generated_at: string;
 }
+
+export interface EfficiencyToolStat {
+  tool_name: string;
+  calls: number;
+  error_rate: number;
+  denied_rate: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+}
+
+export interface EfficiencyStatusCount {
+  status: string;
+  count: number;
+}
+
+export interface EfficiencyReport {
+  generated_at: string;
+  window_days: number;
+  tools: EfficiencyToolStat[];
+  repeat_input_rate: number;
+  turn_status: EfficiencyStatusCount[];
+  llm: {
+    llm_calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+  };
+}

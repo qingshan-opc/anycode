@@ -45,6 +45,8 @@ const ALWAYS_INJECT_CORE_TOOLS: &[&str] = &[
     "TaskGet",
     "TaskOutput",
     "Agent",
+    // 结构化输出契约：弱本地模型 turn≥2 工具面收窄时不丢 StructuredOutput。
+    "StructuredOutput",
 ];
 
 /// Sort tool names: builtins (sorted), then other non-MCP (sorted), then `mcp__*` (sorted).
@@ -156,6 +158,19 @@ pub(crate) fn build_tool_schemas(
         .collect()
 }
 
+/// 零工具面 fail-fast（Step 4 治理）：deny 叠加后 agent 一个工具都不剩时
+/// 返回稳定错误文案（`zero_tool_surface: {agent_type}`），调用方据此快速失败，
+/// 避免模型在无工具可用的循环里空转烧轮次。
+pub(crate) fn ensure_nonempty_tool_surface(
+    names: &[ToolName],
+    agent_type: &str,
+) -> Result<(), String> {
+    if names.is_empty() {
+        return Err(format!("zero_tool_surface: {agent_type}"));
+    }
+    Ok(())
+}
+
 /// 每轮注入的工具 schema：
 /// - turn 1：weak 本地模型只给核心工具（[`WEAK_LOCAL_CORE_TOOLS`]），其余全量；
 /// - turn ≥ 2：收敛为「核心工具 ∪ 会话已用工具」，控制长会话每轮请求体积。
@@ -195,6 +210,17 @@ pub(crate) fn schemas_for_model_turn(
 mod tests {
     use super::*;
     use async_trait::async_trait;
+
+    #[test]
+    fn ensure_nonempty_tool_surface_rejects_empty_with_stable_prefix() {
+        let err = ensure_nonempty_tool_surface(&[], "explore").expect_err("empty surface");
+        assert!(
+            err.starts_with("zero_tool_surface:"),
+            "stable prefix: {err}"
+        );
+        assert!(err.contains("explore"));
+        assert!(ensure_nonempty_tool_surface(&["Bash".to_string()], "explore").is_ok());
+    }
 
     struct StubTool(&'static str);
 

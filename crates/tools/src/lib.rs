@@ -1,5 +1,6 @@
 //! anyCode Tools — 内置工具注册、MCP、权限规则与任务编排（Rust）。
 
+pub mod agent_files;
 pub mod catalog;
 pub mod claude_rules;
 pub mod cron_schedule;
@@ -71,6 +72,7 @@ mod tool_input_coerce;
 mod web_fetch;
 mod web_search;
 
+pub use agent_tools::STRUCTURED_OUTPUT_INSTRUCTION;
 pub use ask_user_question_host::{
     AskUserQuestionHost, AskUserQuestionHostArc, AskUserQuestionHostError, AskUserQuestionOption,
     AskUserQuestionRequest, AskUserQuestionResponse,

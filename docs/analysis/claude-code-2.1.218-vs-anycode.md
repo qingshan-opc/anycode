@@ -87,7 +87,9 @@
 | 沙箱 | seccomp/Landlock 系统级沙箱 + 审批双层 | 审批策略（approval）+ 权限规则，无 OS 沙箱 | **anyCode 缺 OS 级沙箱**（macOS 可借 seatbelt/sandbox-exec） |
 | 权限 UX | permission_explainer（AI 解释为什么需要权限） | 审批弹窗 | 可借鉴 explainer |
 | 子代理 | adopt/reap + 独立 transcript + model_resolve + zero_tools 治理 | nested agent（Task/Agent 工具）+ 后台运行 | 差距小；可借鉴 adopt/reap 语义与「零工具子代理」治理 |
-| 记忆 | 多存储 + 评分回写 + 阈值事件 + 冲突处理 | MemoryStore + MemoryPipeline（缓冲/强化/晋升） | 差距小；可借鉴评分回写与多存储冲突策略 |
+| 记忆 | 多存储 + 评分回写 + 阈值事件 + 冲突处理（遥测字符串推断） | MemoryStore + MemoryPipeline（缓冲/强化/晋升） | 差距小；可借鉴评分回写与多存储冲突策略 |
+
+> **2026-08-05 源码级修正**：上表记忆一行基于遥测字符串推断，深度不足。对反编译源码（`src/memdir`、`services/extractMemories`、`services/SessionMemory`、`services/autoDream`、`tools/AgentTool/agentMemory`）深读后，实际是**两套哲学**：Claude 是"纯 Markdown 文件 + LLM 自觉维护"（memdir 四类型 + MEMORY.md 索引、stop-hook 受限 fork 提取、autoDream 24h/5 会话四阶段巩固、Sonnet 语义选文件召回、SessionMemory 直接当 compact 摘要、team memory 服务端同步）；anyCode 是"sled 管线 + 规则引擎"（episode → WAL 缓冲 → 晋升 → dream 规则巩固 + 向量/关键词召回）。anyCode 的 LLM 同构层（`automem.rs`）当时未接线；**本次已完成接线**（extract fork / autoDream / MEMORY.md 召回注入 / 输入级工具门控，见 `crates/agent/src/runtime/automem.rs`），默认开启，`memory.automem.enabled=false` 或 `ANYCODE_DISABLE_AUTOMEM=1` 可关。
 | Hooks | 阻塞/非阻塞/注入上下文三类 + 信任边界 | 有 plugin overlay，未发现同构 hooks 事件流 | **anyCode 可补 Hooks 事件总线**（SessionStart/UserPromptSubmit/PreCompact/Stop） |
 | MCP | OAuth 刷新 + 重连 + 降级 | tools-mcp + mcp-oauth feature | 差距小；可借鉴 mcp_degraded 降级态 |
 | 重试 | 状态码 + 策略 + 幂等 logID | llm 层有 failover 链 | 差距小-中；可借鉴 retryOfRequestLogID |

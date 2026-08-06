@@ -26,6 +26,7 @@ import { handleComposerPasteEvent } from "@/lib/composerPaste";
 import { useMediaStatus } from "@/hooks/useMediaStatus";
 import {
   formatTextAttachmentMeta,
+  isBinaryTextAttachment,
   MAX_TEXT_FILE_BYTES,
   MAX_TEXT_FILES,
   textPayloadsForApi,
@@ -97,7 +98,7 @@ type StartProps = {
 
 type Props = FollowUpProps | StartProps;
 
-const TEXT_FILE_ACCEPT = ".txt,.md,.json,.csv,.log,.pdf";
+const TEXT_FILE_ACCEPT = ".txt,.md,.json,.csv,.log,.pdf,.xlsx,.docx,.pptx";
 const ATTACH_ACCEPT = `image/*,${TEXT_FILE_ACCEPT}`;
 
 function parseSkillAllowlist(skillsJson: string): string[] | null {
@@ -1062,7 +1063,7 @@ export function ConversationComposer(props: Props) {
                 continue;
               }
               const lower = file.name.toLowerCase();
-              if (lower.endsWith(".pdf")) {
+              if (isBinaryTextAttachment(lower)) {
                 const buf = await file.arrayBuffer();
                 const bytes = new Uint8Array(buf);
                 let binary = "";

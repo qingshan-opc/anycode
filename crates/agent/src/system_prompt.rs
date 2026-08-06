@@ -327,6 +327,60 @@ mod tests {
         assert!(out.contains("TAIL"));
     }
 
+    struct OverlayReplaceAgent {
+        base: StubAgent,
+        overlay: &'static str,
+    }
+
+    #[async_trait]
+    impl Agent for OverlayReplaceAgent {
+        fn agent_type(&self) -> &AgentType {
+            self.base.agent_type()
+        }
+        fn description(&self) -> &str {
+            self.base.description()
+        }
+        fn tools(&self) -> Vec<ToolName> {
+            self.base.tools()
+        }
+        async fn execute(&mut self, _task: Task) -> Result<TaskResult, CoreError> {
+            unreachable!()
+        }
+        fn system_prompt_replaces_default_sections(&self) -> Option<&str> {
+            self.base.system_prompt_replaces_default_sections()
+        }
+        fn system_prompt_overlay(&self) -> Option<&str> {
+            Some(self.overlay)
+        }
+    }
+
+    /// 文件式 agent（md 正文）语义：body → config append → task append → overlay。
+    #[test]
+    fn replace_path_order_body_config_task_overlay() {
+        let cfg = RuntimePromptConfig {
+            system_prompt_override: None,
+            system_prompt_append: Some("CFG_APPEND".into()),
+            skills_section: None,
+            ..Default::default()
+        };
+        let mut base = stub(vec!["Z".into()]);
+        base.replace = Some("MD_BODY");
+        let agent = OverlayReplaceAgent {
+            base,
+            overlay: "OVERLAY_LAST",
+        };
+        let out = compose_effective_system_prompt(&cfg, &agent, "/w", Some("TASK_APPEND"));
+        let pb = out.find("MD_BODY").unwrap();
+        let pc = out.find("CFG_APPEND").unwrap();
+        let pt = out.find("TASK_APPEND").unwrap();
+        let po = out.find("OVERLAY_LAST").unwrap();
+        assert!(
+            pb < pc && pc < pt && pt < po,
+            "order body<config<task<overlay"
+        );
+        assert!(!out.contains("# Tone"));
+    }
+
     #[test]
     fn model_instructions_content_injected_into_prompt() {
         let cfg = RuntimePromptConfig {

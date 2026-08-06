@@ -2,8 +2,8 @@
 
 use super::agentic_loop::{coop_flag_wait, nested_coop_cancelled, task_cancelled_failure};
 use super::agentic_turn::{
-    MessageAppendSink, TurnToolBatchOutcome, TurnToolCancel, TurnToolCancelOutcome, TurnToolCtx,
-    TurnToolState,
+    MessageAppendSink, NoToolRecovery, TurnToolBatchOutcome, TurnToolCancel, TurnToolCancelOutcome,
+    TurnToolCtx, TurnToolState,
 };
 use super::budget::{
     record_llm_usage, tick_budget, token_budget_context_section, RuntimeBudgetState,
@@ -27,10 +27,19 @@ impl AgentRuntime {
         // Scope the dashboard chat turn context (session / user turn / reply
         // language) task-locally so approval, question and recorder plumbing
         // consume it without process-global environment variables.
-        if let Some(chat_turn) = task.context.chat_turn.clone() {
-            return anycode_core::scope_chat_turn(chat_turn, self.execute_task_inner(task)).await;
+        let live_trace_tx = task.context.live_trace_tx.clone();
+        let result = if let Some(chat_turn) = task.context.chat_turn.clone() {
+            anycode_core::scope_chat_turn(chat_turn, self.execute_task_inner(task)).await
+        } else {
+            self.execute_task_inner(task).await
+        };
+        // Step 3b：任务级终止事件覆盖所有返回分支（含提前 return）；
+        // 嵌套子代理经 forwarder 包装转发，顶层任务无通道时 no-op。
+        match &result {
+            Ok(res) => super::live_trace_emit::emit_turn_done(&live_trace_tx, terminal_status(res)),
+            Err(_) => super::live_trace_emit::emit_turn_done(&live_trace_tx, "error"),
         }
-        self.execute_task_inner(task).await
+        result
     }
 
     async fn execute_task_inner(&self, task: Task) -> Result<TaskResult, CoreError> {
@@ -49,6 +58,14 @@ impl AgentRuntime {
                 None
             }
         };
+
+        // Step 3b：任务级 live trace 通道注册到 ToolServices 键控 map，嵌套 Agent
+        // 工具按父 task id 查找接线；drop-guard 在任务结束（含提前返回）注销。
+        let _live_trace_guard = super::LiveTraceRegistrationGuard::register(
+            self,
+            task.id,
+            task.context.live_trace_tx.clone(),
+        );
 
         let _nested_wt = NestedWorktreeGuard(
             match (
@@ -129,6 +146,13 @@ impl AgentRuntime {
         };
         let mut context_injections = task.context.context_injections.clone();
         context_injections.extend(compiler_sections);
+        // auto-memory 召回：按项目的 MEMORY.md 索引（含截断与 point-in-time 告诫）。
+        if let Some(section) = self.automem_index_section(
+            task.agent_type.as_str(),
+            task.context.working_directory.as_str(),
+        ) {
+            context_injections.push(section);
+        }
         if let Some(section) = token_budget_context_section(&task.context.budget) {
             context_injections.push(section);
         }
@@ -212,6 +236,18 @@ impl AgentRuntime {
             &merged_denies,
             &task.context.tool_deny_prefixes,
         );
+        // 零工具面 fail-fast：deny 叠加（含 config profile / skill / 子代理默认）
+        // 把工具面清空时直接失败，避免模型在无工具可用的循环里空转。
+        if let Err(zero) =
+            tool_surface::ensure_nonempty_tool_surface(&names, task.agent_type.as_str())
+        {
+            tracing::warn!(kind = "zero_tool_surface", agent_type = %task.agent_type.as_str(), "{zero}");
+            logger.line(task.id, "[task_end] status=failed reason=zero_tools");
+            return Ok(TaskResult::Failure {
+                error: zero,
+                details: Some("zero_tools".to_string()),
+            });
+        }
         let tool_schemas = tool_surface::build_tool_schemas(&names, &tools);
         drop(tools);
 
@@ -221,13 +257,16 @@ impl AgentRuntime {
         let mut used_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut artifacts: Vec<Artifact> = vec![];
         let mut budget_state = RuntimeBudgetState::new(task.context.budget);
-        let mut repairs_used: u32 = 0;
-        let mut last_repair_diagnostics: Option<String> = None;
+        let mut guard_state = super::guard_verdict::GuardLoopState::default();
         let verification_shared = Arc::new(std::sync::Mutex::new(
             super::discoverable_verification::SessionVerificationState::default(),
         ));
-        let mut evidence_repairs_used: u32 = 0;
         let loop_limits = task.context.loop_limits;
+        // 预算 hard-stop 的统一失败形态（loop 头 tick、no-tool 恢复、用量记录三处共用）。
+        let budget_failure = || TaskResult::Failure {
+            error: "运行时预算已用尽".to_string(),
+            details: Some(TerminationReason::Budget.as_str().to_string()),
+        };
 
         for turn in 1..=loop_limits.max_agent_turns {
             let turn_tool_schemas = tool_surface::schemas_for_model_turn(
@@ -240,16 +279,14 @@ impl AgentRuntime {
                 task.id,
                 &format!("[turn_start] turn={}/{}", turn, loop_limits.max_agent_turns),
             );
+            super::live_trace_emit::emit_turn_start(&task.context.live_trace_tx, turn);
             if nested_coop_cancelled(&task.context) {
                 logger.line(task.id, "[task_end] status=cancelled reason=cancelled");
                 return Ok(task_cancelled_failure());
             }
             if tick_budget(&logger, task.id, &mut budget_state) {
                 logger.line(task.id, "[task_end] status=failed reason=budget");
-                return Ok(TaskResult::Failure {
-                    error: "运行时预算已用尽".to_string(),
-                    details: Some(TerminationReason::Budget.as_str().to_string()),
-                });
+                return Ok(budget_failure());
             }
             self.sync_plan_tree_context(&mut messages).await;
             logger.line(
@@ -264,6 +301,7 @@ impl AgentRuntime {
                         .unwrap_or_else(|| "<default>".to_string())
                 ),
             );
+            super::live_trace_emit::emit_llm_request_start(&task.context.live_trace_tx, turn);
 
             let _llm_activity =
                 SessionActivityGuard::start(logger.clone(), task.id, ActivityReason::ApiCall);
@@ -327,87 +365,56 @@ impl AgentRuntime {
                 && anycode_llm::capabilities_for_model_config(&model_config).weak_local_model
                 && !turn_tool_schemas.is_empty();
             if should_recover_no_tool {
-                for attempt in 1..=2u8 {
-                    logger.line(
+                let mut sink = MessageAppendSink::Vec(&mut messages);
+                match self
+                    .recover_no_tool_response(
+                        &logger,
                         task.id,
-                        &format!(
-                            "[tool_recovery] turn=1 attempt={} reason=no_tool_response",
-                            attempt
-                        ),
-                    );
-                    if record_llm_usage(&logger, task.id, &mut budget_state, &response.usage) {
+                        response,
+                        &turn_tool_schemas,
+                        &llm_config,
+                        &mut budget_state,
+                        &mut sink,
+                        None,
+                    )
+                    .await
+                {
+                    NoToolRecovery::Recovered(r) => response = r,
+                    NoToolRecovery::BudgetExceeded => {
                         logger.line(task.id, "[task_end] status=failed reason=budget");
+                        return Ok(budget_failure());
+                    }
+                    NoToolRecovery::LlmFailed(error) => {
+                        logger.line(task.id, "[task_end] status=failed reason=error");
                         return Ok(TaskResult::Failure {
-                            error: "运行时预算已用尽".to_string(),
-                            details: Some(TerminationReason::Budget.as_str().to_string()),
+                            error: "LLM 工具恢复调用失败".to_string(),
+                            details: Some(error.to_string()),
                         });
                     }
-                    if messages
-                        .last()
-                        .is_none_or(|m| m.role != MessageRole::Assistant)
-                    {
-                        messages.push(response.message.clone());
+                    NoToolRecovery::Exhausted(_) => {
+                        logger.line(task.id, "[task_end] status=failed reason=refusal_no_tool");
+                        return Ok(TaskResult::Failure {
+                            error: "模型未按任务要求调用工具".to_string(),
+                            details: Some(TerminationReason::RefusalNoTool.as_str().to_string()),
+                        });
                     }
-                    messages.push(Message {
-                        id: Uuid::new_v4(),
-                        role: MessageRole::User,
-                        content: MessageContent::Text(if attempt == 1 {
-                            anycode_llm::TOOL_RECOVERY_NUDGE.to_string()
-                        } else {
-                            anycode_llm::TOOL_RECOVERY_NUDGE_FORCE_GLOB.to_string()
-                        }),
-                        timestamp: chrono::Utc::now(),
-                        metadata: HashMap::new(),
-                    });
-                    response = match self
-                        .chat_with_failover(
-                            &messages,
-                            turn_tool_schemas.clone(),
-                            &llm_config,
-                            task.id,
-                            &logger,
-                        )
-                        .await
-                    {
-                        Ok(response) => response,
-                        Err(error) => {
-                            logger.line(task.id, "[task_end] status=failed reason=error");
-                            return Ok(TaskResult::Failure {
-                                error: "LLM 工具恢复调用失败".to_string(),
-                                details: Some(error.to_string()),
-                            });
-                        }
-                    };
-                    messages.push(response.message.clone());
-                    if !response.tool_calls.is_empty() {
-                        break;
-                    }
-                }
-                if response.tool_calls.is_empty() {
-                    logger.line(task.id, "[task_end] status=failed reason=refusal_no_tool");
-                    return Ok(TaskResult::Failure {
-                        error: "模型未按任务要求调用工具".to_string(),
-                        details: Some(TerminationReason::RefusalNoTool.as_str().to_string()),
-                    });
                 }
             }
 
             logger.line(
                 task.id,
                 &format!(
-                    "[llm_response_end] turn={} elapsed_ms={} input_tokens={} output_tokens={}",
+                    "[llm_response_end] turn={} elapsed_ms={} input_tokens={} output_tokens={} agent_type={}",
                     turn,
                     t0.elapsed().as_millis(),
                     response.usage.input_tokens,
-                    response.usage.output_tokens
+                    response.usage.output_tokens,
+                    task.agent_type.as_str()
                 ),
             );
             if record_llm_usage(&logger, task.id, &mut budget_state, &response.usage) {
                 logger.line(task.id, "[task_end] status=failed reason=budget");
-                return Ok(TaskResult::Failure {
-                    error: "运行时预算已用尽".to_string(),
-                    details: Some(TerminationReason::Budget.as_str().to_string()),
-                });
+                return Ok(budget_failure());
             }
 
             // 先把 assistant 消息追加回上下文
@@ -440,126 +447,52 @@ impl AgentRuntime {
                 .unwrap_or_default();
             if !turn_plain.trim().is_empty() && response.tool_calls.is_empty() {
                 logger.assistant_response(task.id, turn, &turn_plain);
+                super::live_trace_emit::emit_assistant_done(
+                    &task.context.live_trace_tx,
+                    turn,
+                    &turn_plain,
+                );
             }
 
             let turn_tool_calls = response.tool_calls.clone();
             used_tools.extend(turn_tool_calls.iter().map(|tc| tc.name.clone()));
             if turn_tool_calls.is_empty() {
-                let guard_out = self
-                    .completion_guard
-                    .evaluate(
-                        &task.id.to_string(),
-                        task_family,
-                        gate_plan.as_ref(),
-                        &expected_artifacts,
-                        &artifacts,
-                        std::path::Path::new(task.context.working_directory.as_str()),
-                        repairs_used,
-                        last_repair_diagnostics.as_deref(),
-                    )
-                    .await;
-                match guard_out.decision {
-                    super::completion_guard::GuardDecision::Complete => {
-                        let verification_snapshot = verification_shared
-                            .lock()
-                            .map(|g| g.clone())
-                            .unwrap_or_default();
-                        if let Some(msg) = super::discoverable_verification::maybe_evidence_repair(
-                            &verification_snapshot,
-                            &turn_plain,
-                            evidence_repairs_used,
-                        ) {
-                            evidence_repairs_used += 1;
-                            last_repair_diagnostics = Some(msg.clone());
-                            logger.line(
-                                task.id,
-                                &format!(
-                                    "[evidence_repair_requested] repairs_used={evidence_repairs_used}"
-                                ),
-                            );
-                            messages.push(Message {
-                                id: Uuid::new_v4(),
-                                role: MessageRole::User,
-                                content: MessageContent::Text(msg),
-                                timestamp: chrono::Utc::now(),
-                                metadata: {
-                                    let mut m = HashMap::new();
-                                    m.insert(
-                                        ANYCODE_CONTEXT_USER_METADATA_KEY.to_string(),
-                                        serde_json::Value::Bool(true),
-                                    );
-                                    m
-                                },
-                            });
-                            continue;
-                        }
-                        self.pipeline_memory_hook_agent_turn(
-                            &session_label,
-                            task.id,
-                            turn,
-                            &turn_plain,
-                        )
-                        .await;
-                        self.maybe_session_notify_agent_turn(
-                            &session_label,
-                            task.id,
-                            turn,
-                            &turn_plain,
-                            Some(task.context.working_directory.as_str()),
-                        );
-                        logger.line(task.id, &format!("[turn_end] turn={} tool_calls=0", turn));
-                        break;
-                    }
-                    super::completion_guard::GuardDecision::Repair => {
-                        let msg = guard_out.repair_message.unwrap_or_default();
-                        last_repair_diagnostics = Some(msg.clone());
-                        repairs_used += 1;
-                        logger.line(
-                            task.id,
-                            &format!(
-                                "[repair_requested] repairs_used={repairs_used} verification_started=1"
-                            ),
-                        );
-                        if let Some(report) = &guard_out.report {
-                            logger.line(
-                                task.id,
-                                &format!(
-                                    "[verification_finished] passed={} results={}",
-                                    report.all_passed(),
-                                    report.results.len()
-                                ),
-                            );
-                        }
-                        messages.push(Message {
-                            id: Uuid::new_v4(),
-                            role: MessageRole::User,
-                            content: MessageContent::Text(msg),
-                            timestamp: chrono::Utc::now(),
-                            metadata: {
-                                let mut m = HashMap::new();
-                                m.insert(
-                                    ANYCODE_CONTEXT_USER_METADATA_KEY.to_string(),
-                                    serde_json::Value::Bool(true),
-                                );
-                                m
-                            },
-                        });
-                        continue;
-                    }
-                    super::completion_guard::GuardDecision::Partial => {
+                let guard_input = super::guard_verdict::GuardEvalInput {
+                    task_id: task.id,
+                    agent_type: &task.agent_type,
+                    working_directory: task.context.working_directory.as_str(),
+                    session_label: &session_label,
+                    turn,
+                    task_family,
+                    gate_plan: gate_plan.as_ref(),
+                    expected_artifacts: &expected_artifacts,
+                    artifacts: &artifacts,
+                    assistant_text: &turn_plain,
+                    live_trace_tx: &task.context.live_trace_tx,
+                    verification: &verification_shared,
+                    progress_seq: 0,
+                    turn_style_verify_markers: false,
+                };
+                let mut sink = MessageAppendSink::Vec(&mut messages);
+                match self
+                    .evaluate_completion_guard(&logger, &guard_input, &mut guard_state, &mut sink)
+                    .await
+                {
+                    super::guard_verdict::GuardVerdict::Completed => break,
+                    super::guard_verdict::GuardVerdict::RepairInjected => continue,
+                    super::guard_verdict::GuardVerdict::Partial { repair_message } => {
                         logger.line(task.id, "[task_end] status=partial reason=verification");
                         return Ok(TaskResult::Partial {
                             success: turn_plain,
-                            remaining: guard_out
-                                .repair_message
+                            remaining: repair_message
                                 .unwrap_or_else(|| "verification incomplete".into()),
                         });
                     }
-                    super::completion_guard::GuardDecision::Failed => {
+                    super::guard_verdict::GuardVerdict::Failed { repair_message } => {
                         logger.line(task.id, "[task_end] status=failed reason=verification");
                         return Ok(TaskResult::Failure {
                             error: "verification gates failed".into(),
-                            details: guard_out.repair_message,
+                            details: repair_message,
                         });
                     }
                 }
@@ -669,8 +602,18 @@ impl AgentRuntime {
                 for line in fast.lines() {
                     logger.line(task.id, line);
                 }
-                self.maybe_autosave_memory(task.id, &task.prompt, &fast)
-                    .await;
+                // automem fork 的产物不写项目 autosave（避免记忆代理自身污染记忆）。
+                if !super::automem::is_automem_agent_type(task.agent_type.as_str()) {
+                    self.maybe_autosave_memory(task.id, &task.prompt, &fast)
+                        .await;
+                }
+                self.maybe_automem_after_turn(
+                    task.agent_type.as_str(),
+                    task.context.working_directory.as_str(),
+                    task.context.system_prompt_append.as_deref(),
+                    task.id,
+                    &messages,
+                );
                 return Ok(TaskResult::Success {
                     output: fast,
                     artifacts,
@@ -680,7 +623,7 @@ impl AgentRuntime {
 
         // A repair request consumed the final turn: the true cause is the
         // failed verification, not the turn budget — surface the diagnostics.
-        if let Some(diag) = last_repair_diagnostics {
+        if let Some(diag) = guard_state.last_repair_diagnostics {
             logger.line(task.id, "[task_end] status=failed reason=verification");
             return Ok(TaskResult::Failure {
                 error: "验证未通过且修复轮次已用尽".to_string(),
@@ -696,5 +639,14 @@ impl AgentRuntime {
                 loop_limits.max_agent_turns
             )),
         })
+    }
+}
+
+/// 任务终态 → live trace `turn_done.status` 的稳定取值。
+fn terminal_status(result: &TaskResult) -> &'static str {
+    match result {
+        TaskResult::Success { .. } => "completed",
+        TaskResult::Partial { .. } => "partial",
+        TaskResult::Failure { .. } => "failed",
     }
 }

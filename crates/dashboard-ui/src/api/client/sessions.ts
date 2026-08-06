@@ -1,6 +1,7 @@
 import type {
   ArtifactDetail,
   ArtifactRecord,
+  EfficiencyReport,
   GateRecord,
   ProjectEvent,
   ReportDocument,
@@ -150,4 +151,6 @@ export const sessionsClient = {
   },
   artifactDetail: (artifactId: string) =>
     get<{ artifact: ArtifactDetail }>(`/api/artifacts/${artifactId}`),
+  efficiencyLatest: () =>
+    get<{ report: EfficiencyReport }>("/api/reports/efficiency/latest"),
 };

@@ -245,6 +245,7 @@ mod tests {
                 working_directory: Some(".".into()),
                 sandbox_mode: false,
                 dashboard_session_id: Some("sess_test".into()),
+                task_id: None,
             })
             .await
             .unwrap();

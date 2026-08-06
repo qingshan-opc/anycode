@@ -87,6 +87,11 @@ export function groupTurnRepliesByPhase(items: TurnReplyItem[]): AgentPhaseSegme
       pendingTools = item;
       continue;
     }
+    // Subagent groups render as their own card; treat as a segment boundary.
+    if (item.kind === "subagent_group") {
+      flushPendingTools();
+      continue;
+    }
 
     const block = item.block;
     if (isProgressBlock(block)) {

@@ -5,8 +5,17 @@ export type TextAttachment = {
 
 /** Paste longer than this becomes a reference card instead of inline textarea text. */
 export const PASTE_AS_CARD_MIN_CHARS = 4000;
-export const MAX_TEXT_FILES = 3;
-export const MAX_TEXT_FILE_BYTES = 1024 * 1024;
+export const MAX_TEXT_FILES = 10;
+/** Raw upload cap; extracted text is truncated server-side, big files routed to disk pointers. */
+export const MAX_TEXT_FILE_BYTES = 4 * 1024 * 1024;
+
+/** Extensions the composer base64-encodes instead of reading as text (binary formats). */
+export const BINARY_FILE_EXTENSIONS = ["pdf", "xlsx", "docx", "pptx"] as const;
+
+export function isBinaryTextAttachment(filename: string): boolean {
+  const ext = filename.toLowerCase().split(".").pop() ?? "";
+  return (BINARY_FILE_EXTENSIONS as readonly string[]).includes(ext);
+}
 
 export function plainTextFromPasteEvent(event: ClipboardEvent): string {
   return event.clipboardData?.getData("text/plain") ?? "";

@@ -468,7 +468,8 @@ async fn fixture_api_smoke() {
     let _ = delete_json(app.clone(), &format!("/api/settings/connectors/{conn_id}")).await;
 
     // Ensure missing-key rejection is deterministic even if the host has LINEAR_API_KEY.
-    let _env_lock = ENV_LOCK.lock().await;
+    // NB: ENV_LOCK is already held by the outer guard (top of this test) — a second
+    // lock() here would deadlock on tokio's non-reentrant mutex.
     let prev_linear = std::env::var_os("LINEAR_API_KEY");
     let prev_anycode_linear = std::env::var_os("ANYCODE_LINEAR_API_KEY");
     std::env::remove_var("LINEAR_API_KEY");
@@ -493,7 +494,6 @@ async fn fixture_api_smoke() {
         Some(v) => std::env::set_var("ANYCODE_LINEAR_API_KEY", v),
         None => std::env::remove_var("ANYCODE_LINEAR_API_KEY"),
     }
-    drop(_env_lock);
 
     let linear_conn = post_json(
         app.clone(),

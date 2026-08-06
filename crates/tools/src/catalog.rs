@@ -75,7 +75,13 @@ pub use anycode_core::{ToolCatalogEntry, DEFAULT_TOOL_IDS, SECURITY_SENSITIVE_TO
 /// Shared catalog metadata (SSOT in `anycode_core::tool_catalog`).
 pub use anycode_core::{tool_catalog, tool_catalog_entry};
 
-pub const EXPLORE_PLAN_TOOL_IDS: [&str; 4] = [TOOL_FILE_READ, TOOL_GLOB, TOOL_GREP, TOOL_BASH];
+pub const EXPLORE_PLAN_TOOL_IDS: [&str; 5] = [
+    TOOL_FILE_READ,
+    TOOL_GLOB,
+    TOOL_GREP,
+    TOOL_BASH,
+    TOOL_STRUCTURED_OUTPUT,
+];
 
 /// Extra tool ids denied for explore/plan agents (browser screenshot is vision-heavy).
 pub const EXPLORE_PLAN_EXTRA_DENY_TOOL_IDS: &[&str] = &[TOOL_BROWSER_SCREENSHOT];

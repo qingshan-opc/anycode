@@ -66,6 +66,9 @@ base64 = "0.22"
 dirs = "5"
 walkdir = { workspace = true }
 pdf-extract = "0.7"
+calamine = "0.26"
+zip = "2.2"
+quick-xml = "0.31"
 libc = "0.2"
 reqwest = { workspace = true, features = ["json", "stream"] }
 rust-embed = { version = "8.9", optional = true }
@@ -81,6 +84,7 @@ tar = "0.4"
 [dev-dependencies]
 anycode-setup = { path = "../setup" }
 tempfile = "3.10"
+filetime = "0.2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }

@@ -133,7 +133,7 @@ pub fn build_registry(deps: &ToolRegistryDeps) -> HashMap<ToolName, Box<dyn Tool
     ins!(ExitWorktreeTool::new(s.clone()));
     ins!(ToolSearchTool::new(s.clone()));
     ins!(SleepTool);
-    ins!(StructuredOutputTool);
+    ins!(StructuredOutputTool::new(s.clone()));
     ins!(PowerShellTool::new(sm));
     ins!(ConfigTool::new(s.clone()));
     ins!(SendUserMessageTool::new());

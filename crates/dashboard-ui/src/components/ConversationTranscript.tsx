@@ -688,6 +688,19 @@ function ConversationTurnView({
             item.kind === "block" &&
             itemIndex === finalAssistantIndex);
 
+        if (item.kind === "subagent_group") {
+          return (
+            <MessageRow key={item.id} align="left">
+              <SubagentGroupCard
+                item={item}
+                isLive={isLast && isRunning}
+                selectedToolId={selectedToolId}
+                onSelectTool={onSelectTool}
+              />
+            </MessageRow>
+          );
+        }
+
         if (item.kind === "tool_cluster") {
           const hideInteractiveCluster = shouldHideInteractiveCluster({
             isLast,
@@ -899,8 +912,102 @@ function MessageRow({
   );
 }
 
-function InteractiveToolHistoryLine({ steps }: { steps: import("@/lib/transcriptGrouping").ToolStep[] }) {
+/** Collapsible nested-timeline card for one subagent run (Step 3b). */
+function SubagentGroupCard({
+  item,
+  isLive,
+  selectedToolId,
+  onSelectTool,
+}: {
+  item: import("@/lib/transcriptGrouping").SubagentGroupItem;
+  isLive: boolean;
+  selectedToolId?: string | null;
+  onSelectTool?: (tool: TranscriptBlock) => void;
+}) {
   const t = useT();
+  const locale = useLocale();
+  const running = item.status === null;
+  const statusText = running
+    ? t("conversations.subagentGroupRunning")
+    : item.status === "completed"
+      ? t("conversations.subagentGroupDone")
+      : (item.status ?? "");
+  const title = t("conversations.subagentGroupTitle").replace(
+    "{agent}",
+    item.agentType,
+  );
+  const subtitle = `${t("conversations.subagentGroupTools").replace("{n}", String(item.toolCount))} · ${statusText}`;
+  return (
+    <CollapsiblePanel
+      title={title}
+      subtitle={subtitle}
+      defaultOpen={running}
+      tone="muted"
+      icon="smart_toy"
+    >
+      <div className="flex flex-col gap-2">
+        {item.items.map((inner) => {
+          if (inner.kind === "subagent_group") {
+            return (
+              <SubagentGroupCard
+                key={inner.id}
+                item={inner}
+                isLive={isLive}
+                selectedToolId={selectedToolId}
+                onSelectTool={onSelectTool}
+              />
+            );
+          }
+          if (inner.kind === "tool_cluster") {
+            if (inner.steps.length === 0 && inner.processSnippets.length === 0) {
+              return null;
+            }
+            return (
+              <ToolTraceCluster
+                key={inner.id}
+                steps={inner.steps}
+                processMessageCount={inner.processMessageCount}
+                processSnippets={inner.processSnippets}
+                isRunning={running && isLive}
+                selectedToolId={selectedToolId}
+                onSelectTool={onSelectTool}
+                suppressActivityLine
+                defaultCollapsed={!running}
+              />
+            );
+          }
+          const block = inner.block;
+          if (block.block_type === "deliverable") {
+            // Deliverables are collected into the turn-level strip.
+            return null;
+          }
+          if (block.block_type === "assistant_message") {
+            const body = sanitizeAssistantDisplay(block.body, locale).trim();
+            if (!body) return null;
+            return (
+              <TranscriptMarkdown
+                key={block.id}
+                text={body}
+                live={running && isLive && Boolean(block.meta?.live)}
+              />
+            );
+          }
+          if (!(block.body ?? "").trim()) return null;
+          return (
+            <TimelineProgressLine
+              key={block.id}
+              block={block}
+              live={running && isLive && Boolean(block.meta?.live)}
+              expanded={running}
+            />
+          );
+        })}
+      </div>
+    </CollapsiblePanel>
+  );
+}
+
+function InteractiveToolHistoryLine({ steps }: { steps: import("@/lib/transcriptGrouping").ToolStep[] }) {  const t = useT();
   const label =
     steps.map(interactiveStepHistoryLabel).find((value) => value && value.length > 0) ??
     "AskUserQuestion";

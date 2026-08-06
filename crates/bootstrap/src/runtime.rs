@@ -43,6 +43,12 @@ pub async fn initialize_runtime(
             anycode_locale::resolve_locale().as_str(),
         );
     }
+    // 文件式 agent 定义（`.anycode/agents/*.md`）合并：必须在 `merge_profile_routing`
+    // 之前，使文件 agent 的 routing / skills allowlist / 注册走既有 profiles 管线。
+    // 优先级：用户目录 < 项目目录 < config.json < builtin（见 merge_file_agents_into_config）。
+    let mut config_owned = config.clone();
+    crate::agents::merge_file_agents_into_config(&mut config_owned.agents, skill_project_root);
+    let config = &config_owned;
     // Managed python/node under ~/.anycode/runtimes win over system PATH for
     // every spawned tool/skill; provisioning (if missing) runs in background.
     crate::runtimes::prepend_runtime_paths();
@@ -125,6 +131,22 @@ pub async fn initialize_runtime(
     } else {
         None
     };
+    // auto-memory 引擎裁决：enabled + fork_agent + LLM 可用（api_key 非空）才接 LLM 驱动；
+    // 否则保持本地规则管线（`resolve_automem_engine` 语义）。
+    // `ANYCODE_DISABLE_AUTOMEM=1` 一键关闭（对齐 Claude `CLAUDE_CODE_DISABLE_AUTO_MEMORY`）。
+    let automem_env_disabled = std::env::var("ANYCODE_DISABLE_AUTOMEM")
+        .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false);
+    let llm_available = !config.llm.api_key.trim().is_empty() && !automem_env_disabled;
+    let automem = match anycode_memory::automem::resolve_automem_engine(
+        &config.memory.automem,
+        llm_available,
+    ) {
+        anycode_memory::automem::AutomemEngine::Llm if !automem_env_disabled => {
+            Some(config.memory.automem.clone())
+        }
+        _ => None,
+    };
     let session_notifications = if config.notifications.is_configured() {
         Some(config.notifications.clone())
     } else {
@@ -151,6 +173,8 @@ pub async fn initialize_runtime(
                 memory_pipeline_settings,
                 memory_project_autosave_enabled,
                 session_notifications,
+                automem,
+                automem_base_path: config.memory.automem.base_path.clone(),
             },
             RuntimeToolPolicy {
                 tool_name_deny,
@@ -182,6 +206,7 @@ pub async fn initialize_runtime(
         .tool_services
         .attach_sub_agent_executor(runtime.clone());
     runtime.attach_tool_services(tools_setup.tool_services.clone());
+    runtime.attach_self();
 
     let ask_host: Option<Arc<dyn AskUserQuestionHost>> =
         hosts.ask_user_question_host.or_else(|| {

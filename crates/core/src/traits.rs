@@ -52,6 +52,12 @@ pub trait Agent: Send + Sync {
 #[async_trait]
 pub trait SubAgentExecutor: Send + Sync {
     async fn run_nested_task(&self, invoke: NestedTaskInvoke) -> Result<NestedTaskRun, CoreError>;
+
+    /// 已注册子代理目录（id, description），供 `Agent`/`Task` 工具面动态暴露给父模型。
+    /// 默认空（未接 runtime 的工具测试）；`AgentRuntime` 提供真实注册表。
+    fn agent_catalog(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 /// 工具抽象（名称、Schema、执行与 API 面向模型的描述）
@@ -96,4 +102,26 @@ pub trait LLMClient: Send + Sync {
         tools: Vec<ToolSchema>,
         config: &ModelConfig,
     ) -> Result<tokio::sync::mpsc::Receiver<StreamEvent>, CoreError>;
+}
+
+#[cfg(test)]
+mod sub_agent_executor_defaults {
+    use super::*;
+
+    struct MinimalEx;
+
+    #[async_trait]
+    impl SubAgentExecutor for MinimalEx {
+        async fn run_nested_task(
+            &self,
+            _invoke: NestedTaskInvoke,
+        ) -> Result<NestedTaskRun, CoreError> {
+            Err(CoreError::LLMError("unused".into()))
+        }
+    }
+
+    #[test]
+    fn agent_catalog_defaults_to_empty() {
+        assert!(MinimalEx.agent_catalog().is_empty());
+    }
 }

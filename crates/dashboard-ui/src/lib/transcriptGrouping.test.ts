@@ -147,8 +147,86 @@ describe("groupTurnReplies", () => {
   });
 });
 
-describe("mergeFinalAssistantBlocks", () => {
-  it("merges multiple assistant messages into one bubble", () => {
+describe("groupTurnReplies subagent groups", () => {
+  const sa = (taskId: string, agentType = "explore") => ({
+    subagent: { task_id: taskId, agent_type: agentType, parent_task_id: null },
+  });
+
+  it("groups consecutive same-task blocks into a collapsible subagent group", () => {
+    const replies = [
+      block("u1", "assistant_message", { body: "let me delegate" }),
+      block("h1", "system_notice", {
+        meta: { source: "subagent_start", ...sa("task-a") },
+      }),
+      block("t1", "tool_call", {
+        meta: { tool_key: "u3:satask-a:1:1", phase: "start", ...sa("task-a") },
+      }),
+      block("t2", "tool_result", {
+        meta: { tool_key: "u3:satask-a:1:1", phase: "end", ...sa("task-a") },
+      }),
+      block("d1", "system_notice", {
+        meta: { source: "subagent_done", status: "completed", ...sa("task-a") },
+      }),
+      block("f1", "assistant_message", { body: "final answer" }),
+    ];
+    const grouped = groupTurnReplies(replies);
+    expect(grouped.map((item) => item.kind)).toEqual([
+      "block",
+      "subagent_group",
+      "block",
+    ]);
+    const group = grouped[1];
+    if (group?.kind === "subagent_group") {
+      expect(group.taskId).toBe("task-a");
+      expect(group.agentType).toBe("explore");
+      expect(group.status).toBe("completed");
+      expect(group.toolCount).toBe(1);
+      // header / done markers fold into chrome, only tool cluster remains
+      expect(group.items.map((item) => item.kind)).toEqual(["tool_cluster"]);
+    }
+  });
+
+  it("aggregates interleaved children into one card each at first sight", () => {
+    const replies = [
+      block("a1", "tool_call", {
+        meta: { tool_key: "u3:satask-a:1:1", phase: "start", ...sa("task-a") },
+      }),
+      block("b1", "tool_call", {
+        meta: { tool_key: "u3:satask-b:1:1", phase: "start", ...sa("task-b", "plan") },
+      }),
+      block("a2", "tool_result", {
+        meta: { tool_key: "u3:satask-a:1:1", phase: "end", ...sa("task-a") },
+      }),
+    ];
+    const grouped = groupTurnReplies(replies);
+    expect(grouped.map((item) => item.kind)).toEqual([
+      "subagent_group",
+      "subagent_group",
+    ]);
+    const [ga, gb] = grouped;
+    if (ga?.kind === "subagent_group") {
+      // interleaved child events still aggregate per child (call+result pair)
+      expect(ga.taskId).toBe("task-a");
+      expect(ga.status).toBeNull();
+      expect(ga.toolCount).toBe(1);
+    }
+    if (gb?.kind === "subagent_group") {
+      expect(gb.agentType).toBe("plan");
+      expect(gb.status).toBeNull();
+    }
+  });
+
+  it("leaves blocks without subagent tags untouched", () => {
+    const replies = [
+      block("t1", "tool_call", { meta: { tool_key: "1:1", phase: "start" } }),
+      block("t2", "tool_result", { meta: { tool_key: "1:1", phase: "end" } }),
+    ];
+    const grouped = groupTurnReplies(replies);
+    expect(grouped.map((item) => item.kind)).toEqual(["tool_cluster"]);
+  });
+});
+
+describe("mergeFinalAssistantBlocks", () => {  it("merges multiple assistant messages into one bubble", () => {
     const merged = mergeFinalAssistantBlocks([
       block("a1", "assistant_message", { body: "part 1" }),
       block("a2", "assistant_message", { body: "part 2", meta: { live: true } }),

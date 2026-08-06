@@ -482,13 +482,16 @@ impl AgentRuntime {
             .await;
         }
         sink.push(prepared.message).await;
-        self.pipeline_memory_hook_tool_result(
-            ctx.session_label,
-            ctx.task_id,
-            &tool_call.name,
-            &prepared.for_hook,
-        )
-        .await;
+        // automem fork 的工具轨迹不进入规则管线 episode（避免记忆代理自我污染）。
+        if !super::automem::is_automem_agent_type(ctx.agent_type.as_str()) {
+            self.pipeline_memory_hook_tool_result(
+                ctx.session_label,
+                ctx.task_id,
+                &tool_call.name,
+                &prepared.for_hook,
+            )
+            .await;
+        }
         self.maybe_session_notify_tool_result(
             ctx.session_label,
             ctx.task_id,
@@ -546,7 +549,8 @@ impl TurnToolCancel<'_> {
     fn clone_flag(&self) -> Option<Arc<AtomicBool>> {
         match self {
             TurnToolCancel::Coop(flag) => flag.clone(),
-            TurnToolCancel::Nested(_) => None,
+            // 嵌套任务内 Cancel-policy 工具可中途抢占（ADR 010 协作式取消）。
+            TurnToolCancel::Nested(ctx) => ctx.nested_cancel.clone(),
         }
     }
 }
@@ -618,5 +622,44 @@ mod tests {
     fn bash_tools_are_cancellable() {
         assert_eq!(tool_cancel_policy("Bash"), ToolCancelPolicy::Cancel);
         assert_eq!(tool_cancel_policy("Edit"), ToolCancelPolicy::Block);
+    }
+
+    #[test]
+    fn nested_cancel_clone_flag_returns_context_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let ctx = anycode_core::TaskContext {
+            session_id: uuid::Uuid::new_v4(),
+            working_directory: ".".into(),
+            environment: Default::default(),
+            user_id: None,
+            system_prompt_append: None,
+            context_injections: vec![],
+            nested_model_override: None,
+            nested_worktree_path: None,
+            nested_worktree_repo_root: None,
+            nested_cancel: Some(Arc::clone(&flag)),
+            channel_progress_tx: None,
+            live_trace_tx: None,
+            tool_deny_names: vec![],
+            tool_deny_prefixes: vec![],
+            user_vision_images: vec![],
+            budget: anycode_core::TaskBudget::default(),
+            loop_limits: Default::default(),
+            chat_turn: None,
+        };
+        let cancel = TurnToolCancel::Nested(&ctx);
+        let cloned = cancel.clone_flag().expect("nested flag");
+        flag.store(true, Ordering::SeqCst);
+        assert!(cloned.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn coop_cancel_clone_flag_passthrough() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let cancel = TurnToolCancel::Coop(Some(Arc::clone(&flag)));
+        let cloned = cancel.clone_flag().expect("coop flag");
+        flag.store(true, Ordering::SeqCst);
+        assert!(cloned.load(Ordering::SeqCst));
+        assert!(TurnToolCancel::Coop(None).clone_flag().is_none());
     }
 }

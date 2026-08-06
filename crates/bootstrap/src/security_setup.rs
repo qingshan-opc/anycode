@@ -37,6 +37,20 @@ pub async fn build_security_setup(
         permission_mode,
         approval_callback,
     ));
+    if !security.has_approval_callback() {
+        // 无审批通道（daemon / cron / 后台 fork / 显式 opt-out）：安全层已改为
+        // fail-closed，这里必须在配置层**显式**把默认策略降级为免审批，
+        // 否则未注册专属策略的工具（Grep/FileRead/TodoWrite 等）会一律被拒。
+        // 这是部署方通过 config（require_approval=false 或 -I）做出的决定，
+        // 在此落地并留痕，而不是靠安全层静默自动通过。
+        let mut default_policy = SecurityPolicy::default();
+        default_policy.require_approval = false;
+        security.set_default_policy(default_policy).await;
+        tracing::warn!(
+            target: "anycode_security",
+            "no interactive approval channel registered; default tool policy downgraded to require_approval=false (headless auto-approval is a config-level decision)"
+        );
+    }
     let mut bash_policy = SecurityPolicy::interactive_shell();
     bash_policy.sandbox_mode = config.security.sandbox_mode;
     let mut fw_policy = SecurityPolicy::sensitive_mutation();

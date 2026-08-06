@@ -280,6 +280,26 @@ pub fn automem_extra_deny_names(all_tools: &[&str]) -> Vec<String> {
 // 四阶段巩固 prompt（对齐 consolidationPrompt.ts）
 // ============================================================================
 
+/// 记忆文件格式与四类型约定（提取/巩固 prompt 共享的"真理来源"段落）。
+/// 对齐 Claude auto-memory 的 MEMORY_FRONTMATTER + WHAT_NOT_TO_SAVE。
+pub const MEMORY_FILE_FORMAT_GUIDANCE: &str = "\
+Each memory is one Markdown file at the top level of the memory directory, with frontmatter:\n\
+\n\
+---\n\
+name: {short-kebab-case-slug}\n\
+description: {one-line summary — used to decide relevance in future conversations, so be specific}\n\
+type: {user | feedback | project | reference}\n\
+---\n\
+\n\
+- **user** — who the user is: role, goals, preferences, knowledge level.\n\
+- **feedback** — corrections AND confirmations the user gave on how to work. Structure: the rule, then **Why:** and **How to apply:** lines.\n\
+- **project** — ongoing work, goals, or constraints not derivable from the code or git history. Convert relative dates (\"yesterday\") to absolute dates.\n\
+- **reference** — pointers to external resources (URLs, dashboards, tickets).\n\
+\n\
+Do NOT save: code patterns, architecture, or file paths (derivable from the project); git history; \
+debugging solutions that are now encoded in the code; anything already in CLAUDE.md; temporary task state. \
+Update or remove memories that turn out to be wrong or outdated instead of stacking duplicates.";
+
 /// 目录已存在指导语（规范常量 `DIR_EXISTS_GUIDANCE`）——避免模型烧 turn 做 `ls`/`mkdir -p`。
 pub const DIR_EXISTS_GUIDANCE: &str =
     "This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence).";
@@ -330,6 +350,35 @@ Return a brief summary of what you consolidated, updated, or pruned. If nothing 
         } else {
             format!("\n\n## Additional context\n\n{extra}")
         },
+    )
+}
+
+/// autoExtract 提取 prompt（对齐 Claude `buildExtractAutoOnlyPrompt`）。
+/// 受限 fork agent 只依据注入的 transcript 段落写/更新记忆，不做外部求证。
+pub fn build_extract_prompt(memory_root: &str, transcript: &str) -> String {
+    format!(
+        "# Memory Extraction\n\n\
+You are the memory extraction subagent. Analyze the conversation transcript below and use it to update your persistent memory.\n\n\
+Memory directory: `{memory_root}`\n\
+{DIR_EXISTS_GUIDANCE}\n\n\
+**Tool constraints for this run:** only read-only shell commands (`ls`, `find`, `grep`, `cat`, and similar), plus read/edit/write restricted to the memory directory.\n\n\
+---\n\n\
+## Rules\n\n\
+1. You MUST only use content from the transcript below. Do not investigate or verify anything further — no grepping source files, no reading code, no git commands. If the transcript contains nothing worth persisting, do nothing and finish.\n\
+2. Be efficient: first turn, read the existing `{entrypoint}` index and any topic files you may update (in parallel); second turn, write all updates (in parallel); then finish.\n\
+3. {format_guidance}\n\
+4. Maintain `{entrypoint}` as an **index**, not a dump: one line per memory, `- [Title](file.md) — one-line hook`, under {max_lines} lines. Update or remove index lines for memories you create, update, or delete. Never write memory content directly into it.\n\
+5. Merge new signal into existing topic files rather than creating near-duplicates. If the transcript contradicts an existing memory, fix the memory.\n\n\
+---\n\n\
+## Transcript\n\n\
+{transcript}\n\n\
+---\n\n\
+Return one short sentence summarizing what you saved (or \"nothing worth saving\").",
+        memory_root = memory_root,
+        entrypoint = AUTO_MEM_ENTRYPOINT_NAME,
+        max_lines = MAX_ENTRYPOINT_LINES,
+        format_guidance = MEMORY_FILE_FORMAT_GUIDANCE,
+        transcript = transcript,
     )
 }
 
@@ -956,6 +1005,23 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(resolve_automem_engine(&no_fork, true), AutomemEngine::Local);
+    }
+
+    #[test]
+    fn extract_prompt_contains_rules_and_transcript() {
+        let p = build_extract_prompt("/mem", "[user] prefer dark mode");
+        for needle in [
+            "memory extraction subagent",
+            "/mem",
+            "MEMORY.md",
+            "type: {user | feedback | project | reference}",
+            "Do NOT save",
+            "[user] prefer dark mode",
+            "only read-only",
+        ] {
+            assert!(p.contains(needle), "missing {needle}");
+        }
+        assert!(p.contains(&MAX_ENTRYPOINT_LINES.to_string()));
     }
 
     #[test]

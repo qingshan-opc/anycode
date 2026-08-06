@@ -6,8 +6,8 @@ use crate::session_store::{
 };
 use crate::skills::{SkillCatalog, SkillsGovernance};
 use anycode_core::{
-    plan_tree_all_completed, CoreError, NestedTaskRun, PlanTree, SubAgentExecutor, TaskResult,
-    NESTED_TASK_COOPERATIVE_CANCEL_ERROR,
+    plan_tree_all_completed, CoreError, LiveTraceEvent, NestedTaskRun, PlanTree, SubAgentExecutor,
+    TaskResult, NESTED_TASK_COOPERATIVE_CANCEL_ERROR,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -299,6 +299,13 @@ pub struct ToolServices {
     active_agent_type_by_session: Mutex<HashMap<String, String>>,
     /// Parent `execute_task` tool surface for nested Agent/Task inheritance.
     parent_task_tool_deny: Mutex<Option<(Vec<String>, Vec<String>)>>,
+    /// Structured-output contract per nested task: declared schema（父 `Agent` 工具注入）。
+    structured_output_schemas: Mutex<HashMap<Uuid, serde_json::Value>>,
+    /// Structured-output capture per nested task: 子代理 `StructuredOutput` 记录，父侧 take。
+    structured_output_captures: Mutex<HashMap<Uuid, serde_json::Value>>,
+    /// Live trace channel per running task（Step 3b 嵌套可观测性）：
+    /// 键控 map 避免穿透多层管线签名，对并发兄弟任务安全。
+    live_trace_by_task: Mutex<HashMap<Uuid, tokio::sync::mpsc::UnboundedSender<LiveTraceEvent>>>,
     /// Injected at bootstrap; avoids per-execute disk reads in media tools.
     media_registry: Mutex<Option<Arc<anycode_llm::media::MediaClientRegistry>>>,
     /// Native CDP browser (`tools-browser`).
@@ -343,6 +350,9 @@ impl Default for ToolServices {
             skills_governance: Mutex::new(SkillsGovernance::default()),
             active_agent_type_by_session: Mutex::new(HashMap::new()),
             parent_task_tool_deny: Mutex::new(None),
+            structured_output_schemas: Mutex::new(HashMap::new()),
+            structured_output_captures: Mutex::new(HashMap::new()),
+            live_trace_by_task: Mutex::new(HashMap::new()),
             media_registry: Mutex::new(None),
             #[cfg(feature = "tools-browser")]
             browser_service: Mutex::new(None),
@@ -584,6 +594,83 @@ impl ToolServices {
             .lock()
             .expect("sub_agent_executor")
             .clone()
+    }
+
+    /// 已注册子代理目录（id, description）：委托 `SubAgentExecutor`（= AgentRuntime）。
+    /// 供 `Agent`/`Task` 工具面动态暴露可委派的子代理清单。未接 runtime 时为空。
+    pub fn agent_catalog(&self) -> Vec<(String, String)> {
+        self.sub_agent_executor()
+            .map(|e| e.agent_catalog())
+            .unwrap_or_default()
+    }
+
+    /// Structured-output contract（按 nested task id 键控，兄弟并发互不串扰）。
+    pub fn set_structured_output_schema(&self, task_id: Uuid, schema: serde_json::Value) {
+        self.structured_output_schemas
+            .lock()
+            .expect("structured_output_schemas")
+            .insert(task_id, schema);
+    }
+
+    pub fn structured_output_schema(&self, task_id: Uuid) -> Option<serde_json::Value> {
+        self.structured_output_schemas
+            .lock()
+            .expect("structured_output_schemas")
+            .get(&task_id)
+            .cloned()
+    }
+
+    pub fn clear_structured_output_schema(&self, task_id: Uuid) {
+        self.structured_output_schemas
+            .lock()
+            .expect("structured_output_schemas")
+            .remove(&task_id);
+    }
+
+    pub fn record_structured_output(&self, task_id: Uuid, value: serde_json::Value) {
+        self.structured_output_captures
+            .lock()
+            .expect("structured_output_captures")
+            .insert(task_id, value);
+    }
+
+    /// Take（移除并返回）子代理记录的结构化输出；父 `Agent` 工具收尾时调用一次。
+    pub fn take_structured_output(&self, task_id: Uuid) -> Option<serde_json::Value> {
+        self.structured_output_captures
+            .lock()
+            .expect("structured_output_captures")
+            .remove(&task_id)
+    }
+
+    /// 注册任务的 live trace 通道（execute_task 开始处调用，drop-guard 注销）。
+    pub fn set_live_trace_tx(
+        &self,
+        task_id: Uuid,
+        tx: tokio::sync::mpsc::UnboundedSender<LiveTraceEvent>,
+    ) {
+        self.live_trace_by_task
+            .lock()
+            .expect("live_trace_by_task")
+            .insert(task_id, tx);
+    }
+
+    pub fn remove_live_trace_tx(&self, task_id: Uuid) {
+        self.live_trace_by_task
+            .lock()
+            .expect("live_trace_by_task")
+            .remove(&task_id);
+    }
+
+    /// 查询某任务的 live trace 通道（Agent 工具为嵌套调用接线时按父 task id 查找）。
+    pub fn live_trace_tx_for(
+        &self,
+        task_id: Uuid,
+    ) -> Option<tokio::sync::mpsc::UnboundedSender<LiveTraceEvent>> {
+        self.live_trace_by_task
+            .lock()
+            .expect("live_trace_by_task")
+            .get(&task_id)
+            .cloned()
     }
 
     /// 进入子 Agent 嵌套；超过深度返回 `false`（建议 ≤6 层）。
@@ -1737,5 +1824,39 @@ mod orchestration_persist_tests {
             },
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod structured_output_slot_tests {
+    use super::*;
+
+    #[test]
+    fn structured_output_slots_are_task_isolated() {
+        let s = ToolServices::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        s.set_structured_output_schema(a, serde_json::json!({"type": "object"}));
+        s.set_structured_output_schema(b, serde_json::json!({"type": "array"}));
+        assert_eq!(
+            s.structured_output_schema(a),
+            Some(serde_json::json!({"type": "object"}))
+        );
+        assert_eq!(
+            s.structured_output_schema(b),
+            Some(serde_json::json!({"type": "array"}))
+        );
+        // 并发兄弟任务：a 的捕获对 b 不可见
+        s.record_structured_output(a, serde_json::json!({"x": 1}));
+        assert!(s.take_structured_output(b).is_none());
+        assert_eq!(
+            s.take_structured_output(a),
+            Some(serde_json::json!({"x": 1}))
+        );
+        // take 后槽位清空；clear 只影响目标任务
+        assert!(s.take_structured_output(a).is_none());
+        s.clear_structured_output_schema(a);
+        assert!(s.structured_output_schema(a).is_none());
+        assert!(s.structured_output_schema(b).is_some());
     }
 }

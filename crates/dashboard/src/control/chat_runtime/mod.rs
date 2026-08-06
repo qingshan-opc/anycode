@@ -48,7 +48,7 @@ impl std::fmt::Display for ChatSendConflict {
 
 impl std::error::Error for ChatSendConflict {}
 
-fn embedded_loop_limits() -> anycode_core::AgentLoopLimits {
+pub(crate) fn embedded_loop_limits() -> anycode_core::AgentLoopLimits {
     let Ok((_, cfg)) = crate::config_patch::read_config_root() else {
         return anycode_core::resolve_agent_loop_limits(None, None);
     };
@@ -392,6 +392,11 @@ impl ChatRuntimeHost {
     pub async fn invalidate_runtime(&self) {
         self.runtimes.lock().await.clear();
         self.runtime_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// LLM 门禁等带外执行入口：与聊天 turn 共用同一 runtime 缓存。
+    pub async fn runtime_for_gate(&self, project_root: &Path) -> anyhow::Result<Arc<AgentRuntime>> {
+        self.runtime(project_root).await
     }
 
     async fn runtime(&self, project_root: &Path) -> anyhow::Result<Arc<AgentRuntime>> {

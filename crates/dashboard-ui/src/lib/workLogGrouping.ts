@@ -74,6 +74,10 @@ export function groupTurnForWorkLog(items: TurnReplyItem[]): AgentTurnRender {
       work.processSnippets.push(...item.processSnippets);
       continue;
     }
+    // Subagent groups are not the parent's own work; skip in work log.
+    if (item.kind !== "block") {
+      continue;
+    }
 
     const block = item.block;
     if (block === finalReply) {

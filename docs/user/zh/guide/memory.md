@@ -66,12 +66,13 @@ Pipeline 且 `merge_legacy_file_recall` 为默认 true 时，根目录既有 `*.
 
 ## Auto-memory（`memory.automem`）
 
-LLM 驱动的 **auto-memory** 与本地 pipeline/hybrid 并行：
+LLM 驱动的 **auto-memory** 与本地 pipeline/hybrid 并行，**已接入运行时且默认开启**（LLM 可用时）：
 
-- **目录**：`{memory.path}/projects/{sanitized-cwd}/memory/`，入口 **`MEMORY.md`**（≤200 行 / ≤25KB）。
-- **提取**：fork 受限后台代理读取会话转录，四阶段巩固（orient → gather → consolidate → prune/index）。
-- **门控**：autoDream 时间/会话阈值 + 互斥锁 + cursor；主 agent 已直写记忆时跳过 fork。
-- **回退**：`enabled=false` 或 LLM 不可用时，自动回退 dedup/promote/forget + 向量检索。
+- **目录**：`{automem.base_path 或 ~/.anycode}/projects/{sanitized-cwd}/memory/`，入口 **`MEMORY.md`**（≤200 行 / ≤25KB，超限截断并附 WARNING）。
+- **提取**：任务 / Workbench 对话成功收尾后，fork 受限后台代理（只读 Bash + 仅记忆目录内 Edit/Write，≤5 轮）从最近对话提取并写记忆；主 agent 本轮已直写记忆目录时跳过（互斥）。
+- **巩固（autoDream）**：距上次 ≥ `dream_min_hours` 且成功任务数 ≥ `dream_min_sessions` 时，跑四阶段巩固（orient → gather → consolidate → prune/index）整理记忆与索引；跨进程锁防并发。
+- **召回**：每轮编译上下文时把本项目的 `MEMORY.md` 索引注入 prompt（附 point-in-time 告诫），模型按需 FileRead/Grep 读 topic 文件，也可直接更新过时条目。
+- **回退**：`enabled=false` 或 LLM 不可用（api_key 为空）时，自动回退 dedup/promote/forget + 向量检索的本地规则管线。
 
 配置示例（`~/.anycode/config.json`）：
 

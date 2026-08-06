@@ -99,6 +99,11 @@ pub const BUILTIN_AGENT_SEED: &[BuiltinAgentSeed] = &[
         description: "PR-style review without shell mutation",
     },
     BuiltinAgentSeed {
+        id: "critic",
+        extends: "explore",
+        description: "Adversarial verification: refute-by-default evidence review",
+    },
+    BuiltinAgentSeed {
         id: "office-writer",
         extends: "general-purpose",
         description: "Office writing: reports, briefs, content drafts",
@@ -139,6 +144,8 @@ pub struct AgentProfileSpec {
     pub tools_deny: Option<Vec<String>>,
     pub skills_allowlist: Option<Vec<String>>,
     pub prompt_overlay: Option<String>,
+    /// 完整系统提示词（文件式 agent 的 markdown 正文）：置位时替换默认段落。
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +156,8 @@ pub struct ResolvedAgentProfile {
     pub tools: Vec<String>,
     pub skills_allowlist: Option<Vec<String>>,
     pub prompt_overlay: Option<String>,
+    /// 完整系统提示词；`None` 时走默认段落 + overlay 老语义。
+    pub system_prompt: Option<String>,
     pub runtime_mode: RuntimeMode,
 }
 
@@ -232,6 +241,7 @@ pub fn resolve_profile(
         tools,
         skills_allowlist: spec.skills_allowlist.clone(),
         prompt_overlay: spec.prompt_overlay.clone(),
+        system_prompt: spec.system_prompt.clone().filter(|s| !s.trim().is_empty()),
         runtime_mode: runtime_mode_for_extends(extends),
     }
 }
@@ -245,6 +255,7 @@ pub fn is_builtin_extends(id: &str) -> bool {
 pub const SHIPPED_ROLE_IDS: &[&str] = &[
     "verifier",
     "reviewer",
+    "critic",
     "office-writer",
     "data-analyst",
     "researcher",
@@ -262,6 +273,7 @@ pub fn profile_spec_for_builtin(id: &str) -> Option<AgentProfileSpec> {
         tools_deny: None,
         skills_allowlist: None,
         prompt_overlay: None,
+        system_prompt: None,
     };
     match id {
         "verifier" => {
@@ -274,6 +286,24 @@ pub fn profile_spec_for_builtin(id: &str) -> Option<AgentProfileSpec> {
                 "Glob".into(),
                 "StructuredOutput".into(),
             ]);
+        }
+        "critic" => {
+            spec.tools_allow = Some(vec![
+                "FileRead".into(),
+                "Grep".into(),
+                "Glob".into(),
+                "Bash".into(),
+                "StructuredOutput".into(),
+            ]);
+            spec.prompt_overlay = Some(
+                "You are an adversarial verifier. Your default verdict is REFUTED: assume the claim \
+                 that the work is correct is false until concrete executed evidence proves otherwise. \
+                 Actively try to falsify it: run the tests and builds yourself via Bash, re-derive \
+                 reported numbers, look for untested paths, stale artifacts, missing edge cases, and \
+                 hollow claims without command output behind them. Only emit a `pass` verdict when \
+                 executed evidence refutes every risk you identified. Every finding must cite a \
+                 file:line or command output. Never edit or write files.".into(),
+            );
         }
         "office-writer" => {
             spec.skills_allowlist = Some(vec![
@@ -355,6 +385,46 @@ mod tests {
         assert!(allow.iter().any(|t| t == "WebFetch"));
         let skills = spec.skills_allowlist.expect("skills");
         assert!(skills.iter().any(|s| s == "verify-discover"));
+    }
+
+    #[test]
+    fn resolve_profile_passes_system_prompt() {
+        let spec = AgentProfileSpec {
+            extends: "explore".into(),
+            description: None,
+            tools_allow: None,
+            tools_deny: None,
+            skills_allowlist: None,
+            prompt_overlay: None,
+            system_prompt: Some("You are a file-defined agent.".into()),
+        };
+        let resolved = resolve_profile("file-agent", &spec, false);
+        assert_eq!(
+            resolved.system_prompt.as_deref(),
+            Some("You are a file-defined agent.")
+        );
+
+        // 空白正文视为 None（走默认段落 + overlay 老语义）
+        let blank = AgentProfileSpec {
+            system_prompt: Some("   \n".into()),
+            ..spec
+        };
+        let resolved_blank = resolve_profile("file-agent-blank", &blank, false);
+        assert!(resolved_blank.system_prompt.is_none());
+    }
+
+    #[test]
+    fn critic_profile_is_adversarial_read_only_with_bash() {
+        let spec = profile_spec_for_builtin("critic").expect("critic spec");
+        assert_eq!(spec.extends, "explore");
+        let overlay = spec.prompt_overlay.as_deref().expect("prompt_overlay");
+        assert!(overlay.contains("REFUTED"));
+        let resolved = resolve_profile("critic", &spec, false);
+        assert!(resolved.tools.iter().any(|t| t == "Bash"));
+        assert!(resolved.tools.iter().any(|t| t == "StructuredOutput"));
+        assert!(!resolved.tools.iter().any(|t| t == "Edit"));
+        assert!(!resolved.tools.iter().any(|t| t == "FileWrite"));
+        assert!(SHIPPED_ROLE_IDS.contains(&"critic"));
     }
 
     #[test]

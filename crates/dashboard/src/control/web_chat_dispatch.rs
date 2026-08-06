@@ -69,16 +69,14 @@ pub async fn dispatch_web_chat_prompt(
             }
         }
     }
-    if let Some(files) = text_files {
-        if let Err(e) = crate::control::text_upload::validate_text_payloads(files) {
-            return Err((StatusCode::BAD_REQUEST, e.to_string()));
-        }
-    }
-    let prompt_for_chat =
-        match crate::control::text_upload::append_to_prompt(&prompt_for_chat, text_files) {
-            Ok(p) => p,
-            Err(e) => return Err((StatusCode::BAD_REQUEST, e.to_string())),
-        };
+    let prompt_for_chat = match crate::control::text_upload::append_to_prompt_routed(
+        &prompt_for_chat,
+        session_id,
+        text_files,
+    ) {
+        Ok(p) => p,
+        Err(e) => return Err((StatusCode::BAD_REQUEST, e.to_string())),
+    };
 
     if let Ok(evt) = state
         .db

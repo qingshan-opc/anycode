@@ -323,7 +323,7 @@ pub struct MemoryConfigFile {
     pub auto_save: bool,
     #[serde(default)]
     pub pipeline: MemoryPipelineConfigFile,
-    /// LLM 驱动的 auto-memory。缺省 `enabled=false` → 回退本地管线。
+    /// LLM 驱动的 auto-memory。缺省 `enabled=true`（LLM 不可用时回退本地管线）；置 `enabled=false` 关闭。
     #[serde(default)]
     pub automem: anycode_core::AutomemSettings,
 }
@@ -778,6 +778,10 @@ pub struct AgentProfileFile {
     pub routing: Option<ModelProfile>,
     #[serde(default)]
     pub prompt_overlay: Option<String>,
+    /// Full system prompt (Claude-Code-md semantics: replaces default sections when set).
+    /// Sourced from a file-based agent's markdown body; `prompt_overlay` still appends after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -810,5 +814,38 @@ impl From<AgentsConfigFile> for AgentsConfig {
             profiles: f.profiles,
             defaults: f.defaults,
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_profile_serde_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_json_without_system_prompt_deserializes() {
+        let legacy = r#"{"extends":"explore","description":"d"}"#;
+        let profile: AgentProfileFile = serde_json::from_str(legacy).unwrap();
+        assert_eq!(profile.extends, "explore");
+        assert!(profile.system_prompt.is_none());
+    }
+
+    #[test]
+    fn system_prompt_roundtrip_and_skip_when_none() {
+        let with = AgentProfileFile {
+            extends: "explore".into(),
+            system_prompt: Some("You are X.".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("system_prompt"));
+        let back: AgentProfileFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.system_prompt.as_deref(), Some("You are X."));
+
+        let none = AgentProfileFile::default();
+        let json_none = serde_json::to_string(&none).unwrap();
+        assert!(
+            !json_none.contains("system_prompt"),
+            "None 不序列化（向后兼容）"
+        );
     }
 }

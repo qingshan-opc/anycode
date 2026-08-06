@@ -10,6 +10,31 @@ pub struct GatePreset {
     pub command: String,
 }
 
+/// LLM 门禁的哨兵命令前缀：`execute_gate` 不会拿到这种命令，handler 层先行分支。
+pub const LLM_GATE_COMMAND_PREFIX: &str = "llm:";
+
+/// critic 门禁的 StructuredOutput schema：verdict + findings。
+pub fn critic_gate_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "required": ["verdict", "findings"],
+        "properties": {
+            "verdict": { "type": "string", "enum": ["pass", "fail"] },
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["severity", "detail"],
+                    "properties": {
+                        "severity": { "type": "string" },
+                        "detail": { "type": "string" }
+                    }
+                }
+            }
+        }
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateExecuteResult {
     pub name: String,
@@ -104,6 +129,13 @@ pub fn list_presets(project_root: &Path) -> Vec<GatePreset> {
             command: "pytest -q".into(),
         });
     }
+
+    // LLM 对抗审查门禁：任何项目可用，执行走 handler 分支而非 shell。
+    presets.push(GatePreset {
+        id: "critic_review".into(),
+        name: "critic review (LLM)".into(),
+        command: format!("{LLM_GATE_COMMAND_PREFIX}critic"),
+    });
 
     presets
 }
@@ -227,7 +259,7 @@ async fn pump_lines<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
-fn truncate_gate_output(s: &str, max: usize) -> String {
+pub(crate) fn truncate_gate_output(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
@@ -259,6 +291,31 @@ mod tests {
         assert_eq!(res.status, "passed");
         assert!(res.output_excerpt.contains('a'));
         assert!(res.output_excerpt.contains('b'));
+    }
+
+    #[test]
+    fn presets_always_include_critic_review_llm_gate() {
+        let dir = tempdir().unwrap();
+        let presets = list_presets(dir.path());
+        let critic = presets
+            .iter()
+            .find(|p| p.id == "critic_review")
+            .expect("critic");
+        assert!(critic.command.starts_with(LLM_GATE_COMMAND_PREFIX));
+    }
+
+    #[test]
+    fn critic_gate_schema_requires_verdict_and_findings() {
+        let s = critic_gate_schema();
+        assert_eq!(s["type"], "object");
+        let required: Vec<&str> = s["required"]
+            .as_array()
+            .expect("required")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"verdict"));
+        assert!(required.contains(&"findings"));
     }
 
     #[test]

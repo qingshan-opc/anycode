@@ -129,6 +129,10 @@ pub fn router(state: AppState) -> Router {
         .route("/overview", get(handlers::get_overview))
         .route("/overview/briefing", post(handlers::post_overview_briefing))
         .route("/reports/recent", get(handlers::list_recent_reports))
+        .route(
+            "/reports/efficiency/latest",
+            get(handlers::get_latest_efficiency_report),
+        )
         .route("/metrics/readiness", get(handlers::get_delivery_readiness))
         .route("/metrics/timeline", get(handlers::get_timeline_metrics))
         .route("/metrics/usage", get(handlers::get_usage_metrics))

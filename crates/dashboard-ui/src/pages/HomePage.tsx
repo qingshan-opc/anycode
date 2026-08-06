@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { api } from "@/api/client";
 import { HomeHeroComposer } from "@/components/HomeHeroComposer";
 import { NewProjectDialog } from "@/components/NewProjectDialog";
@@ -15,6 +15,7 @@ import type { EmbeddedPageProps } from "@/lib/pageProps";
 
 export function HomePage(_props: EmbeddedPageProps = {}) {
   const t = useT();
+  const navigate = useNavigate();
   const sseStatus = useSseStatus();
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -30,7 +31,25 @@ export function HomePage(_props: EmbeddedPageProps = {}) {
     retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 4_000),
   });
   const overview = useQuery({ queryKey: ["overview"], queryFn: api.overview });
+  // 首次上手：模型（BYOK）是唯一阻塞步骤。未配置模型且从未完成过引导 →
+  // 直接进 /setup；引导过但仍缺模型（用户跳过）→ 只显示 CTA 横幅。
+  const setupStatus = useQuery({
+    queryKey: ["setup", "status"],
+    queryFn: api.setupStatus,
+    staleTime: 60_000,
+  });
+  const setup = setupStatus.data?.setup;
+  const modelMissing = setup
+    ? setup.steps.some((s) => s.id === "llm" && !s.complete)
+    : false;
+  const needsFirstRunSetup = modelMissing && !setup?.setup_completed_at;
   const { pendingTotal } = usePendingApprovalCounts();
+
+  useEffect(() => {
+    if (needsFirstRunSetup) {
+      void navigate({ to: "/setup", replace: true });
+    }
+  }, [needsFirstRunSetup, navigate]);
 
   useEffect(() => {
     const seed = consumeComposerSeed();
@@ -91,6 +110,14 @@ export function HomePage(_props: EmbeddedPageProps = {}) {
               {/\b401\b/.test(projectsError.message)
                 ? t("projects.authError")
                 : projectsError.message || t("projects.loadError")}
+            </div>
+          ) : null}
+          {modelMissing && !needsFirstRunSetup ? (
+            <div className="dw-alert-error mb-4 flex items-center justify-between gap-3">
+              <span className="text-sm">{t("setup.welcome.pointKey")}</span>
+              <Link to="/setup" className="dw-btn-primary shrink-0">
+                {t("setup.start")}
+              </Link>
             </div>
           ) : null}
           <HomeHeroComposer

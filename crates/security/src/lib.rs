@@ -58,6 +58,9 @@ fn default_compiled_policy() -> &'static CompiledPolicy {
 
 pub struct ApprovalSystem {
     policies: Arc<RwLock<HashMap<ToolName, CompiledPolicy>>>,
+    /// 未注册专属策略的工具使用的默认策略（可在 bootstrap 按部署形态覆盖，
+    /// 例如无审批通道的无头环境显式降级 `require_approval`）。
+    default_policy: Arc<RwLock<CompiledPolicy>>,
     approval_callback: Option<Box<dyn ApprovalCallback>>,
 }
 
@@ -81,8 +84,16 @@ impl ApprovalSystem {
     pub fn new() -> Self {
         Self {
             policies: Arc::new(RwLock::new(HashMap::new())),
+            default_policy: Arc::new(RwLock::new(CompiledPolicy::compile(
+                SecurityPolicy::default(),
+            ))),
             approval_callback: None,
         }
+    }
+
+    /// 覆盖默认策略（未注册专属策略的工具回落到此策略）。
+    pub async fn set_default_policy(&self, policy: SecurityPolicy) {
+        *self.default_policy.write().await = CompiledPolicy::compile(policy);
     }
 
     pub fn with_callback(mut self, callback: Box<dyn ApprovalCallback>) -> Self {
@@ -103,23 +114,21 @@ impl ApprovalSystem {
     /// 与 `check_tool_call` 相同的策略解析：已注册工具用其策略，否则默认策略。
     pub async fn tool_policy_require_approval(&self, tool: &str) -> bool {
         let policies = self.policies.read().await;
-        let compiled = policies
-            .get(tool)
-            .map(|c| c as &CompiledPolicy)
-            .unwrap_or_else(|| default_compiled_policy());
+        let default = self.default_policy.read().await;
+        let compiled = policies.get(tool).unwrap_or(&default);
         compiled.raw().require_approval
     }
 
     /// 策略判定 + 可选交互审批。
     ///
-    /// **约定**：`policy.require_approval == true` 且未注册 `approval_callback` 时视为自动通过
-    ///（供 `require_approval: false` 的 CLI / 守护进程路径使用）；有回调则必须经回调确认。
+    /// **约定（fail-closed）**：`policy.require_approval == true` 且未注册 `approval_callback`
+    /// 时**拒绝**。无头路径（daemon / cron / 后台 fork）无人应答审批，静默自动通过等于
+    /// 审批形同虚设；需要放行时应在配置层显式设 `require_approval: false`（并配合
+    /// allow/deny 白名单），而不是依赖安全层兜底放行。
     pub async fn check_tool_call(&self, tool: &str, input: &serde_json::Value) -> ApprovalResult {
         let policies = self.policies.read().await;
-        let compiled = policies
-            .get(tool)
-            .map(|c| c as &CompiledPolicy)
-            .unwrap_or_else(|| default_compiled_policy());
+        let default = self.default_policy.read().await;
+        let compiled = policies.get(tool).unwrap_or(&default);
         let policy = compiled.raw();
 
         if let Some(command) = Self::extract_command(tool, input) {
@@ -163,14 +172,21 @@ impl ApprovalSystem {
                     },
                 }
             } else {
-                ApprovalResult::Approved
+                // fail-closed：无头环境没有审批通道，不能把"需要审批"静默降级为"自动通过"。
+                ApprovalResult::Denied {
+                    reason: format!(
+                        "Tool `{tool}` requires approval but no interactive approval channel is available (headless). \
+                         Set security.require_approval=false with explicit allow/deny lists to opt out, \
+                         or run with an approval callback."
+                    ),
+                }
             }
         } else {
             ApprovalResult::Approved
         }
     }
 
-    /// Claude `alwaysAsk`：必须经用户确认；**无审批回调时拒绝**（与 `require_approval` 无回调自动通过不同）。
+    /// Claude `alwaysAsk`：必须经用户确认；**无审批回调时拒绝**（与 `require_approval` 无回调一致，均 fail-closed）。
     pub async fn confirm_claude_ask_or_deny(
         &self,
         tool: &str,
@@ -254,6 +270,17 @@ impl SecurityLayer {
 
     pub async fn set_tool_policy(&self, tool: impl Into<ToolName>, policy: SecurityPolicy) {
         self.approval_system.set_policy(tool.into(), policy).await;
+    }
+
+    /// 是否注册了交互审批回调（无回调的无头部署应显式降级默认策略）。
+    pub fn has_approval_callback(&self) -> bool {
+        self.approval_system.has_approval_callback()
+    }
+
+    /// 覆盖默认策略（未注册专属策略的工具回落到此策略）；无头部署应显式
+    /// 将 `require_approval` 降级，而不是依赖安全层兜底。
+    pub async fn set_default_policy(&self, policy: SecurityPolicy) {
+        self.approval_system.set_default_policy(policy).await;
     }
 
     pub async fn check_tool_call(
@@ -759,10 +786,46 @@ mod tests {
             .await;
         assert!(matches!(result, ApprovalResult::Denied { .. }));
 
+        // fail-closed：默认策略 require_approval=true 且无回调 → 拒绝（旧行为为静默放行）。
+        let result = system
+            .check_tool_call("Bash", &serde_json::json!({"command": "git status"}))
+            .await;
+        assert!(matches!(result, ApprovalResult::Denied { .. }));
+
+        // 显式 opt-out：部署方把默认策略降级为免审批后放行。
+        let mut open = SecurityPolicy::default();
+        open.require_approval = false;
+        system.set_default_policy(open).await;
         let result = system
             .check_tool_call("Bash", &serde_json::json!({"command": "git status"}))
             .await;
         assert!(matches!(result, ApprovalResult::Approved));
+    }
+
+    #[tokio::test]
+    async fn require_approval_without_callback_is_fail_closed() {
+        let system = ApprovalSystem::new();
+        system
+            .set_policy(
+                "FileWrite".to_string(),
+                SecurityPolicy {
+                    require_approval: true,
+                    allow_commands: vec![],
+                    deny_commands: vec![],
+                    sandbox_mode: false,
+                    timeout_ms: None,
+                },
+            )
+            .await;
+        let result = system
+            .check_tool_call("FileWrite", &serde_json::json!({"file_path": "/tmp/x"}))
+            .await;
+        match result {
+            ApprovalResult::Denied { reason } => {
+                assert!(reason.contains("no interactive approval channel"));
+            }
+            other => panic!("expected fail-closed denial, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -780,6 +843,15 @@ mod tests {
     #[tokio::test]
     async fn non_shell_tools_skip_command_policy() {
         let system = ApprovalSystem::new();
+        // 无回调 + 默认策略 require_approval=true → fail-closed；
+        // 显式降级默认策略后才放行（无头部署的显式 opt-out 路径）。
+        let result = system
+            .check_tool_call("FileRead", &serde_json::json!({"file_path": "/etc/passwd"}))
+            .await;
+        assert!(matches!(result, ApprovalResult::Denied { .. }));
+        let mut open = SecurityPolicy::default();
+        open.require_approval = false;
+        system.set_default_policy(open).await;
         let result = system
             .check_tool_call("FileRead", &serde_json::json!({"file_path": "/etc/passwd"}))
             .await;
@@ -853,6 +925,16 @@ mod tests {
     async fn test_security_layer() {
         let layer = SecurityLayer::new(PermissionMode::Default);
 
+        // 无回调 fail-closed：FileRead 命中默认策略 require_approval → 拒绝。
+        assert!(layer
+            .check_tool_call("FileRead", &serde_json::json!({"file_path": "/tmp/test"}))
+            .await
+            .is_err());
+
+        // 显式降级默认策略（无头部署的 config 层决定）后放行。
+        let mut open = SecurityPolicy::default();
+        open.require_approval = false;
+        layer.set_default_policy(open).await;
         assert!(layer
             .check_tool_call("FileRead", &serde_json::json!({"file_path": "/tmp/test"}))
             .await

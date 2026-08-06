@@ -345,6 +345,12 @@ fn apply_chat_stream_event(
                     map.insert("conversation_turn_id".into(), json!(u));
                 }
             }
+            // 子代理作用域标记必须随持久化保留，否则回放时嵌套时间线无法分组。
+            if let Some(sa) = evt.block.as_ref().and_then(|b| b.meta.get("subagent")) {
+                if let Value::Object(ref mut map) = meta {
+                    map.insert("subagent".into(), sa.clone());
+                }
+            }
             let block = TranscriptBlock {
                 id,
                 block_type: "assistant_message".into(),
@@ -377,7 +383,7 @@ fn apply_chat_stream_event(
         }
         "tool_start" | "tool_result" | "tool_progress" | "llm_start" | "thinking_delta"
         | "session_error" | "approval_request" | "approval_resolved" | "question_request"
-        | "question_resolved" | "turn_phase" => {
+        | "question_resolved" | "turn_phase" | "subagent_start" | "subagent_done" => {
             if let Some(block) = evt.block.as_ref() {
                 upsert_block(blocks, block.clone())
             } else {

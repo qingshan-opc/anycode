@@ -9,7 +9,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCatalogEntry> = {
     yearlyPriceFen: 0,
     tokenLimit: 20_000_000,
     apiKeyLimit: 1,
-    seatLimit: 1,
+    seatLimit: 10,
     featured: false,
     promoLabel: null,
     featureKeys: [
@@ -24,7 +24,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCatalogEntry> = {
     yearlyPriceFen: 99_000,
     tokenLimit: 50_000_000,
     apiKeyLimit: 3,
-    seatLimit: 1,
+    seatLimit: 10,
     featured: false,
     promoLabel: null,
     featureKeys: [
@@ -39,7 +39,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCatalogEntry> = {
     yearlyPriceFen: 599_000,
     tokenLimit: 15_000_000,
     apiKeyLimit: 5,
-    seatLimit: 1,
+    seatLimit: 10,
     featured: true,
     promoLabel: null,
     featureKeys: [

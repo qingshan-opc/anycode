@@ -3,6 +3,7 @@
 mod agentic_loop;
 mod agentic_turn;
 mod artifacts;
+mod automem;
 mod budget;
 mod compile_context;
 mod completion_guard;
@@ -15,6 +16,7 @@ mod execute_tool;
 mod execute_turn;
 mod execute_turn_finalize;
 pub mod failover;
+mod guard_verdict;
 mod limits;
 mod live_trace_emit;
 mod llm_retry;
@@ -95,6 +97,14 @@ pub struct AgentRuntime {
     session_context_window_tokens: u32,
     tool_services: StdMutex<Option<Arc<anycode_tools::ToolServices>>>,
     completion_guard: Arc<completion_guard::CompletionGuard>,
+    /// auto-memory（LLM 驱动提取/巩固）配置；`None` 表示未启用或回退本地规则引擎。
+    automem: Option<anycode_core::AutomemSettings>,
+    /// auto-memory 根路径（`{base}/projects/{key}/memory/` 的 `{base}`）。
+    automem_base: std::path::PathBuf,
+    /// automem fork 任务的输入级工具门控：task_id → memory dir。
+    automem_gates: Arc<StdMutex<HashMap<TaskId, std::path::PathBuf>>>,
+    /// 后台 fork 需要的自引用（bootstrap 构造后 `attach_self`）。
+    self_weak: StdMutex<Option<std::sync::Weak<AgentRuntime>>>,
 }
 
 fn canonical_agent_type(agent_type: &AgentType) -> AgentType {
@@ -117,25 +127,64 @@ impl Drop for ParentToolSurfaceGuard {
     }
 }
 
+/// Step 3b：任务级 live trace 通道的注册守卫（`execute_task` / `execute_turn`
+/// 共用）；drop 时从 ToolServices 键控 map 注销，避免任务结束后残留通道被
+/// 嵌套工具误接线。
+pub(super) struct LiveTraceRegistrationGuard {
+    services: Arc<anycode_tools::ToolServices>,
+    task_id: uuid::Uuid,
+}
+
+impl LiveTraceRegistrationGuard {
+    /// 注册任务 live trace 通道；任一前置缺失（无 services / 无通道）时返回 None。
+    pub(super) fn register(
+        runtime: &AgentRuntime,
+        task_id: uuid::Uuid,
+        tx: Option<tokio::sync::mpsc::UnboundedSender<anycode_core::LiveTraceEvent>>,
+    ) -> Option<Self> {
+        let svc = runtime
+            .tool_services
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().cloned())?;
+        let tx = tx?;
+        svc.set_live_trace_tx(task_id, tx);
+        Some(Self {
+            services: svc,
+            task_id,
+        })
+    }
+}
+
+impl Drop for LiveTraceRegistrationGuard {
+    fn drop(&mut self) {
+        self.services.remove_live_trace_tx(self.task_id);
+    }
+}
+
+/// 构造一条注入上下文的 user 消息（`ANYCODE_CONTEXT_USER_METADATA_KEY=true`），
+/// 供编译上下文注入、修复请求、evidence repair 等所有"系统侧 user 消息"统一使用。
+pub(super) fn context_user_message(text: String) -> Message {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        ANYCODE_CONTEXT_USER_METADATA_KEY.to_string(),
+        serde_json::Value::Bool(true),
+    );
+    Message {
+        id: Uuid::new_v4(),
+        role: MessageRole::User,
+        content: MessageContent::Text(text),
+        timestamp: chrono::Utc::now(),
+        metadata,
+    }
+}
+
 impl AgentRuntime {
     fn context_messages_from_sections(&self, sections: Vec<String>) -> Vec<Message> {
         sections
             .into_iter()
             .filter(|section| !section.trim().is_empty())
-            .map(|section| {
-                let mut metadata = HashMap::new();
-                metadata.insert(
-                    ANYCODE_CONTEXT_USER_METADATA_KEY.to_string(),
-                    serde_json::Value::Bool(true),
-                );
-                Message {
-                    id: Uuid::new_v4(),
-                    role: MessageRole::User,
-                    content: MessageContent::Text(section),
-                    timestamp: chrono::Utc::now(),
-                    metadata,
-                }
-            })
+            .map(context_user_message)
             .collect()
     }
 
@@ -211,6 +260,8 @@ impl AgentRuntime {
             memory_pipeline_settings,
             memory_project_autosave_enabled,
             session_notifications,
+            automem,
+            automem_base_path,
         } = memory;
 
         let RuntimeToolPolicy {
@@ -247,6 +298,18 @@ impl AgentRuntime {
         let goal_agent = Box::new(GoalAgent::new(default_model_config.clone())) as Box<dyn Agent>;
         agents.insert(AgentType::new("goal"), goal_agent);
 
+        // auto-memory 后台 fork（提取 / 巩固）：复用 GeneralPurposeAgent，
+        // 工具面由 automem 白名单 + 输入级门控收紧。
+        for automem_type in [
+            automem::AUTOMEM_EXTRACT_AGENT_TYPE,
+            automem::AUTOMEM_DREAM_AGENT_TYPE,
+        ] {
+            agents.insert(
+                AgentType::new(automem_type),
+                Box::new(GeneralPurposeAgent::new(default_model_config.clone())) as Box<dyn Agent>,
+            );
+        }
+
         Self {
             agents: Arc::new(RwLock::new(agents)),
             llm_client,
@@ -275,6 +338,18 @@ impl AgentRuntime {
                 Arc::new(anycode_tools::ValidatorRegistry::new()),
                 completion_guard::CompletionGuardPolicy::default(),
             )),
+            automem,
+            automem_base: automem_base_path
+                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".anycode")),
+            automem_gates: Arc::new(StdMutex::new(HashMap::new())),
+            self_weak: StdMutex::new(None),
+        }
+    }
+
+    /// 供后台 auto-memory fork 借用 `Arc<AgentRuntime>`（bootstrap 在 `Arc::new` 后调用一次）。
+    pub fn attach_self(self: &Arc<Self>) {
+        if let Ok(mut g) = self.self_weak.lock() {
+            *g = Some(Arc::downgrade(self));
         }
     }
 
@@ -502,6 +577,13 @@ impl AgentRuntime {
         agents.insert(agent.agent_type().clone(), agent);
     }
 
+    /// 已注册 agents 的（id, description）摘要：过滤 automem 内部 fork、按 id 排序、上限
+    /// `MAX_AGENT_CATALOG_ENTRIES`。供 `Agent`/`Task` 工具面暴露给父模型（可发现性）。
+    pub async fn list_agent_summaries(&self) -> Vec<(String, String)> {
+        let agents = self.agents.read().await;
+        summaries_from_agents(&agents)
+    }
+
     fn build_system_prompt(
         &self,
         agent: &Box<dyn Agent>,
@@ -514,5 +596,98 @@ impl AgentRuntime {
             working_directory,
             task_append,
         ))
+    }
+}
+
+/// 子代理目录条目上限（防 schema 膨胀，弱本地模型友好）。
+pub(crate) const MAX_AGENT_CATALOG_ENTRIES: usize = 64;
+
+/// 从 agents 注册表生成（id, description）摘要：过滤 automem 内部 fork、按 id 排序、
+/// 上限 [`MAX_AGENT_CATALOG_ENTRIES`]。`list_agent_summaries`（异步读锁）与
+/// `SubAgentExecutor::agent_catalog`（同步 `try_read`）共用。
+pub(crate) fn summaries_from_agents(
+    agents: &HashMap<AgentType, Box<dyn Agent>>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = agents
+        .values()
+        .filter(|a| !automem::is_automem_agent_type(a.agent_type().as_str()))
+        .map(|a| {
+            (
+                a.agent_type().as_str().to_string(),
+                a.description().to_string(),
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.truncate(MAX_AGENT_CATALOG_ENTRIES);
+    out
+}
+
+#[cfg(test)]
+mod agent_catalog_tests {
+    use super::*;
+
+    struct StubAgent {
+        agent_type: AgentType,
+        description: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl Agent for StubAgent {
+        fn agent_type(&self) -> &AgentType {
+            &self.agent_type
+        }
+        fn description(&self) -> &str {
+            self.description
+        }
+        fn tools(&self) -> Vec<ToolName> {
+            vec![]
+        }
+        async fn execute(&mut self, _task: Task) -> Result<TaskResult, CoreError> {
+            Ok(TaskResult::Failure {
+                error: "unused".into(),
+                details: None,
+            })
+        }
+    }
+
+    #[test]
+    fn summaries_filter_automem_sort() {
+        let mut agents: HashMap<AgentType, Box<dyn Agent>> = HashMap::new();
+        for (id, desc) in [
+            ("plan", "Plan agent"),
+            ("explore", "Explore agent"),
+            ("automem-extract", "internal extract fork"),
+            ("automem-dream", "internal dream fork"),
+            ("sql-reviewer", "Reviews SQL"),
+        ] {
+            agents.insert(
+                AgentType::new(id),
+                Box::new(StubAgent {
+                    agent_type: AgentType::new(id),
+                    description: desc,
+                }),
+            );
+        }
+        let out = summaries_from_agents(&agents);
+        let ids: Vec<&str> = out.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["explore", "plan", "sql-reviewer"]);
+    }
+
+    #[test]
+    fn summaries_capped_at_max_entries() {
+        let mut agents: HashMap<AgentType, Box<dyn Agent>> = HashMap::new();
+        for i in 0..(MAX_AGENT_CATALOG_ENTRIES + 8) {
+            let id = format!("agent-{i:03}");
+            agents.insert(
+                AgentType::new(&id),
+                Box::new(StubAgent {
+                    agent_type: AgentType::new(&id),
+                    description: "d",
+                }),
+            );
+        }
+        let out = summaries_from_agents(&agents);
+        assert_eq!(out.len(), MAX_AGENT_CATALOG_ENTRIES);
     }
 }

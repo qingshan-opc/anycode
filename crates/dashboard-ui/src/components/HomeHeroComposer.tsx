@@ -25,6 +25,7 @@ import { useMediaStatus } from "@/hooks/useMediaStatus";
 import { parseComposerSlashInput, parseSlashQuery } from "@/lib/composerSlash";
 import {
   formatTextAttachmentMeta,
+  isBinaryTextAttachment,
   MAX_TEXT_FILE_BYTES,
   MAX_TEXT_FILES,
   textPayloadsForApi,
@@ -40,7 +41,7 @@ import {
   type VisionAttachment,
 } from "@/lib/composerVision";
 
-const TEXT_FILE_ACCEPT = ".txt,.md,.json,.csv,.log,.pdf";
+const TEXT_FILE_ACCEPT = ".txt,.md,.json,.csv,.log,.pdf,.xlsx,.docx,.pptx";
 const HERO_ATTACH_ACCEPT = `image/*,${TEXT_FILE_ACCEPT}`;
 import {
   composerModeForSend,
@@ -696,7 +697,7 @@ export function HomeHeroComposer({
                   continue;
                 }
                 const lower = file.name.toLowerCase();
-                if (lower.endsWith(".pdf")) {
+                if (isBinaryTextAttachment(lower)) {
                   const buf = await file.arrayBuffer();
                   const bytes = new Uint8Array(buf);
                   let binary = "";

@@ -213,6 +213,11 @@ pub struct NestedTaskInvoke {
     /// Extra context sections injected into the nested task's system/status messages
     /// (Claude auto-memory parity: transcript → restricted agent context injection).
     pub context_injections: Vec<String>,
+    /// 父任务的 live trace 通道（Step 3b 嵌套可观测性）：子任务事件经
+    /// `Subagent` 包装后转发到该通道；`None` 时嵌套运行不可见（旧行为）。
+    pub live_trace_tx: Option<UnboundedSender<LiveTraceEvent>>,
+    /// 父任务 id（`Subagent` 包装的身份字段）。
+    pub parent_task_id: Option<crate::ids::TaskId>,
 }
 
 /// 嵌套 Agent / `Task` 工具一次调用的结果：携带与 `DiskTaskOutput` / `output.log` 一致的 **`task_id`**。
@@ -352,6 +357,14 @@ pub struct TurnTokenUsage {
 }
 
 impl TurnTokenUsage {
+    /// 累加一次 LLM 调用的用量：input 取历史最大（与自动压缩阈值一致），output/cache 求和。
+    pub fn record(&mut self, usage: &Usage) {
+        self.max_input_tokens = self.max_input_tokens.max(usage.input_tokens);
+        self.total_output_tokens += usage.output_tokens;
+        self.total_cache_read_tokens += usage.cache_read_tokens.unwrap_or(0);
+        self.total_cache_creation_tokens += usage.cache_creation_tokens.unwrap_or(0);
+    }
+
     /// 映射为单次 `Usage`，供 JSON status line 等消费。
     #[must_use]
     pub fn to_usage(&self) -> Usage {

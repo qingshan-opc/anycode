@@ -149,13 +149,22 @@ impl ExperiencePack {
         lines.join("\n")
     }
 
-    /// Canonical bytes used for signing / verification (stable field order via serde_json).
+    /// Canonical bytes used for signing / verification.
+    /// 用 struct 序列化而非 `json!` map：serde_json 的 Map 按键排序，
+    /// struct 字段顺序固定（id, version, cards），与 Python teacher lab
+    /// `json.dumps(..., separators=(",", ":"))` 的字典插入序逐字节一致。
     pub fn signing_payload(&self) -> Result<Vec<u8>, serde_json::Error> {
-        let body = serde_json::json!({
-            "id": self.meta.id,
-            "version": self.meta.version,
-            "cards": self.cards,
-        });
+        #[derive(serde::Serialize)]
+        struct SigningBody<'a> {
+            id: &'a str,
+            version: &'a str,
+            cards: &'a [ExperienceCard],
+        }
+        let body = SigningBody {
+            id: &self.meta.id,
+            version: &self.meta.version,
+            cards: &self.cards,
+        };
         serde_json::to_vec(&body)
     }
 }

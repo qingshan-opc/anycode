@@ -87,6 +87,20 @@ fn resolve_cwd(
     }
 }
 
+/// `dangerouslyDisableSandbox` 是否被部署方允许生效。该入参来自模型，
+/// 模型自身不能解除自己的沙箱 —— 只有进程启动方显式放开才生效：
+/// `ANYCODE_ALLOW_SANDBOX_DISABLE`（专门的沙箱逃逸开关）或
+/// `ANYCODE_IGNORE_APPROVAL`（操作员已选择全局绕过审批）。
+fn sandbox_escape_allowed() -> bool {
+    fn truthy(key: &str) -> bool {
+        matches!(
+            std::env::var(key).as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON")
+        )
+    }
+    truthy("ANYCODE_ALLOW_SANDBOX_DISABLE") || truthy("ANYCODE_IGNORE_APPROVAL")
+}
+
 /// Strip a trailing shell `&` and detect long-running server/watch commands that must not block.
 fn coerce_background(
     command: &str,
@@ -204,7 +218,7 @@ impl Tool for BashTool {
                 },
                 "dangerouslyDisableSandbox": {
                     "type": "boolean",
-                    "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
+                    "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing. NOTE: honored only when the process operator explicitly allows sandbox escape (ANYCODE_ALLOW_SANDBOX_DISABLE or ANYCODE_IGNORE_APPROVAL); otherwise the request is ignored and the command runs sandboxed."
                 }
             },
             "required": ["command"]
@@ -248,10 +262,22 @@ impl Tool for BashTool {
 
         // 兼容 Claude Code 的 `timeout` 参数名（timeout_ms 仍是 anyCode 别名）
         let effective_timeout = bash_input.timeout.unwrap_or(bash_input.timeout_ms);
-        let dangerously_disable_sandbox = bash_input
+        // `dangerouslyDisableSandbox` 来自模型输入，不能成为模型自我提权的通道：
+        // 只有进程启动方显式放开（ANYCODE_ALLOW_SANDBOX_DISABLE 或
+        // ANYCODE_IGNORE_APPROVAL，即操作员已选择全局绕过）时才生效；
+        // 否则忽略该标志、仍按沙箱解析 cwd，并在结果中告知模型。
+        let sandbox_escape_requested = bash_input
             .dangerously_disable_sandbox
             .or(bash_input.dangerously_disable_sandbox_camel)
             .unwrap_or(false);
+        let dangerously_disable_sandbox = sandbox_escape_requested && sandbox_escape_allowed();
+        let sandbox_escape_ignored = sandbox_escape_requested && !dangerously_disable_sandbox;
+        if sandbox_escape_ignored {
+            tracing::warn!(
+                target: "anycode_tools",
+                "model requested dangerouslyDisableSandbox but sandbox escape is not operator-enabled; running sandboxed"
+            );
+        }
         let description = bash_input.description.clone();
 
         if self.check_denied(&bash_input.command) {
@@ -280,9 +306,12 @@ impl Tool for BashTool {
             let mut out = self
                 .execute_background(&command, cwd_ref, description.as_deref(), start)
                 .await?;
-            if let Some(reason) = bg_reason {
-                if let Some(obj) = out.result.as_object_mut() {
+            if let Some(obj) = out.result.as_object_mut() {
+                if let Some(reason) = bg_reason {
                     obj.insert("auto_background_reason".into(), serde_json::json!(reason));
+                }
+                if sandbox_escape_ignored {
+                    obj.insert("sandbox_escape_ignored".into(), serde_json::json!(true));
                 }
             }
             return Ok(out);
@@ -312,6 +341,7 @@ impl Tool for BashTool {
                     "exit_code": capture.exit_code,
                     "timeout_ms": clamp_timeout_ms(effective_timeout),
                     "hint": "For long-running servers (http.server, npm run dev, vite), use run_in_background: true instead of waiting or appending &.",
+                    "sandbox_escape_ignored": sandbox_escape_ignored,
                 }),
                 error: Some("Command timed out".to_string()),
                 duration_ms: start.elapsed().as_millis() as u64,
@@ -321,7 +351,8 @@ impl Tool for BashTool {
         let result = serde_json::json!({
             "stdout": capture.stdout,
             "stderr": capture.stderr,
-            "exit_code": capture.exit_code
+            "exit_code": capture.exit_code,
+            "sandbox_escape_ignored": sandbox_escape_ignored,
         });
 
         let failed = capture.exit_code.is_some_and(|c| c != 0);
@@ -464,6 +495,7 @@ mod tests {
                 working_directory: None,
                 sandbox_mode: false,
                 dashboard_session_id: None,
+                task_id: None,
             })
             .await
             .expect("echo");
@@ -485,6 +517,7 @@ mod tests {
                 working_directory: None,
                 sandbox_mode: false,
                 dashboard_session_id: None,
+                task_id: None,
             })
             .await
             .expect("timeout run");
@@ -505,6 +538,7 @@ mod tests {
                 working_directory: None,
                 sandbox_mode: false,
                 dashboard_session_id: None,
+                task_id: None,
             })
             .await
             .expect("bg");
@@ -521,6 +555,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn sandbox_escape_request_ignored_without_operator_opt_in() {
+        // 模型请求 dangerouslyDisableSandbox，但未设 ANYCODE_ALLOW_SANDBOX_DISABLE /
+        // ANYCODE_IGNORE_APPROVAL：标志必须被忽略（sandbox 策略照常约束 cwd），
+        // 且结果中告知 sandbox_escape_ignored。
+        // 注意：若外部环境恰好设置了上述变量，本测试不适用，直接跳过。
+        if std::env::var("ANYCODE_ALLOW_SANDBOX_DISABLE").is_ok()
+            || std::env::var("ANYCODE_IGNORE_APPROVAL").is_ok()
+        {
+            return;
+        }
+        let tool = BashTool::new(true, services());
+        let out = tool
+            .execute(ToolInput {
+                name: "Bash".into(),
+                // 沙箱策略要求 working_directory；若标志生效会绕过该要求并成功执行。
+                input: serde_json::json!({
+                    "command": "echo should-not-run",
+                    "dangerouslyDisableSandbox": true
+                }),
+                working_directory: None,
+                sandbox_mode: true,
+                dashboard_session_id: None,
+                task_id: None,
+            })
+            .await;
+        match out {
+            Err(CoreError::PermissionDenied(_)) => {}
+            other => {
+                panic!("sandbox escape must be ignored (PermissionDenied expected): {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn foreground_echo_marks_sandbox_escape_ignored() {
+        if std::env::var("ANYCODE_ALLOW_SANDBOX_DISABLE").is_ok()
+            || std::env::var("ANYCODE_IGNORE_APPROVAL").is_ok()
+        {
+            return;
+        }
+        let tool = BashTool::new(false, services());
+        let out = tool
+            .execute(ToolInput {
+                name: "Bash".into(),
+                input: serde_json::json!({
+                    "command": "echo sandbox-note",
+                    "dangerouslyDisableSandbox": true
+                }),
+                working_directory: None,
+                sandbox_mode: false,
+                dashboard_session_id: None,
+                task_id: None,
+            })
+            .await
+            .expect("echo");
+        assert_eq!(out.result["sandbox_escape_ignored"].as_bool(), Some(true));
+        assert!(out.result["stdout"]
+            .as_str()
+            .unwrap_or("")
+            .contains("sandbox-note"));
     }
 
     #[test]
@@ -554,6 +651,7 @@ mod tests {
                 working_directory: Some("/tmp".into()),
                 sandbox_mode: false,
                 dashboard_session_id: None,
+                task_id: None,
             })
             .await
             .expect("bg http");

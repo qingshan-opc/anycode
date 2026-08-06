@@ -61,6 +61,7 @@ pub struct MemoryPipelineSettings {
 /// - 目录名 `memory`
 /// - autoDream 时间门 24h + 会话数门 5
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AutomemSettings {
     /// LLM on/off 开关。关闭时回退到本地规则管线（dedup/promote/forget + 向量检索）。
     pub enabled: bool,
@@ -87,7 +88,9 @@ pub struct AutomemSettings {
 impl Default for AutomemSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            // 默认开启（对齐 Claude auto-memory 默认 ON）；bootstrap 在 LLM 不可用
+            // （api_key 为空）时仍回退本地规则引擎。`config.json` 置 `enabled=false` 可关。
+            enabled: true,
             fork_agent: true,
             base_path: None,
             dir_name: "memory".to_string(),

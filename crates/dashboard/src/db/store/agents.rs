@@ -186,6 +186,7 @@ impl DashboardDb {
                 tools_deny: None,
                 skills_allowlist: None,
                 prompt_overlay: None,
+                system_prompt: None,
             });
             let tools_json = if spec.tools_allow.is_some() || spec.tools_deny.is_some() {
                 Some(json!({

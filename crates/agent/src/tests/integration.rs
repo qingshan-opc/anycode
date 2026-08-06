@@ -74,6 +74,8 @@ async fn test_agent_runtime_tool_loop_injects_tool_result_message() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -115,7 +117,7 @@ async fn test_agent_runtime_tool_loop_injects_tool_result_message() {
             output,
             artifacts: _,
         } => assert_eq!(output, "done"),
-        _ => panic!("expected success"),
+        other => panic!("expected success, got {other:?}"),
     }
 
     let calls = llm.call_roles().await;
@@ -131,6 +133,179 @@ async fn test_agent_runtime_tool_loop_injects_tool_result_message() {
     assert!(log.contains("[tool_call_input]"));
     assert!(log.contains("[tool_call_start]"));
     assert!(log.contains("[tool_call_end]"));
+}
+
+#[tokio::test]
+async fn test_execute_task_zero_tool_surface_fails_fast() {
+    let temp = TempDir::new().unwrap();
+    let disk = DiskTaskOutput::new(temp.path().to_path_buf());
+
+    let llm = Arc::new(MockLLM::new(vec![]));
+    let mut tools: HashMap<ToolName, Box<dyn Tool>> = HashMap::new();
+    tools.insert("Echo".to_string(), Box::new(EchoTool));
+
+    let runtime = AgentRuntime::new(
+        RuntimeCoreDeps {
+            llm_client: llm.clone(),
+            tools,
+            memory_store: Arc::new(DummyMemoryStore),
+            default_model_config: ModelConfig {
+                provider: LLMProvider::Custom("mock".to_string()),
+                model: "mock".to_string(),
+                base_url: None,
+                temperature: None,
+                max_tokens: None,
+                api_key: None,
+                ..Default::default()
+            },
+            model_overrides: HashMap::new(),
+            failover_chain: vec![],
+            disk_output: Some(disk.clone()),
+            security: Arc::new(SecurityLayer::new(PermissionMode::BypassPermissions)),
+            sandbox_mode: false,
+            prompt_config: RuntimePromptConfig::default(),
+        },
+        RuntimeMemoryOptions {
+            memory_pipeline: None,
+            memory_pipeline_settings: None,
+            memory_project_autosave_enabled: false,
+            session_notifications: None,
+            automem: None,
+            automem_base_path: None,
+        },
+        RuntimeToolPolicy {
+            tool_name_deny: vec![],
+            claude_gating: AgentClaudeToolGating::default(),
+            expose_skill_on_explore_plan: false,
+        },
+    );
+
+    // deny 叠加把 agent 工具面清空 → 零工具面 fail-fast（不发 LLM 请求）。
+    let mut deny_all = anycode_tools::general_purpose_tool_names();
+    deny_all.push("Echo".to_string());
+    let task = Task {
+        id: Uuid::new_v4(),
+        agent_type: AgentType::new("general-purpose"),
+        prompt: "test".to_string(),
+        context: TaskContext {
+            session_id: Uuid::new_v4(),
+            working_directory: ".".to_string(),
+            environment: HashMap::new(),
+            user_id: None,
+            system_prompt_append: None,
+            context_injections: vec![],
+            nested_model_override: None,
+            nested_worktree_path: None,
+            nested_worktree_repo_root: None,
+            nested_cancel: None,
+            channel_progress_tx: None,
+            live_trace_tx: None,
+            tool_deny_names: deny_all,
+            tool_deny_prefixes: vec![],
+            user_vision_images: vec![],
+            budget: TaskBudget::default(),
+            loop_limits: AgentLoopLimits::default(),
+            chat_turn: None,
+        },
+        created_at: chrono::Utc::now(),
+    };
+
+    let task_id = task.id;
+    let res = runtime.execute_task(task).await.unwrap();
+    match res {
+        TaskResult::Failure { details, .. } => {
+            assert_eq!(details.as_deref(), Some("zero_tools"));
+        }
+        other => panic!("expected zero_tools failure, got {other:?}"),
+    }
+    assert!(
+        llm.call_roles().await.is_empty(),
+        "zero-tool surface must not reach the LLM"
+    );
+    let log = disk.tail(task_id, 64 * 1024).unwrap();
+    assert!(log.contains("[task_end] status=failed reason=zero_tools"));
+}
+
+#[tokio::test]
+async fn test_execute_turn_zero_tool_surface_fails_fast() {
+    let temp = TempDir::new().unwrap();
+    let disk = DiskTaskOutput::new(temp.path().to_path_buf());
+
+    let llm = Arc::new(MockLLM::new(vec![]));
+    let mut tools: HashMap<ToolName, Box<dyn Tool>> = HashMap::new();
+    tools.insert("Echo".to_string(), Box::new(EchoTool));
+
+    let runtime = AgentRuntime::new(
+        RuntimeCoreDeps {
+            llm_client: llm.clone(),
+            tools,
+            memory_store: Arc::new(DummyMemoryStore),
+            default_model_config: ModelConfig {
+                provider: LLMProvider::Custom("mock".to_string()),
+                model: "mock".to_string(),
+                base_url: None,
+                temperature: None,
+                max_tokens: None,
+                api_key: None,
+                ..Default::default()
+            },
+            model_overrides: HashMap::new(),
+            failover_chain: vec![],
+            disk_output: Some(disk.clone()),
+            security: Arc::new(SecurityLayer::new(PermissionMode::BypassPermissions)),
+            sandbox_mode: false,
+            prompt_config: RuntimePromptConfig::default(),
+        },
+        RuntimeMemoryOptions {
+            memory_pipeline: None,
+            memory_pipeline_settings: None,
+            memory_project_autosave_enabled: false,
+            session_notifications: None,
+            automem: None,
+            automem_base_path: None,
+        },
+        RuntimeToolPolicy {
+            tool_name_deny: vec![],
+            claude_gating: AgentClaudeToolGating::default(),
+            expose_skill_on_explore_plan: false,
+        },
+    );
+
+    // 嵌入式聊天路径（execute_turn）首段 build 同样 fail-fast：
+    // deny 叠加清空工具面 → 立即报错，不带零工具空跑 LLM。
+    let mut deny_all = anycode_tools::general_purpose_tool_names();
+    deny_all.push("Echo".to_string());
+    let agent_type = AgentType::new("general-purpose");
+    let messages = Arc::new(Mutex::new(vec![msg_text(MessageRole::User, "test")]));
+
+    let err = runtime
+        .execute_turn_from_messages(
+            Uuid::new_v4(),
+            &agent_type,
+            messages,
+            ".",
+            None,
+            &deny_all,
+            &[],
+            TaskBudget::default(),
+            AgentLoopLimits::default(),
+            None,
+        )
+        .await
+        .expect_err("zero-tool surface must fail fast");
+    match err {
+        CoreError::LLMError(msg) => {
+            assert!(
+                msg.starts_with("zero_tool_surface:"),
+                "stable zero_tool_surface prefix, got: {msg}"
+            );
+        }
+        other => panic!("expected LLMError(zero_tool_surface: …), got {other:?}"),
+    }
+    assert!(
+        llm.call_roles().await.is_empty(),
+        "zero-tool surface must not reach the LLM"
+    );
 }
 
 /// Sets [`TaskContext::nested_cancel`] when the tool runs so `execute_task` can exit after the tool boundary.
@@ -208,6 +383,8 @@ async fn execute_task_cooperative_cancel_before_first_llm() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -318,6 +495,8 @@ async fn execute_task_cooperative_cancel_after_tool() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -414,6 +593,8 @@ async fn execute_task_in_flight_llm_cooperative_cancel() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -503,6 +684,8 @@ async fn execute_turn_from_messages_in_flight_stream_cooperative_cancel() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -600,6 +783,8 @@ async fn execute_turn_from_messages_in_flight_chat_cooperative_cancel() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -711,6 +896,8 @@ async fn test_execute_turn_from_messages_returns_final_text_and_injects_tool_res
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -764,6 +951,108 @@ async fn test_execute_turn_from_messages_returns_final_text_and_injects_tool_res
         m.role == MessageRole::Assistant && m.metadata.contains_key(ANYCODE_TOOL_CALLS_METADATA_KEY)
     });
     assert!(has_metadata);
+}
+
+/// Responses API：`StreamEvent::ResponseId` 须写入 assistant 占位消息 metadata
+///（`anycode_response_id`），供后续请求做 `previous_response_id` 链式续接。
+#[tokio::test]
+async fn test_execute_turn_stream_response_id_lands_in_history_metadata() {
+    let temp = TempDir::new().unwrap();
+    let disk = DiskTaskOutput::new(temp.path().to_path_buf());
+
+    let stream_batch = vec![
+        StreamEvent::Delta("hello".to_string()),
+        StreamEvent::Usage(Usage {
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
+        }),
+        StreamEvent::ResponseId {
+            id: "resp_test_1".to_string(),
+            prefix_hash: "deadbeef".to_string(),
+        },
+        StreamEvent::Done,
+    ];
+    let llm = Arc::new(MockLLM::with_stream_batches(vec![], vec![stream_batch]));
+
+    let runtime = AgentRuntime::new(
+        RuntimeCoreDeps {
+            llm_client: llm.clone(),
+            tools: HashMap::new(),
+            memory_store: Arc::new(DummyMemoryStore),
+            default_model_config: ModelConfig {
+                provider: LLMProvider::Custom("deepseek_responses".to_string()),
+                model: "deepseek-v4-flash".to_string(),
+                base_url: None,
+                temperature: None,
+                max_tokens: None,
+                api_key: None,
+                ..Default::default()
+            },
+            model_overrides: HashMap::new(),
+            failover_chain: vec![],
+            disk_output: Some(disk.clone()),
+            security: Arc::new(SecurityLayer::new(PermissionMode::BypassPermissions)),
+            sandbox_mode: false,
+            prompt_config: RuntimePromptConfig::default(),
+        },
+        RuntimeMemoryOptions {
+            memory_pipeline: None,
+            memory_pipeline_settings: None,
+            memory_project_autosave_enabled: false,
+            session_notifications: None,
+            automem: None,
+            automem_base_path: None,
+        },
+        RuntimeToolPolicy {
+            tool_name_deny: vec![],
+            claude_gating: AgentClaudeToolGating::default(),
+            expose_skill_on_explore_plan: false,
+        },
+    );
+
+    let agent_type = AgentType::new("general-purpose");
+    let mut messages = vec![runtime
+        .build_system_message(&agent_type, ".")
+        .await
+        .unwrap()];
+    messages.push(msg_text(MessageRole::User, "hi"));
+    let messages = Arc::new(Mutex::new(messages));
+
+    let out = runtime
+        .execute_turn_from_messages(
+            Uuid::new_v4(),
+            &agent_type,
+            messages.clone(),
+            ".",
+            None,
+            &[],
+            &[],
+            TaskBudget::default(),
+            AgentLoopLimits::default(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.final_text, "hello");
+
+    let g = messages.lock().await;
+    let chain = g.iter().find_map(|m| {
+        if m.role != MessageRole::Assistant {
+            return None;
+        }
+        m.metadata.get(ANYCODE_RESPONSE_ID_METADATA_KEY)
+    });
+    let chain = chain.expect("assistant 应携带 anycode_response_id metadata");
+    assert_eq!(
+        chain.get("id").and_then(|v| v.as_str()),
+        Some("resp_test_1")
+    );
+    assert_eq!(
+        chain.get("prefix_hash").and_then(|v| v.as_str()),
+        Some("deadbeef")
+    );
 }
 
 /// 末轮 assistant 正文为空时走 `llm_summary_receipt`：总结须 **写入** `messages`，供流式 REPL `build_stream_turn_plain` 展示。
@@ -837,6 +1126,8 @@ async fn test_execute_turn_summary_receipt_appends_assistant_to_messages() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -989,6 +1280,8 @@ async fn test_security_denied_bash_skips_execute_and_logs_tool_denied() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1154,6 +1447,8 @@ async fn test_security_denied_filewrite_silent_approval_skips_execute() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1292,6 +1587,8 @@ async fn test_tool_result_truncation_is_logged() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1425,6 +1722,8 @@ async fn test_filewrite_artifact_is_returned() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1606,6 +1905,8 @@ async fn execute_task_pipeline_hooks_ingest_tool_and_turn_fragments() {
             }),
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1693,6 +1994,8 @@ async fn execute_turn_streaming_sets_non_zero_max_input_tokens() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1769,6 +2072,8 @@ async fn execute_turn_streaming_prefers_usage_event_input_tokens() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1846,6 +2151,8 @@ async fn execute_task_success_triggers_memory_autosave_when_enabled() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: true,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -1998,6 +2305,8 @@ fn local_runtime(
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],
@@ -2366,6 +2675,8 @@ async fn completion_guard_repairs_then_passes_web_landing() {
             memory_pipeline_settings: None,
             memory_project_autosave_enabled: false,
             session_notifications: None,
+            automem: None,
+            automem_base_path: None,
         },
         RuntimeToolPolicy {
             tool_name_deny: vec![],

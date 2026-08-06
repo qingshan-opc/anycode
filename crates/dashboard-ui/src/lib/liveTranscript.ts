@@ -212,6 +212,11 @@ export function applyChatStreamEvent(
       if (!evt.block) return blocks;
       return upsertBlock(blocks, evt.block);
     }
+    case "subagent_start":
+    case "subagent_done": {
+      if (!evt.block) return blocks;
+      return upsertBlock(blocks, evt.block);
+    }
     case "turn_done": {
       const notice = turnDoneNoticeBlock(evt);
       return notice ? upsertBlock(blocks, notice) : blocks;
@@ -244,11 +249,14 @@ function assistantTurnKey(block: TranscriptBlock): string | null {
   if (turn === undefined || turn === null) {
     return null;
   }
+  const sa = (block.meta?.subagent as { task_id?: unknown } | undefined)?.task_id;
+  const scope =
+    typeof sa === "string" && sa.length > 0 ? `sa${sa}:` : "";
   const userTurnId = block.meta?.user_turn_id;
   if (userTurnId !== undefined && userTurnId !== null && String(userTurnId).length > 0) {
-    return `assistant:u${String(userTurnId)}:${String(turn)}`;
+    return `assistant:u${String(userTurnId)}:${scope}${String(turn)}`;
   }
-  return `assistant:${String(turn)}`;
+  return `assistant:${scope}${String(turn)}`;
 }
 
 function mergeBlockContent(prev: TranscriptBlock, incoming: TranscriptBlock): TranscriptBlock {

@@ -91,6 +91,12 @@ function ReportsPageInner({
     queryKey: ["report-library"],
     queryFn: () => api.artifacts({ kind: "report", limit: 200 }),
   });
+  const efficiency = useQuery({
+    queryKey: ["efficiency-latest"],
+    queryFn: () => api.efficiencyLatest(),
+    retry: false,
+  });
+  const efficiencyReport = efficiency.data?.report ?? null;
   const libraryPreview = useQuery({
     queryKey: ["artifact", libraryPreviewId],
     queryFn: () => api.artifactDetail(libraryPreviewId),
@@ -231,6 +237,68 @@ function ReportsPageInner({
               </ul>
             </SectionCard>
           )}
+
+          <SectionCard title={t("reports.efficiency")}>
+            {!efficiencyReport && (
+              <p className="text-sm text-secondary m-0">{t("reports.efficiencyEmpty")}</p>
+            )}
+            {efficiencyReport && (
+              <div className="text-sm space-y-3">
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-secondary">
+                  <span>
+                    {t("reports.efficiencyWindow")}: {efficiencyReport.window_days}
+                  </span>
+                  <span>
+                    {t("reports.efficiencyLlmCalls")}: {efficiencyReport.llm.llm_calls}
+                  </span>
+                  <span>
+                    {t("reports.efficiencyTokens")}: {efficiencyReport.llm.input_tokens} /{" "}
+                    {efficiencyReport.llm.output_tokens}
+                  </span>
+                  <span>
+                    {t("reports.efficiencyRepeat")}:{" "}
+                    {(efficiencyReport.repeat_input_rate * 100).toFixed(1)}%
+                  </span>
+                </div>
+                {efficiencyReport.tools.length > 0 && (
+                  <table className="dw-table">
+                    <thead>
+                      <tr>
+                        <th>{t("reports.efficiencyTool")}</th>
+                        <th>{t("reports.efficiencyCalls")}</th>
+                        <th>{t("reports.efficiencyError")}</th>
+                        <th>{t("reports.efficiencyDenied")}</th>
+                        <th>p50 ms</th>
+                        <th>p95 ms</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {efficiencyReport.tools.slice(0, 12).map((row) => (
+                        <tr key={row.tool_name}>
+                          <td className="font-code text-xs">{row.tool_name}</td>
+                          <td>{row.calls}</td>
+                          <td>{(row.error_rate * 100).toFixed(1)}</td>
+                          <td>{(row.denied_rate * 100).toFixed(1)}</td>
+                          <td>{row.p50_ms ?? "—"}</td>
+                          <td>{row.p95_ms ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {efficiencyReport.turn_status.length > 0 && (
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-secondary">
+                    <span>{t("reports.efficiencyTurnStatus")}:</span>
+                    {efficiencyReport.turn_status.map((s) => (
+                      <span key={s.status}>
+                        {s.status} {s.count}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </SectionCard>
 
           {!report && !generate.isPending && (
             <EmptyState

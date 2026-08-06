@@ -9,7 +9,7 @@ import {
   isPrimaryDeliverableKind,
   isProcessArtifactPath,
 } from "@/lib/deliverablePath";
-import { toolStepFailed, type ToolStep } from "@/lib/transcriptGrouping";
+import { toolStepFailed, type ToolStep, type TurnReplyItem } from "@/lib/transcriptGrouping";
 import { extractToolCommand } from "@/lib/toolStepLabel";
 import type { TranscriptBlock } from "@/api/types";
 
@@ -123,15 +123,7 @@ export function pathFromWriteToolStep(step: ToolStep): string | null {
   return fromCall.trim() || null;
 }
 
-type ReplyItem =
-  | { kind: "block"; block: TranscriptBlock }
-  | {
-      kind: "tool_cluster";
-      id: string;
-      steps: ToolStep[];
-      processMessageCount: number;
-      processSnippets: string[];
-    };
+type ReplyItem = TurnReplyItem;
 
 function deliverablePropsFromPath(
   marker: ParsedArtifactMarker,
@@ -241,7 +233,7 @@ export function collectInlineDeliverables(
         const marker = path ? markerFromPath(path) : null;
         if (marker) toolMarkers.push(marker);
       }
-    } else if (item.block.block_type === "assistant_message") {
+    } else if (item.kind === "block" && item.block.block_type === "assistant_message") {
       lastAssistantId = item.block.id;
       lastAssistantBody = item.block.body ?? "";
     }
