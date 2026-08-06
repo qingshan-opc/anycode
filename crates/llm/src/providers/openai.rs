@@ -20,15 +20,11 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
 const DEFAULT_OPENAI_CHAT_URL: &str = "https://api.openai.com/v1/chat/completions";
-/// 单次 HTTP 请求总超时（含流式读 body）；更长对话可设环境变量 `API_TIMEOUT_MS`。
-const DEFAULT_API_TIMEOUT_MS: u64 = 180_000;
-/// 建连阶段（TCP/TLS）超时，与总超时独立。
-const DEFAULT_API_CONNECT_TIMEOUT_MS: u64 = 30_000;
+use crate::http_client::{build_api_http_client, configured_api_timeout_ms};
 const DEFAULT_MAX_RETRIES: u32 = 10;
 
 #[derive(Debug, Serialize)]
@@ -77,22 +73,6 @@ fn openai_tool_choice(
         return Some("required".to_string());
     }
     Some("auto".to_string())
-}
-
-fn configured_api_timeout_ms() -> u64 {
-    std::env::var("API_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|v| *v >= 1_000)
-        .unwrap_or(DEFAULT_API_TIMEOUT_MS)
-}
-
-fn build_http_client() -> Client {
-    Client::builder()
-        .connect_timeout(Duration::from_millis(DEFAULT_API_CONNECT_TIMEOUT_MS))
-        .timeout(Duration::from_millis(configured_api_timeout_ms()))
-        .build()
-        .unwrap_or_else(|_| Client::new())
 }
 
 /// `true` 表示应停止（`tx` 已关闭）。
@@ -219,7 +199,7 @@ impl OpenAIClient {
         }
 
         Ok(Self {
-            client: build_http_client(),
+            client: build_api_http_client(),
             api_key,
             base_url: DEFAULT_OPENAI_CHAT_URL.to_string(),
         })
@@ -369,45 +349,47 @@ impl LLMClient for OpenAIClient {
         let client = self.client.clone();
         let (tx, rx) = mpsc::channel(128);
         let stream_tools = tools.clone();
+        let source = config.query_source;
+        let model_for_retry = body.model.clone();
+        let observer = config.retry_observer.clone();
 
         tokio::spawn(async move {
-            let response = match client
-                .post(&base_url)
-                .header("Authorization", format!("Bearer {}", auth_key))
-                .json(&body)
-                .send()
-                .await
+            // 建连/HTTP 层失败与非流式一样走结构化重试；耗尽后显式上报 Failed，
+            // 让调用方丢弃部分结果并降级（此前静默发 Done，会被当作空回复接受）。
+            let response = match send_chat_with_retries(
+                &client,
+                &base_url,
+                &auth_key,
+                &body,
+                source,
+                &model_for_retry,
+                observer.as_deref(),
+            )
+            .await
             {
                 Ok(r) => r,
                 Err(e) => {
                     error!("OpenAI stream request failed: {}", e);
-                    let _ = tx.send(StreamEvent::Done).await;
+                    let _ = tx.send(StreamEvent::Failed(e.to_string())).await;
                     return;
                 }
             };
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                error!(
-                    "OpenAI stream HTTP error: {} {}",
-                    status,
-                    &body[..body.len().min(500)]
-                );
-                let _ = tx.send(StreamEvent::Done).await;
-                return;
-            }
 
             let mut stream = response.bytes_stream();
             let mut sse_buf = SseLineBuffer::new();
             let mut stream_state =
                 crate::tool_call_normalizer::OpenAiCompatStreamState::new(stream_tools);
+            // 终止标记：`[DONE]` 或任一 choice 的 finish_reason 非 null。
+            // 字节流在没有终止标记的情况下结束 = 中途截断，不能当作完整回复。
+            let mut saw_terminal = false;
+            let mut read_failure: Option<String> = None;
 
             'read: while let Some(chunk_res) = stream.next().await {
                 let chunk = match chunk_res {
                     Ok(c) => c,
                     Err(e) => {
                         error!("OpenAI stream read: {}", e);
+                        read_failure = Some(e.to_string());
                         break;
                     }
                 };
@@ -416,12 +398,21 @@ impl LLMClient for OpenAIClient {
                 };
                 for line_ev in sse_buf.push_str(text) {
                     let data = match line_ev {
-                        SseDataLine::Done => break 'read,
+                        SseDataLine::Done => {
+                            saw_terminal = true;
+                            break 'read;
+                        }
                         SseDataLine::Payload(s) => s,
                     };
                     let Ok(val) = serde_json::from_str::<Value>(&data) else {
                         continue;
                     };
+                    if val
+                        .pointer("/choices/0/finish_reason")
+                        .is_some_and(|f| !f.is_null())
+                    {
+                        saw_terminal = true;
+                    }
                     if emit_openai_sse_with_state(&val, &tx, &mut stream_state).await {
                         return;
                     }
@@ -429,15 +420,44 @@ impl LLMClient for OpenAIClient {
             }
 
             for line_ev in sse_buf.finish() {
-                let SseDataLine::Payload(data) = line_ev else {
-                    break;
-                };
-                let Ok(val) = serde_json::from_str::<Value>(&data) else {
-                    continue;
-                };
-                if emit_openai_sse_with_state(&val, &tx, &mut stream_state).await {
-                    return;
+                match line_ev {
+                    SseDataLine::Done => {
+                        saw_terminal = true;
+                        break;
+                    }
+                    SseDataLine::Payload(data) => {
+                        let Ok(val) = serde_json::from_str::<Value>(&data) else {
+                            continue;
+                        };
+                        if val
+                            .pointer("/choices/0/finish_reason")
+                            .is_some_and(|f| !f.is_null())
+                        {
+                            saw_terminal = true;
+                        }
+                        if emit_openai_sse_with_state(&val, &tx, &mut stream_state).await {
+                            return;
+                        }
+                    }
                 }
+            }
+
+            if let Some(err) = read_failure {
+                let _ = tx
+                    .send(StreamEvent::Failed(format!(
+                        "OpenAI stream read interrupted: {err}"
+                    )))
+                    .await;
+                return;
+            }
+            if !saw_terminal {
+                let _ = tx
+                    .send(StreamEvent::Failed(
+                        "OpenAI stream ended before completion marker ([DONE]/finish_reason)"
+                            .to_string(),
+                    ))
+                    .await;
+                return;
             }
 
             if crate::openai_compat_stream::flush_openai_sse_state(&tx, &mut stream_state).await {

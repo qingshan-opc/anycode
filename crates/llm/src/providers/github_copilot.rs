@@ -5,6 +5,7 @@ use super::anthropic::{
 };
 use super::anthropic_stream::AnthropicSseStreamState;
 use crate::copilot_token::resolve_copilot_api_token;
+use crate::http_client::build_api_http_client;
 use crate::sse_data_lines::{SseDataLine, SseLineBuffer};
 use anycode_core::prelude::*;
 use async_trait::async_trait;
@@ -27,7 +28,7 @@ impl GithubCopilotClient {
             return Err(super::super::LLMError::MissingApiKey);
         }
         Ok(Self {
-            client: Client::new(),
+            client: build_api_http_client(),
             github_token,
         })
     }
@@ -168,26 +169,33 @@ impl LLMClient for GithubCopilotClient {
                 Ok(r) => r,
                 Err(e) => {
                     error!("Copilot stream request failed: {}", e);
-                    let _ = tx.send(StreamEvent::Done).await;
+                    let _ = tx.send(StreamEvent::Failed(e.to_string())).await;
                     return;
                 }
             };
 
             if !response.status().is_success() {
-                error!("Copilot stream HTTP {}", response.status());
-                let _ = tx.send(StreamEvent::Done).await;
+                let status = response.status();
+                error!("Copilot stream HTTP {}", status);
+                let _ = tx
+                    .send(StreamEvent::Failed(format!(
+                        "Copilot stream HTTP error: {status}"
+                    )))
+                    .await;
                 return;
             }
 
             let mut stream = response.bytes_stream();
             let mut sse_buf = SseLineBuffer::new();
             let mut anth = AnthropicSseStreamState::new();
+            let mut read_failure: Option<String> = None;
 
             'read: while let Some(chunk_res) = stream.next().await {
                 let chunk = match chunk_res {
                     Ok(c) => c,
                     Err(e) => {
                         error!("Copilot stream chunk: {}", e);
+                        read_failure = Some(e.to_string());
                         break;
                     }
                 };
@@ -223,6 +231,23 @@ impl LLMClient for GithubCopilotClient {
                         }
                     }
                 }
+            }
+
+            if let Some(err) = read_failure {
+                let _ = tx
+                    .send(StreamEvent::Failed(format!(
+                        "Copilot stream read interrupted: {err}"
+                    )))
+                    .await;
+                return;
+            }
+            if !anth.is_complete() {
+                let _ = tx
+                    .send(StreamEvent::Failed(
+                        "Copilot stream ended before message_stop".to_string(),
+                    ))
+                    .await;
+                return;
             }
             let _ = tx.send(StreamEvent::Done).await;
         });

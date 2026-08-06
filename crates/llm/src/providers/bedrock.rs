@@ -497,12 +497,22 @@ impl LLMClient for BedrockClient {
                     }
                     Ok(Some(_)) => {}
                     Ok(None) => {
-                        let _ = tx.send(StreamEvent::Done).await;
+                        // 事件流在 MessageStop 前结束 = 中途截断，上报 Failed
+                        // 让调用方丢弃部分结果并降级。
+                        let _ = tx
+                            .send(StreamEvent::Failed(
+                                "Bedrock stream ended before MessageStop".to_string(),
+                            ))
+                            .await;
                         break;
                     }
                     Err(e) => {
                         error!("Bedrock stream: {}", e);
-                        let _ = tx.send(StreamEvent::Done).await;
+                        let _ = tx
+                            .send(StreamEvent::Failed(format!(
+                                "Bedrock stream read interrupted: {e}"
+                            )))
+                            .await;
                         break;
                     }
                 }

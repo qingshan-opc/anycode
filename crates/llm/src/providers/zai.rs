@@ -37,6 +37,80 @@ pub(crate) fn retry_delay_ms(attempt: u32) -> u64 {
     std::cmp::min(CAP, BASE.saturating_mul(exp))
 }
 
+/// 流式建连（POST → 2xx 响应）带重试：429/5xx 与网络错误按 `retry_delay_ms` 退避，
+/// 配额耗尽快速失败。耗尽后返回 Err，由调用方转成 `StreamEvent::Failed` 上报，
+/// 不再静默发 `Done`（否则过载会被当作空回复接受）。
+async fn post_stream_with_retries(
+    client: &Client,
+    url: &str,
+    auth_key: &str,
+    body: &Value,
+    provider_label: &str,
+) -> Result<reqwest::Response, CoreError> {
+    let mut last_err: Option<String> = None;
+    for attempt in 1..=DEFAULT_MAX_RETRIES + 1 {
+        let send_res = client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", auth_key))
+            .json(body)
+            .send()
+            .await;
+
+        match send_res {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    return Ok(resp);
+                }
+                let retry_after_ms = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(|secs| secs.saturating_mul(1000));
+                let error_text = resp.text().await.unwrap_or_default();
+                last_err = Some(format!(
+                    "{} stream API error: status={} url={} body={}",
+                    provider_label,
+                    status.as_u16(),
+                    url,
+                    &error_text[..error_text.len().min(500)]
+                ));
+                if is_quota_exhausted(&error_text) {
+                    error!("{provider_label} stream quota exhausted — failing fast");
+                    break;
+                }
+                if attempt <= DEFAULT_MAX_RETRIES && is_retryable_status(status) {
+                    let delay = retry_after_ms.unwrap_or_else(|| retry_delay_ms(attempt));
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    continue;
+                }
+                break;
+            }
+            Err(e) => {
+                let mut msg = e.to_string();
+                if e.is_timeout() {
+                    msg = format!(
+                        "{msg} · API_TIMEOUT_MS={}ms, try increasing it",
+                        configured_api_timeout_ms()
+                    );
+                }
+                last_err = Some(msg);
+                if attempt <= DEFAULT_MAX_RETRIES {
+                    tokio::time::sleep(Duration::from_millis(retry_delay_ms(attempt))).await;
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+    Err(CoreError::LLMError(format!(
+        "{} stream request failed after retries: {}",
+        provider_label,
+        last_err.unwrap_or_else(|| "unknown error".to_string())
+    )))
+}
+
 /// OpenClaw `extensions/zai/model-definitions.ts`：国际 / 国内（智谱 bigmodel.cn）端点。
 pub const ZAI_GLOBAL_CODING_URL: &str = "https://api.z.ai/api/coding/paas/v4/chat/completions";
 pub const ZAI_GLOBAL_GENERAL_URL: &str = "https://api.z.ai/api/paas/v4/chat/completions";
@@ -56,11 +130,9 @@ pub fn zai_default_chat_url_for_plan(plan: &str) -> &'static str {
     }
 }
 
-/// 单次 HTTP 请求总超时（含流式读 body）；更长对话可设环境变量 `API_TIMEOUT_MS`。
-const DEFAULT_API_TIMEOUT_MS: u64 = 180_000;
-/// 建连阶段（TCP/TLS）超时，与总超时独立，避免坏地址长时间挂起。
-const DEFAULT_API_CONNECT_TIMEOUT_MS: u64 = 30_000;
-const DEFAULT_MAX_RETRIES: u32 = 10;
+/// 超时配置统一由 `crate::http_client` 提供（`API_TIMEOUT_MS` 可调）。
+use crate::http_client::{build_api_http_client, configured_api_timeout_ms};
+pub(crate) const DEFAULT_MAX_RETRIES: u32 = 10;
 
 /// 向导 / CLI 展示用的模型目录（单一事实来源）
 #[derive(Debug, Clone, Copy)]
@@ -258,7 +330,7 @@ impl ZaiClient {
     pub fn new(api_key: String, model: Option<String>) -> Self {
         let model = model.unwrap_or_else(|| "glm-5".to_string());
         Self {
-            client: build_http_client(),
+            client: build_api_http_client(),
             api_key,
             base_url: ZAI_DEFAULT_CODING_ENDPOINT.to_string(),
             model,
@@ -277,23 +349,7 @@ impl ZaiClient {
     }
 }
 
-fn configured_api_timeout_ms() -> u64 {
-    std::env::var("API_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|v| *v >= 1_000)
-        .unwrap_or(DEFAULT_API_TIMEOUT_MS)
-}
-
-fn build_http_client() -> Client {
-    Client::builder()
-        .connect_timeout(Duration::from_millis(DEFAULT_API_CONNECT_TIMEOUT_MS))
-        .timeout(Duration::from_millis(configured_api_timeout_ms()))
-        .build()
-        .unwrap_or_else(|_| Client::new())
-}
-
-fn sanitize_header_token(raw: &str, provider_name: &str) -> Result<String, CoreError> {
+pub(crate) fn sanitize_header_token(raw: &str, provider_name: &str) -> Result<String, CoreError> {
     let token = raw.trim();
     if token.is_empty() {
         return Err(CoreError::LLMError(format!(
@@ -339,7 +395,7 @@ fn normalize_zai_base_url(raw: &str) -> String {
     s
 }
 
-fn provider_label_from_config(config: &ModelConfig) -> String {
+pub(crate) fn provider_label_from_config(config: &ModelConfig) -> String {
     match &config.provider {
         LLMProvider::Custom(s) => {
             let n = normalize_provider_id(s);
@@ -661,7 +717,10 @@ fn zai_thinking_body(config: &ModelConfig) -> Option<Value> {
     }
 }
 
-fn openai_compatible_thinking_body(provider_label: &str, config: &ModelConfig) -> Option<Value> {
+pub(crate) fn openai_compatible_thinking_body(
+    provider_label: &str,
+    config: &ModelConfig,
+) -> Option<Value> {
     if provider_label == "z.ai" {
         return zai_thinking_body(config);
     }
@@ -686,7 +745,7 @@ fn deepseek_thinking_body(config: &ModelConfig) -> Option<Value> {
 /// DeepSeek 推理强度：V4 Flash 支持 `low|high|max`（Pro 支持 `high|max`）。
 /// 默认 `low`（避免长会话每轮长时间前置思考）；可用 config `reasoning_effort`
 /// 或 `ANYCODE_DEEPSEEK_REASONING_EFFORT=low|high|max` 覆盖（环境变量优先）。
-fn openai_compatible_reasoning_effort(
+pub(crate) fn openai_compatible_reasoning_effort(
     provider_label: &str,
     config: &ModelConfig,
 ) -> Option<String> {
@@ -1241,43 +1300,37 @@ impl LLMClient for ZaiClient {
         let stream_tools = tools.clone();
 
         tokio::spawn(async move {
-            let response = match client
-                .post(&base_url)
-                .header("Authorization", format!("Bearer {}", auth_key))
-                .json(&body)
-                .send()
-                .await
+            let response = match post_stream_with_retries(
+                &client,
+                &base_url,
+                &auth_key,
+                &body,
+                &provider_label,
+            )
+            .await
             {
                 Ok(r) => r,
                 Err(e) => {
                     error!("{} stream request failed: {}", provider_label, e);
-                    let _ = tx.send(StreamEvent::Done).await;
+                    let _ = tx.send(StreamEvent::Failed(e.to_string())).await;
                     return;
                 }
             };
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                error!(
-                    "{} stream HTTP error: {} {}",
-                    provider_label,
-                    status,
-                    &body[..body.len().min(500)]
-                );
-                let _ = tx.send(StreamEvent::Done).await;
-                return;
-            }
-
             let mut stream = response.bytes_stream();
             let mut sse_buf = SseLineBuffer::new();
             let mut stream_state = OpenAiCompatStreamState::new(stream_tools);
+            // 终止标记：`[DONE]` 或任一 choice 的 finish_reason 非 null；
+            // 无终止标记即结束 = 中途截断，上报 Failed 而非当作完整回复。
+            let mut saw_terminal = false;
+            let mut read_failure: Option<String> = None;
 
             'read: while let Some(chunk_res) = stream.next().await {
                 let chunk = match chunk_res {
                     Ok(c) => c,
                     Err(e) => {
                         error!("{} stream read: {}", provider_label, e);
+                        read_failure = Some(e.to_string());
                         break;
                     }
                 };
@@ -1286,12 +1339,21 @@ impl LLMClient for ZaiClient {
                 };
                 for line_ev in sse_buf.push_str(text) {
                     let data = match line_ev {
-                        SseDataLine::Done => break 'read,
+                        SseDataLine::Done => {
+                            saw_terminal = true;
+                            break 'read;
+                        }
                         SseDataLine::Payload(s) => s,
                     };
                     let Ok(val) = serde_json::from_str::<Value>(&data) else {
                         continue;
                     };
+                    if val
+                        .pointer("/choices/0/finish_reason")
+                        .is_some_and(|f| !f.is_null())
+                    {
+                        saw_terminal = true;
+                    }
                     if emit_openai_sse_with_state(&val, &tx, &mut stream_state).await {
                         return;
                     }
@@ -1299,14 +1361,43 @@ impl LLMClient for ZaiClient {
             }
 
             for line_ev in sse_buf.finish() {
-                let SseDataLine::Payload(data) = line_ev else {
-                    break;
-                };
-                if let Ok(val) = serde_json::from_str::<Value>(&data) {
-                    if emit_openai_sse_with_state(&val, &tx, &mut stream_state).await {
-                        return;
+                match line_ev {
+                    SseDataLine::Done => {
+                        saw_terminal = true;
+                        break;
+                    }
+                    SseDataLine::Payload(data) => {
+                        let Ok(val) = serde_json::from_str::<Value>(&data) else {
+                            continue;
+                        };
+                        if val
+                            .pointer("/choices/0/finish_reason")
+                            .is_some_and(|f| !f.is_null())
+                        {
+                            saw_terminal = true;
+                        }
+                        if emit_openai_sse_with_state(&val, &tx, &mut stream_state).await {
+                            return;
+                        }
                     }
                 }
+            }
+
+            if let Some(err) = read_failure {
+                let _ = tx
+                    .send(StreamEvent::Failed(format!(
+                        "{provider_label} stream read interrupted: {err}"
+                    )))
+                    .await;
+                return;
+            }
+            if !saw_terminal {
+                let _ = tx
+                    .send(StreamEvent::Failed(format!(
+                        "{provider_label} stream ended before completion marker ([DONE]/finish_reason)"
+                    )))
+                    .await;
+                return;
             }
 
             if flush_openai_sse_state(&tx, &mut stream_state).await {

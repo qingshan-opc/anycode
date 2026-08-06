@@ -19,11 +19,19 @@ pub struct AnthropicSseStreamState {
     output_tokens: Option<u32>,
     cache_creation_tokens: Option<u32>,
     cache_read_tokens: Option<u32>,
+    /// 是否已收到 `message_stop` —— Anthropic 流的唯一正常终止标记；
+    /// 字节流在此之前结束即中途截断。
+    saw_message_stop: bool,
 }
 
 impl AnthropicSseStreamState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 流是否正常走完（收到 `message_stop`）。
+    pub fn is_complete(&self) -> bool {
+        self.saw_message_stop
     }
 
     pub fn push_json_str(&mut self, data: &str) -> Result<Vec<StreamEvent>, serde_json::Error> {
@@ -105,7 +113,10 @@ impl AnthropicSseStreamState {
                     }
                 }
             }
-            "message_stop" | "ping" => {}
+            "message_stop" => {
+                self.saw_message_stop = true;
+            }
+            "ping" => {}
             "message_start" | "message_delta" => {
                 if let Some(usage_ev) = self.extract_usage_event(value) {
                     out.push(usage_ev);
@@ -170,6 +181,15 @@ impl AnthropicSseStreamState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_stop_marks_stream_complete() {
+        let mut s = AnthropicSseStreamState::new();
+        assert!(!s.is_complete());
+        let r = s.push_value(&serde_json::json!({ "type": "message_stop" }));
+        assert!(r.is_empty());
+        assert!(s.is_complete());
+    }
 
     #[test]
     fn text_delta_emits() {

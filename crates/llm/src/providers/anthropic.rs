@@ -1,4 +1,5 @@
 use super::anthropic_stream::AnthropicSseStreamState;
+use crate::http_client::build_api_http_client;
 use crate::http_retry::{
     evaluate_http_retry, evaluate_network_retry, retry_after_header_ms, retry_exhausted_error,
     sleep_retry_delay,
@@ -6,6 +7,7 @@ use crate::http_retry::{
 use crate::retry_strategy::ProviderRetryConfig;
 use crate::sse_data_lines::{SseDataLine, SseLineBuffer};
 use anycode_core::prelude::*;
+use anycode_core::{LlmRetryObserver, QuerySource};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -27,7 +29,8 @@ impl AnthropicClient {
         }
 
         Ok(Self {
-            client: Client::new(),
+            // 裸 `Client::new()` 无超时：stalled 连接会把一轮对话无限挂起，统一走共享构建器。
+            client: build_api_http_client(),
             api_key,
             base_url: "https://api.anthropic.com/v1/messages".to_string(),
         })
@@ -168,47 +171,44 @@ impl LLMClient for AnthropicClient {
             .base_url
             .clone()
             .unwrap_or_else(|| self.base_url.clone());
+        let source = config.query_source;
+        let model = config.model.clone();
+        let observer = config.retry_observer.clone();
 
         tokio::spawn(async move {
-            let response = match client
-                .post(&base_url)
-                .header("x-api-key", &api_key)
-                .header("anthropic-version", "2023-06-01")
-                .json(&request)
-                .send()
-                .await
+            // 建连/HTTP 层失败与非流式 `chat` 一样走结构化重试；耗尽后显式发
+            // Failed，让调用方丢弃部分结果并降级（此前静默发 Done，429/529
+            // 会被当作空回复接受）。
+            let response = match post_stream_open_with_retries(
+                &client,
+                &base_url,
+                &api_key,
+                &request,
+                source,
+                &model,
+                observer.as_deref(),
+            )
+            .await
             {
                 Ok(resp) => resp,
                 Err(e) => {
                     error!("Stream request failed: {}", e);
-                    let _ = tx.send(StreamEvent::Done).await;
+                    let _ = tx.send(StreamEvent::Failed(e.to_string())).await;
                     return;
                 }
             };
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_default()
-                    .chars()
-                    .take(600)
-                    .collect::<String>();
-                error!("Stream API error: {status} body={body}");
-                let _ = tx.send(StreamEvent::Done).await;
-                return;
-            }
-
             let mut stream = response.bytes_stream();
             let mut line_buf = SseLineBuffer::new();
             let mut anth = AnthropicSseStreamState::new();
+            let mut read_failure: Option<String> = None;
 
             'read: while let Some(chunk_res) = stream.next().await {
                 let chunk = match chunk_res {
                     Ok(c) => c,
                     Err(e) => {
                         error!("Stream error: {}", e);
+                        read_failure = Some(e.to_string());
                         break;
                     }
                 };
@@ -247,6 +247,23 @@ impl LLMClient for AnthropicClient {
                     }
                 }
             }
+
+            if let Some(err) = read_failure {
+                let _ = tx
+                    .send(StreamEvent::Failed(format!(
+                        "Anthropic stream read interrupted: {err}"
+                    )))
+                    .await;
+                return;
+            }
+            if !anth.is_complete() {
+                let _ = tx
+                    .send(StreamEvent::Failed(
+                        "Anthropic stream ended before message_stop".to_string(),
+                    ))
+                    .await;
+                return;
+            }
             let _ = tx.send(StreamEvent::Done).await;
         });
 
@@ -254,10 +271,73 @@ impl LLMClient for AnthropicClient {
     }
 }
 
+/// 流式建连（POST → 2xx 响应）带与 `chat` 相同的结构化重试；耗尽返回 Err，
+/// 由调用方转成 `StreamEvent::Failed` 上报。
+async fn post_stream_open_with_retries(
+    client: &Client,
+    base_url: &str,
+    api_key: &str,
+    request: &AnthropicRequest,
+    source: QuerySource,
+    model: &str,
+    observer: Option<&dyn LlmRetryObserver>,
+) -> Result<reqwest::Response, CoreError> {
+    const MAX_RETRIES: u32 = 8;
+    let provider_cfg = ProviderRetryConfig::anthropic();
+    let mut attempt: u32 = 0;
+    let mut consecutive_overload = 0u32;
+    let mut last_err: String;
+    loop {
+        attempt += 1;
+        let response = match client
+            .post(base_url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(request)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = e.to_string();
+                let out = evaluate_network_retry(&provider_cfg, source, attempt);
+                if out.should_retry && attempt <= MAX_RETRIES {
+                    sleep_retry_delay(out.delay, attempt, model, source, observer).await;
+                    continue;
+                }
+                return Err(retry_exhausted_error("Anthropic", &last_err));
+            }
+        };
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+
+        let retry_after_ms = retry_after_header_ms(response.headers());
+        let error_text = response.text().await.unwrap_or_default();
+        last_err = format!("Stream API error: {status} - {error_text}");
+        let out = evaluate_http_retry(
+            &provider_cfg,
+            source,
+            status,
+            &error_text,
+            attempt,
+            consecutive_overload,
+            retry_after_ms,
+        );
+        consecutive_overload = out.consecutive_overload;
+        if out.should_retry && attempt <= MAX_RETRIES {
+            sleep_retry_delay(out.delay, attempt, model, source, observer).await;
+            continue;
+        }
+        return Err(CoreError::LLMError(last_err));
+    }
+}
+
 // ============================================================================
 // Anthropic Types
 // ============================================================================
-
 #[derive(Debug, Serialize)]
 pub(crate) struct AnthropicRequest {
     pub(crate) model: String,
