@@ -13,11 +13,12 @@ from pathlib import Path
 BASE_URL = "https://anycode.work/downloads"
 
 # anyCode_0.40.0_aarch64.dmg | anyCode_0.40.0_x86_64.dmg | anyCode_0.40.0_x64.msi|exe
+# | anyCode_0.40.0_x86_64.AppImage
 VERSIONED_RE = re.compile(
-    r"^anyCode_(?P<version>\d+\.\d+\.\d+)_(?P<arch>aarch64|x86_64|x64)\.(?P<ext>dmg|msi|exe)$"
+    r"^anyCode_(?P<version>\d+\.\d+\.\d+)_(?P<arch>aarch64|x86_64|x64)\.(?P<ext>dmg|msi|exe|AppImage)$"
 )
 LATEST_RE = re.compile(
-    r"^anyCode_latest_(?P<arch>aarch64|x86_64|x64)\.(?P<ext>dmg|msi|exe)$"
+    r"^anyCode_latest_(?P<arch>aarch64|x86_64|x64)\.(?P<ext>dmg|msi|exe|AppImage)$"
 )
 
 ARCH_TO_PLATFORM = {
@@ -25,7 +26,20 @@ ARCH_TO_PLATFORM = {
     ("x86_64", "dmg"): "macos-x86_64",
     ("x64", "msi"): "windows-x64",
     ("x64", "exe"): "windows-x64",
+    ("x86_64", "AppImage"): "linux-x86_64",
 }
+
+# Retention: keep only the newest N versions per platform (flat installers and
+# their updater counterparts under update/). latest_* pointers are untouched.
+KEEP_VERSIONS = 3
+
+# Updater artifacts live under update/ and follow these names:
+#   anyCode_<ver>_<arch>.app.tar.gz(+.sig)   -> darwin-<arch>
+#   anyCode_<ver>_x64-setup.exe.sig          -> windows-x86_64 (exe itself stays flat)
+#   anyCode_<ver>_x86_64.AppImage.sig        -> linux-x86_64   (AppImage stays flat)
+UPDATE_TARBALL_RE = re.compile(
+    r"^anyCode_(?P<version>\d+\.\d+\.\d+)_(?P<arch>aarch64|x86_64)\.app\.tar\.gz$"
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -44,12 +58,147 @@ def version_key(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.split("."))
 
 
+def prune_old_versions(download_dir: Path) -> None:
+    """Keep only the newest KEEP_VERSIONS versions per platform; delete older
+    flat installers and their updater counterparts under update/."""
+    by_platform: dict[str, set[str]] = {}
+    for path in download_dir.iterdir():
+        if not path.is_file():
+            continue
+        m = VERSIONED_RE.match(path.name)
+        if not m:
+            continue
+        platform = platform_for(m.group("arch"), m.group("ext"))
+        if platform:
+            by_platform.setdefault(platform, set()).add(m.group("version"))
+
+    stale: dict[str, set[str]] = {}
+    for platform, versions in by_platform.items():
+        ordered = sorted(versions, key=version_key, reverse=True)
+        old = set(ordered[KEEP_VERSIONS:])
+        if old:
+            stale[platform] = old
+    if not stale:
+        return
+
+    for path in download_dir.iterdir():
+        if not path.is_file():
+            continue
+        m = VERSIONED_RE.match(path.name)
+        if not m:
+            continue
+        platform = platform_for(m.group("arch"), m.group("ext"))
+        if platform and m.group("version") in stale.get(platform, set()):
+            print(f"prune: {path.name}")
+            path.unlink()
+
+    update_dir = download_dir / "update"
+    if update_dir.is_dir():
+        for path in update_dir.iterdir():
+            if not path.is_file():
+                continue
+            name = path.name.removesuffix(".sig")
+            version: str | None = None
+            platform: str | None = None
+            m = UPDATE_TARBALL_RE.match(name)
+            if m:
+                version, platform = m.group("version"), f"macos-{m.group('arch')}"
+            elif re.match(r"^anyCode_\d+\.\d+\.\d+_x64-setup\.exe$", name):
+                version = name.split("_")[1]
+                platform = "windows-x64"
+            elif re.match(r"^anyCode_\d+\.\d+\.\d+_x86_64\.AppImage$", name):
+                version = name.split("_")[1]
+                platform = "linux-x86_64"
+            if platform and version and version in stale.get(platform, set()):
+                print(f"prune: update/{path.name}")
+                path.unlink()
+
+
+def write_tauri_update_manifest(download_dir: Path) -> None:
+    """Emit update/latest.json in the Tauri updater schema:
+    {version, notes, pub_date, platforms: {<target>: {signature, url}}}."""
+    update_dir = download_dir / "update"
+    if not update_dir.is_dir():
+        return
+
+    platforms: dict[str, dict] = {}
+    newest_mtime = 0.0
+
+    def sig_text(artifact: Path) -> str | None:
+        sig = artifact.with_name(artifact.name + ".sig")
+        if not sig.is_file():
+            return None
+        return sig.read_text(encoding="utf-8").strip()
+
+    for path in sorted(update_dir.iterdir()):
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.endswith(".sig") or name == "latest.json":
+            continue
+        m = UPDATE_TARBALL_RE.match(name)
+        if m:
+            signature = sig_text(path)
+            if not signature:
+                print(f"warn: {name} has no .sig — skipped in update manifest")
+                continue
+            platforms[f"darwin-{m.group('arch')}"] = {
+                "signature": signature,
+                "url": f"{BASE_URL}/update/{name}",
+            }
+            newest_mtime = max(newest_mtime, path.stat().st_mtime)
+
+    # Windows / Linux: signature-only entries under update/, artifact stays flat.
+    for sig in sorted(update_dir.glob("*.sig")):
+        base = sig.name[: -len(".sig")]
+        m = re.match(r"^anyCode_(?P<version>\d+\.\d+\.\d+)_x64-setup\.exe$", base)
+        if m:
+            flat = download_dir / f"anyCode_{m.group('version')}_x64.exe"
+            if flat.is_file():
+                platforms["windows-x86_64"] = {
+                    "signature": sig.read_text(encoding="utf-8").strip(),
+                    "url": f"{BASE_URL}/{flat.name}",
+                }
+                newest_mtime = max(newest_mtime, sig.stat().st_mtime)
+            continue
+        m = re.match(r"^anyCode_(?P<version>\d+\.\d+\.\d+)_x86_64\.AppImage$", base)
+        if m:
+            flat = download_dir / f"anyCode_{m.group('version')}_x86_64.AppImage"
+            if flat.is_file():
+                platforms["linux-x86_64"] = {
+                    "signature": sig.read_text(encoding="utf-8").strip(),
+                    "url": f"{BASE_URL}/{flat.name}",
+                }
+                newest_mtime = max(newest_mtime, sig.stat().st_mtime)
+
+    if not platforms:
+        return
+
+    versions = [
+        re.search(r"\d+\.\d+\.\d+", p["url"]).group(0)  # type: ignore[union-attr]
+        for p in platforms.values()
+    ]
+    manifest = {
+        "version": max(versions, key=version_key),
+        "notes": "",
+        "pub_date": datetime.fromtimestamp(newest_mtime, timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "platforms": platforms,
+    }
+    out = update_dir / "latest.json"
+    out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {out} ({', '.join(sorted(platforms))})")
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: regen-downloads-manifest.py <downloads_dir>", file=sys.stderr)
         return 2
     download_dir = Path(sys.argv[1])
     download_dir.mkdir(parents=True, exist_ok=True)
+
+    prune_old_versions(download_dir)
 
     artifacts: list[dict] = []
     checksum_lines: list[str] = []
@@ -162,6 +311,8 @@ def main() -> int:
         "\n".join(checksum_lines) + ("\n" if checksum_lines else ""),
         encoding="utf-8",
     )
+
+    write_tauri_update_manifest(download_dir)
 
     print(f"wrote {download_dir / 'releases.json'} ({len(artifacts)} artifacts)")
     print(f"platforms: {', '.join(sorted(platforms)) or '(none)'}")

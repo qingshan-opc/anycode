@@ -13,6 +13,7 @@ import { docsHomeUrl, helpGuideUrl } from "@/lib/docLinks";
 import { ExternalNavLink } from "@/components/ExternalNavLink";
 import { useSseStatus } from "@/context/SseContext";
 import { FeatureRouteSync } from "@/components/control-center/FeatureRouteSync";
+import { DesktopUpdateBanner } from "@/components/DesktopUpdateBanner";
 import { ControlCenterProvider } from "@/context/ControlCenterContext";
 import { ConversationShellProvider, useConversationShell } from "@/context/ConversationShellContext";
 import { api } from "@/api/client";
@@ -170,6 +171,7 @@ export function Layout() {
   return (
     <ControlCenterProvider>
       <FeatureRouteSync />
+      <DesktopUpdateBanner />
       {isFullPageRoute ? <StandardShell /> : <SessionFirstShell />}
     </ControlCenterProvider>
   );

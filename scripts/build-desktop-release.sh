@@ -11,6 +11,15 @@ source "$ROOT/scripts/lib/build-target.sh"
 anycode_apply_build_target_exports
 anycode_print_build_target_summary
 
+# Updater 签名与公证凭证：`cargo tauri build` 阶段就需要
+# TAURI_SIGNING_PRIVATE_KEY(_PATH)（updater artifacts 在 bundling 时签名），
+# 不能等到构建后的公证段落才加载。
+REL_ENV="${ANYCODE_RELEASE_ENV:-$HOME/.anycode/release.env}"
+if [[ -f "$REL_ENV" ]]; then
+  # shellcheck source=/dev/null
+  source "$REL_ENV"
+fi
+
 if [[ "$(uname -s)" == "Darwin" ]]; then
   export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
   export CMAKE_OSX_DEPLOYMENT_TARGET="${CMAKE_OSX_DEPLOYMENT_TARGET:-10.15}"
@@ -357,6 +366,20 @@ if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" && "${APPLE_
   if [[ -d "$APP_BUNDLE" && -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
     step "deep-sign bundled binaries (resources/bin, native modules)" "$ROOT/scripts/codesign-mac-app-deep.sh" "$APP_BUNDLE"
     step "notarize + staple" "$ROOT/scripts/notarize-mac-app.sh" "$APP_BUNDLE"
+    # In-place updater: the tarball the tauri CLI emitted during `cargo tauri build`
+    # contains the PRE-notarization .app. Regenerate it from the final stapled
+    # bundle and sign it with the updater key so we never ship an unnotarized app.
+    if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+      step "regenerate updater tarball from stapled .app" bash -ec "
+        cd '$(dirname "$APP_BUNDLE")'
+        rm -f anyCode.app.tar.gz anyCode.app.tar.gz.sig
+        tar -czf anyCode.app.tar.gz anyCode.app
+      "
+      step "sign updater tarball" bash -ec "
+        cd '$ROOT/apps/anycode-desktop'
+        cargo tauri signer sign '$(dirname "$APP_BUNDLE")/anyCode.app.tar.gz'
+      "
+    fi
   fi
 fi
 

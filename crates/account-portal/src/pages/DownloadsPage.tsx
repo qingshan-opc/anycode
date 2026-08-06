@@ -4,7 +4,7 @@ import { DESKTOP_DOWNLOAD_URL } from "../lib/desktopDownload";
 import { formatMessage, useT } from "../i18n/context";
 import { SITE_PATHS, siteUrl } from "@anycode/site-urls";
 
-type PlatformId = "macos-aarch64" | "macos-x86_64" | "windows-x64";
+type PlatformId = "macos-aarch64" | "macos-x86_64" | "windows-x64" | "linux-x86_64";
 
 type Artifact = {
   platform: PlatformId | string;
@@ -45,11 +45,11 @@ type LatestManifest = {
   platforms?: Record<string, PlatformInfo>;
 };
 
-const PLATFORM_ORDER: PlatformId[] = ["macos-aarch64", "macos-x86_64", "windows-x64"];
+const PLATFORM_ORDER: PlatformId[] = ["macos-aarch64", "macos-x86_64", "windows-x64", "linux-x86_64"];
 
 const GITHUB_RELEASE = "https://github.com/qingjiuzys/anycode/releases";
 
-function platformLabelKey(id: PlatformId): "downloads.platformMacArm" | "downloads.platformMacIntel" | "downloads.platformWindows" {
+function platformLabelKey(id: PlatformId): "downloads.platformMacArm" | "downloads.platformMacIntel" | "downloads.platformWindows" | "downloads.platformLinux" {
   switch (id) {
     case "macos-aarch64":
       return "downloads.platformMacArm";
@@ -57,6 +57,8 @@ function platformLabelKey(id: PlatformId): "downloads.platformMacArm" | "downloa
       return "downloads.platformMacIntel";
     case "windows-x64":
       return "downloads.platformWindows";
+    case "linux-x86_64":
+      return "downloads.platformLinux";
   }
 }
 

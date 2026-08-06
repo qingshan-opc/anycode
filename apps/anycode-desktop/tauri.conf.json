@@ -35,7 +35,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -78,12 +78,13 @@
       }
     },
     "updater": {
-      "active": true,
-      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBQzZDRjgwNzM3NjJFQkYKUldTL0xuWnpnTS9HbWtMMGZLam5kK3d6M2JKWW5jbnRuVENDdEdTQWtFdDdJWVF6NWdEN0pENlcK",
       "endpoints": [
-        "https://github.com/qingjiuzys/anycode/releases/latest/download/latest.json"
+        "https://anycode.work/downloads/update/latest.json"
       ],
-      "pubkey": ""
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

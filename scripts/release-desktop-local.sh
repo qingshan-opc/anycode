@@ -156,6 +156,19 @@ LATEST="$DOWNLOAD_DIR/anyCode_latest_${ARCH_TAG}.dmg"
 cp -f "$DMG" "$STAGED"
 cp -f "$DMG" "$LATEST"
 
+# Stage in-place updater artifacts (regenerated post-notarize by
+# build-desktop-release.sh when TAURI_SIGNING_PRIVATE_KEY is set).
+UPDATE_DIR="$DOWNLOAD_DIR/update"
+mkdir -p "$UPDATE_DIR"
+TARBALL="$(dirname "$DMG")/../macos/anyCode.app.tar.gz"
+if [[ -f "$TARBALL" && -f "$TARBALL.sig" ]]; then
+  cp -f "$TARBALL" "$UPDATE_DIR/anyCode_${VERSION}_${ARCH_TAG}.app.tar.gz"
+  cp -f "$TARBALL.sig" "$UPDATE_DIR/anyCode_${VERSION}_${ARCH_TAG}.app.tar.gz.sig"
+  echo "  Updater:  $UPDATE_DIR/anyCode_${VERSION}_${ARCH_TAG}.app.tar.gz"
+else
+  echo "WARNING: updater tarball/sig missing — update manifest will skip darwin-${ARCH_TAG}" >&2
+fi
+
 python3 "$ROOT/scripts/lib/regen-downloads-manifest.py" "$DOWNLOAD_DIR"
 
 echo ""

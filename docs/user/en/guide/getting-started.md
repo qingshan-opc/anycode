@@ -35,10 +35,12 @@ For headless installs (`anycode-daemon`), open **`http://127.0.0.1:43180`** in y
 
 ## Step 3: First-time setup
 
-On first launch you'll see the **setup wizard** (`/setup`):
+On first launch, if no model is configured yet, you'll be taken to the **setup wizard** (`/setup`):
 
-1. Pick a model provider and enter your API key (BYOK — keys stay on your machine)
-2. Optionally enable memory and vector search
+1. Pick a model provider preset and paste your API key (BYOK — keys stay on your machine)
+2. Save and run the connection test, then finish — memory and other options can be changed later in **Settings**
+
+Skipping the wizard lands you on Home, where a banner links back to `/setup` until a model is configured.
 
 ![Setup wizard](/docs/assets/screenshots/setup.png)
 *Setup wizard — model and API key*

@@ -75,6 +75,18 @@ if EXE="$(pick_artifact nsis "${2:-}")"; then
   cp -f "$EXE" "$DOWNLOAD_DIR/anyCode_latest_x64.exe"
   echo "Staged NSIS: $DEST"
   STAGED_ANY=1
+
+  # In-place updater: the tauri CLI signs the NSIS exe (anyCode_<ver>_x64-setup.exe.sig)
+  # when TAURI_SIGNING_PRIVATE_KEY is set at build time. Stage the signature under
+  # update/ — the Tauri manifest URL points at the flat exe staged above.
+  UPDATE_DIR="$DOWNLOAD_DIR/update"
+  mkdir -p "$UPDATE_DIR"
+  if [[ -f "$EXE.sig" ]]; then
+    cp -f "$EXE.sig" "$UPDATE_DIR/anyCode_${VERSION}_x64-setup.exe.sig"
+    echo "Staged NSIS sig: $UPDATE_DIR/anyCode_${VERSION}_x64-setup.exe.sig"
+  else
+    echo "WARNING: $EXE.sig missing — update manifest will skip windows-x86_64" >&2
+  fi
 fi
 
 if [[ "$STAGED_ANY" -eq 0 ]]; then

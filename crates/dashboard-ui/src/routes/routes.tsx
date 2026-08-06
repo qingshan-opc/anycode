@@ -19,6 +19,7 @@ import {
   shouldOpenControlCenterForLocation,
 } from "@/lib/controlCenterPaths";
 import { CloudLoginPage } from "@/pages/CloudLoginPage";
+import { SetupPage } from "@/pages/SetupPage";
 import {
   AgentsPage,
   ArtifactDetailPage,
@@ -118,6 +119,11 @@ export const setupRoute = createRoute({
   },
   beforeLoad: ({ search }) => {
     const step = search.step?.trim() ?? "";
+    // 仅 legacy 链接（带 step/section 参数）重定向到 /settings；
+    // 裸 /setup 进入首次上手引导页（SetupPage）。
+    if (!step && !search.section) {
+      return;
+    }
     let section: SettingsSection = "model";
     if (step === "memory") {
       section = "data";
@@ -135,6 +141,7 @@ export const setupRoute = createRoute({
       replace: true,
     });
   },
+  component: SetupPage,
 });
 
 export const indexRoute = createRoute({
