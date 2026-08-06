@@ -22,6 +22,7 @@ pub struct MultiProviderLlmClient {
     anthropic: Option<Arc<dyn LLMClient>>,
     bedrock: Option<Arc<dyn LLMClient>>,
     github_copilot: Option<Arc<dyn LLMClient>>,
+    openai_responses: Option<Arc<dyn LLMClient>>,
 }
 
 impl MultiProviderLlmClient {
@@ -30,12 +31,14 @@ impl MultiProviderLlmClient {
         anthropic: Option<Arc<dyn LLMClient>>,
         bedrock: Option<Arc<dyn LLMClient>>,
         github_copilot: Option<Arc<dyn LLMClient>>,
+        openai_responses: Option<Arc<dyn LLMClient>>,
     ) -> Self {
         Self {
             chat_completions,
             anthropic,
             bedrock,
             github_copilot,
+            openai_responses,
         }
     }
 
@@ -88,6 +91,15 @@ impl LLMClient for MultiProviderLlmClient {
                 };
                 g.chat(messages, tools, config).await
             }
+            LlmTransport::OpenAiResponses => {
+                let Some(ref r) = self.openai_responses else {
+                    return Err(CoreError::LLMError(
+                        "未初始化 OpenAI Responses 客户端（检查 provider / api_key / base_url）"
+                            .to_string(),
+                    ));
+                };
+                r.chat(messages, tools, config).await
+            }
         }
     }
 
@@ -129,6 +141,14 @@ impl LLMClient for MultiProviderLlmClient {
                     ));
                 };
                 g.chat_stream(messages, tools, config).await
+            }
+            LlmTransport::OpenAiResponses => {
+                let Some(ref r) = self.openai_responses else {
+                    return Err(CoreError::LLMError(
+                        "未初始化 OpenAI Responses 客户端".to_string(),
+                    ));
+                };
+                r.chat_stream(messages, tools, config).await
             }
         }
     }

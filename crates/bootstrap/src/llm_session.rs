@@ -14,16 +14,18 @@ pub fn effective_provider(global: &str, profile: Option<&ModelProfile>) -> Strin
     )
 }
 
-pub fn scan_session_llm_needs(config: &Config) -> (bool, bool, bool, bool) {
+pub fn scan_session_llm_needs(config: &Config) -> (bool, bool, bool, bool, bool) {
     let mut need_openai = false;
     let mut need_anthropic = false;
     let mut need_bedrock = false;
     let mut need_github_copilot = false;
+    let mut need_openai_responses = false;
     let mut note = |pid: &str| match transport_for_provider_id(pid) {
         LlmTransport::OpenAiChatCompletions => need_openai = true,
         LlmTransport::AnthropicMessages => need_anthropic = true,
         LlmTransport::BedrockConverse => need_bedrock = true,
         LlmTransport::GithubCopilot => need_github_copilot = true,
+        LlmTransport::OpenAiResponses => need_openai_responses = true,
     };
     note(&normalize_provider_id(&config.llm.provider));
     if let Some(ref d) = config.routing.default {
@@ -42,6 +44,7 @@ pub fn scan_session_llm_needs(config: &Config) -> (bool, bool, bool, bool) {
         need_anthropic,
         need_bedrock,
         need_github_copilot,
+        need_openai_responses,
     )
 }
 
@@ -179,6 +182,45 @@ pub fn resolve_github_copilot_primary_config(config: &Config) -> anyhow::Result<
     })
 }
 
+/// OpenAI Responses（DeepSeek `/responses`）会话级配置。
+/// 凭证回退链：全局（当全局即该 transport）→ `provider_credentials["deepseek_responses"]`
+/// → `provider_credentials["deepseek"]`（与 Chat Completions 协议共用同一把 key）。
+pub fn resolve_openai_responses_primary_config(config: &Config) -> anyhow::Result<ProviderConfig> {
+    let g = normalize_provider_id(&config.llm.provider);
+    let is_responses = transport_for_provider_id(&g) == LlmTransport::OpenAiResponses;
+    let api_key = if is_responses && !config.llm.api_key.trim().is_empty() {
+        config.llm.api_key.clone()
+    } else {
+        config
+            .llm
+            .provider_credentials
+            .get("deepseek_responses")
+            .or(config.llm.provider_credentials.get("deepseek"))
+            .cloned()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "deepseek_responses provider_credentials（或 deepseek）api_key required for routing"
+                )
+            })?
+    };
+    Ok(ProviderConfig {
+        provider: "deepseek_responses".to_string(),
+        api_key,
+        // 仅当全局即 Responses transport 时继承全局 base_url；否则用客户端默认
+        // （https://api.deepseek.com/responses），避免 z.ai 等网关 URL 泄漏到 /responses。
+        base_url: if is_responses {
+            config.llm.base_url.clone()
+        } else {
+            None
+        },
+        model: config.llm.model.clone(),
+        temperature: Some(config.llm.temperature),
+        max_tokens: Some(config.llm.max_tokens),
+        zai_tool_choice_first_turn: false,
+    })
+}
+
 pub fn resolve_profile_api_key(
     config: &Config,
     profile: &ModelProfile,
@@ -222,6 +264,7 @@ pub fn resolve_agent_base_url(
         LlmTransport::AnthropicMessages
             | LlmTransport::GithubCopilot
             | LlmTransport::BedrockConverse
+            | LlmTransport::OpenAiResponses
     ) {
         // The global base_url belongs to the global provider — only inherit it
         // when both speak the same transport, never across providers.
@@ -324,11 +367,24 @@ mod tests {
     #[test]
     fn scan_zai_only_needs_openai_compat() {
         let c = base_config();
-        let (o, a, b, cp) = scan_session_llm_needs(&c);
+        let (o, a, b, cp, r) = scan_session_llm_needs(&c);
         assert!(o);
         assert!(!a);
         assert!(!b);
         assert!(!cp);
+        assert!(!r);
+    }
+
+    #[test]
+    fn scan_responses_global_needs_openai_responses() {
+        let mut c = base_config();
+        c.llm.provider = "deepseek_responses".to_string();
+        let (o, a, b, cp, r) = scan_session_llm_needs(&c);
+        assert!(!o);
+        assert!(!a);
+        assert!(!b);
+        assert!(!cp);
+        assert!(r);
     }
 
     #[test]
@@ -347,11 +403,41 @@ mod tests {
                 base_url: None,
             },
         );
-        let (o, a, b, cp) = scan_session_llm_needs(&c);
+        let (o, a, b, cp, r) = scan_session_llm_needs(&c);
         assert!(o, "global z.ai");
         assert!(a, "plan agent uses anthropic");
         assert!(!b);
         assert!(!cp);
+        assert!(!r);
+    }
+
+    #[test]
+    fn responses_config_falls_back_to_deepseek_credential() {
+        let mut c = base_config();
+        c.llm
+            .provider_credentials
+            .insert("deepseek".into(), "sk-ds".into());
+        let cfg = resolve_openai_responses_primary_config(&c).unwrap();
+        assert_eq!(cfg.api_key, "sk-ds");
+        assert_eq!(cfg.provider, "deepseek_responses");
+        // 全局是 z.ai，base_url 不得继承（防网关 URL 泄漏到 /responses）
+        assert_eq!(cfg.base_url, None);
+    }
+
+    #[test]
+    fn responses_profile_does_not_inherit_zai_base_url() {
+        let mut c = base_config();
+        c.llm.base_url = Some("https://open.bigmodel.cn/api/paas/v4/chat/completions".into());
+        let p = ModelProfile {
+            provider: Some("deepseek_responses".to_string()),
+            plan: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            base_url: None,
+            api_key: None,
+        };
+        assert_eq!(resolve_agent_base_url(&c, &p, &None), None);
     }
 
     #[test]

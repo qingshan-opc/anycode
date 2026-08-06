@@ -17,6 +17,9 @@ pub enum LlmTransport {
     BedrockConverse,
     /// GitHub Copilot：用 GitHub token 换 Copilot token，再以 Anthropic Messages 兼容路径调用（Claude 系）。
     GithubCopilot,
+    /// OpenAI Responses API（`/responses`，结构化 input items + `response.*` 语义流事件）。
+    /// `previous_response_id` 链式续接按端点能力开关（DeepSeek `/responses` 当前无状态）。
+    OpenAiResponses,
 }
 
 /// 写入 `config.json` 的 `provider` 字段时使用的规范 id（小写、稳定）。
@@ -140,6 +143,14 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         hint: Some("V4 Pro/Flash · OpenAI 兼容 · api-docs.deepseek.com"),
         transport: LlmTransport::OpenAiChatCompletions,
         suggested_openai_base: Some("https://api.deepseek.com/chat/completions"),
+        placeholder_only: false,
+    },
+    ProviderCatalogEntry {
+        id: "deepseek_responses",
+        label: "DeepSeek (Responses API)",
+        hint: Some("V4 Flash · /responses · reasoning item 回传 · 无状态"),
+        transport: LlmTransport::OpenAiResponses,
+        suggested_openai_base: Some("https://api.deepseek.com/responses"),
         placeholder_only: false,
     },
     ProviderCatalogEntry {
@@ -419,6 +430,9 @@ pub fn normalize_provider_id(raw: &str) -> String {
         "opencodego" => "opencode_go".to_string(),
         "glm" => "z.ai".to_string(),
         "deep_seek" | "deepseek_ai" | "deepseek_chat" => "deepseek".to_string(),
+        "deepseek_responses_api" | "deepseek_rsp" | "deepseek_response" => {
+            "deepseek_responses".to_string()
+        }
         "grok" | "x_ai" | "grok_api" => "xai".to_string(),
         "kimi_api" => "moonshot".to_string(),
         "volc" | "volcano" | "bytedance" | "doubao" => "volcengine".to_string(),
@@ -565,6 +579,22 @@ mod tests {
         assert_eq!(normalize_provider_id("litellm-ai"), "litellm");
         assert_eq!(normalize_provider_id("kilocode-ai"), "kilocode");
         assert_eq!(normalize_provider_id("deepseek-chat"), "deepseek");
+        assert_eq!(
+            normalize_provider_id("deepseek-responses"),
+            "deepseek_responses"
+        );
+        assert_eq!(
+            normalize_provider_id("deepseek-responses-api"),
+            "deepseek_responses"
+        );
+        assert_eq!(
+            transport_for_provider_id("deepseek-responses"),
+            LlmTransport::OpenAiResponses
+        );
+        assert_eq!(
+            catalog_lookup("deepseek_responses").map(|e| e.suggested_openai_base),
+            Some(Some("https://api.deepseek.com/responses"))
+        );
         assert_eq!(normalize_provider_id("byteplus-ai"), "byteplus");
         assert_eq!(normalize_provider_id("moonshot-v1"), "moonshot");
         assert_eq!(normalize_provider_id("google-ai-studio"), "google");

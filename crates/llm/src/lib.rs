@@ -29,6 +29,8 @@ mod multi_client;
 mod openai_compat_stream;
 mod provider_catalog;
 mod providers;
+mod responses_items;
+mod responses_stream;
 mod retry_strategy;
 mod runtime_capabilities;
 mod secret_store;
@@ -194,6 +196,29 @@ pub fn build_zai_openai_stack_client(
     }
 }
 
+/// OpenAI Responses API 客户端（`/responses` 端点；DeepSeek 优先，无状态）。
+pub fn build_openai_responses_stack_client(
+    cfg: &ProviderConfig,
+) -> Result<providers::openai_responses::OpenAiResponsesClient, CoreError> {
+    let norm = normalize_provider_id(&cfg.provider);
+    match transport_for_provider_id(&norm) {
+        LlmTransport::OpenAiResponses => {
+            let mut client = providers::openai_responses::OpenAiResponsesClient::new(
+                cfg.api_key.clone(),
+                Some(cfg.model.clone()),
+            );
+            if let Some(ref u) = cfg.base_url {
+                client = client.with_base_url(u.clone());
+            }
+            Ok(client)
+        }
+        _ => Err(CoreError::LLMError(format!(
+            "provider `{}` 不是 OpenAI Responses 兼容栈",
+            cfg.provider
+        ))),
+    }
+}
+
 /// 单后端：与全局 `provider` 一致时使用（含 Bedrock / Copilot 等异步初始化路径）。
 pub async fn build_llm_client(cfg: &ProviderConfig) -> Result<Arc<dyn LLMClient>, CoreError> {
     let norm = normalize_provider_id(&cfg.provider);
@@ -209,6 +234,7 @@ pub async fn build_llm_client(cfg: &ProviderConfig) -> Result<Arc<dyn LLMClient>
             Ok(Arc::new(client))
         }
         LlmTransport::OpenAiChatCompletions => Ok(Arc::new(build_zai_openai_stack_client(cfg)?)),
+        LlmTransport::OpenAiResponses => Ok(Arc::new(build_openai_responses_stack_client(cfg)?)),
         LlmTransport::BedrockConverse => {
             let client = providers::bedrock::BedrockClient::from_provider_config(cfg).await?;
             Ok(Arc::new(client))
@@ -237,6 +263,7 @@ pub async fn build_multi_llm_stack(
     anthropic: Option<ProviderConfig>,
     bedrock: Option<ProviderConfig>,
     github_copilot: Option<ProviderConfig>,
+    openai_responses: Option<ProviderConfig>,
 ) -> Result<Arc<dyn LLMClient>, CoreError> {
     let chat_completions: Option<Arc<dyn LLMClient>> =
         if let Some(ref c) = chat_completions_provider {
@@ -302,13 +329,20 @@ pub async fn build_multi_llm_stack(
         None
     };
 
+    let responses_client: Option<Arc<dyn LLMClient>> = if let Some(ref c) = openai_responses {
+        Some(Arc::new(build_openai_responses_stack_client(c)?) as Arc<dyn LLMClient>)
+    } else {
+        None
+    };
+
     if chat_completions.is_none()
         && anthropic_client.is_none()
         && bedrock_client.is_none()
         && copilot_client.is_none()
+        && responses_client.is_none()
     {
         return Err(CoreError::LLMError(
-            "至少需要配置一种 LLM 后端（OpenAI 兼容、Anthropic、Bedrock 或 GitHub Copilot）"
+            "至少需要配置一种 LLM 后端（OpenAI 兼容、Anthropic、Bedrock、GitHub Copilot 或 Responses）"
                 .to_string(),
         ));
     }
@@ -318,6 +352,7 @@ pub async fn build_multi_llm_stack(
         anthropic_client,
         bedrock_client,
         copilot_client,
+        responses_client,
     )))
 }
 

@@ -7,11 +7,12 @@ use tracing::info;
 
 use super::llm_session::{
     resolve_anthropic_primary_config, resolve_bedrock_primary_config,
-    resolve_github_copilot_primary_config, resolve_openai_shell_config, scan_session_llm_needs,
+    resolve_github_copilot_primary_config, resolve_openai_responses_primary_config,
+    resolve_openai_shell_config, scan_session_llm_needs,
 };
 
 pub async fn build_llm_stack(config: &Config) -> anyhow::Result<Arc<dyn anycode_core::LLMClient>> {
-    let (need_openai, need_anthropic, need_bedrock, need_github_copilot) =
+    let (need_openai, need_anthropic, need_bedrock, need_github_copilot, need_openai_responses) =
         scan_session_llm_needs(config);
 
     let openai_cfg = if need_openai {
@@ -38,9 +39,21 @@ pub async fn build_llm_stack(config: &Config) -> anyhow::Result<Arc<dyn anycode_
         None
     };
 
-    let llm_client = build_multi_llm_stack(openai_cfg, anthropic_cfg, bedrock_cfg, copilot_cfg)
-        .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let responses_cfg = if need_openai_responses {
+        Some(resolve_openai_responses_primary_config(config)?)
+    } else {
+        None
+    };
+
+    let llm_client = build_multi_llm_stack(
+        openai_cfg,
+        anthropic_cfg,
+        bedrock_cfg,
+        copilot_cfg,
+        responses_cfg,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     info!(
         target: "anycode_bootstrap",
@@ -48,6 +61,7 @@ pub async fn build_llm_stack(config: &Config) -> anyhow::Result<Arc<dyn anycode_
         anthropic = need_anthropic,
         bedrock = need_bedrock,
         copilot = need_github_copilot,
+        responses = need_openai_responses,
         "LLM stack built"
     );
 

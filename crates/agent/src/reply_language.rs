@@ -11,7 +11,7 @@ use chrono::Utc;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-pub(crate) const REPLY_LANGUAGE_REMINDER_METADATA: &str = "reply_language_reminder";
+pub(crate) use anycode_core::REPLY_LANGUAGE_REMINDER_METADATA_KEY as REPLY_LANGUAGE_REMINDER_METADATA;
 
 /// Short reminder text for the active reply language, if any.
 /// Body lives under `prompts/locale/<tag>/ephemeral_reminder.md`.
