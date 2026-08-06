@@ -29,6 +29,7 @@ pub struct ServiceConfig {
     pub wechat_price_pro_monthly_fen: Option<i32>,
     pub wechat_price_team_monthly_fen: Option<i32>,
     pub wechat_price_cloud_5h_fen: Option<i32>,
+    pub wechat_price_seat_yearly_fen: Option<i32>,
     pub default_payment_provider: String,
     pub model_gateway_url: String,
     pub upstream_key_encryption_secret: Option<String>,
@@ -145,6 +146,9 @@ impl ServiceConfig {
             .or_else(|_| env::var("WECHAT_PRICE_CLOUD_5H_CENTS"))
             .ok()
             .and_then(|s| s.parse().ok());
+        let wechat_price_seat_yearly_fen = env::var("WECHAT_PRICE_SEAT_YEARLY_FEN")
+            .ok()
+            .and_then(|s| s.parse().ok());
         let default_payment_provider =
             env::var("DEFAULT_PAYMENT_PROVIDER").unwrap_or_else(|_| "wechat".into());
         let model_gateway_url = env::var("ANYCODE_MODEL_GATEWAY_URL")
@@ -204,6 +208,7 @@ impl ServiceConfig {
             wechat_price_pro_monthly_fen,
             wechat_price_team_monthly_fen,
             wechat_price_cloud_5h_fen,
+            wechat_price_seat_yearly_fen,
             default_payment_provider,
             model_gateway_url,
             upstream_key_encryption_secret,

@@ -121,6 +121,105 @@ pub async fn create_native_order(
             }
         )
     };
+    let (order_id, code_url, expires_at) = create_wechat_native_transaction(
+        config,
+        db,
+        PendingOrderSpec {
+            org_id,
+            plan,
+            billing_cycle,
+            quantity: None,
+            amount_fen,
+            description: &description,
+            out_trade_no: &out_trade_no,
+        },
+    )
+    .await?;
+
+    Ok(PaymentOrderView {
+        id: order_id,
+        provider: "wechat".into(),
+        plan: plan.into(),
+        billing_cycle: billing_cycle.into(),
+        amount_fen,
+        currency: "CNY".into(),
+        status: "pending".into(),
+        quantity: None,
+        out_trade_no: Some(out_trade_no),
+        code_url: Some(code_url),
+        expires_at: expires_at.to_rfc3339(),
+        paid_at: None,
+    })
+}
+
+/// Yearly team seat add-ons — amount = unit price × quantity.
+pub async fn create_seat_addon_order(
+    config: &ServiceConfig,
+    db: &AccountDb,
+    org_id: &str,
+    quantity: i32,
+) -> Result<PaymentOrderView> {
+    if !wechat_pay_configured(config) {
+        return Err(anyhow!("WeChat Pay is not configured"));
+    }
+    if !(1..=50).contains(&quantity) {
+        return Err(anyhow!("seat quantity must be between 1 and 50"));
+    }
+    let unit = config
+        .wechat_price_seat_yearly_fen
+        .unwrap_or(crate::billing::SEAT_ADDON_YEARLY_PRICE_FEN);
+    let amount_fen = unit
+        .checked_mul(quantity)
+        .ok_or_else(|| anyhow!("seat order amount overflow"))?;
+    let out_trade_no = Uuid::new_v4().simple().to_string();
+    let description = format!("anycode 团队席位增购 {quantity} 席（1年）");
+    let (order_id, code_url, expires_at) = create_wechat_native_transaction(
+        config,
+        db,
+        PendingOrderSpec {
+            org_id,
+            plan: crate::billing::SEAT_ADDON_PLAN,
+            billing_cycle: "yearly",
+            quantity: Some(quantity),
+            amount_fen,
+            description: &description,
+            out_trade_no: &out_trade_no,
+        },
+    )
+    .await?;
+
+    Ok(PaymentOrderView {
+        id: order_id,
+        provider: "wechat".into(),
+        plan: crate::billing::SEAT_ADDON_PLAN.into(),
+        billing_cycle: "yearly".into(),
+        amount_fen,
+        currency: "CNY".into(),
+        status: "pending".into(),
+        quantity: Some(quantity),
+        out_trade_no: Some(out_trade_no),
+        code_url: Some(code_url),
+        expires_at: expires_at.to_rfc3339(),
+        paid_at: None,
+    })
+}
+
+struct PendingOrderSpec<'a> {
+    org_id: &'a str,
+    plan: &'a str,
+    billing_cycle: &'a str,
+    quantity: Option<i32>,
+    amount_fen: i32,
+    description: &'a str,
+    out_trade_no: &'a str,
+}
+
+/// Shared Native 扫码下单: call WeChat, persist the pending order, return (order_id, code_url, expires_at).
+async fn create_wechat_native_transaction(
+    config: &ServiceConfig,
+    db: &AccountDb,
+    spec: PendingOrderSpec<'_>,
+) -> Result<(String, String, chrono::DateTime<Utc>)> {
     let notify_url = config
         .wechat_pay_notify_url
         .as_deref()
@@ -129,11 +228,11 @@ pub async fn create_native_order(
     let body = serde_json::json!({
         "appid": config.wechat_pay_app_id,
         "mchid": config.wechat_pay_mch_id,
-        "description": description,
-        "out_trade_no": out_trade_no,
+        "description": spec.description,
+        "out_trade_no": spec.out_trade_no,
         "notify_url": notify_url,
         "amount": {
-            "total": amount_fen,
+            "total": spec.amount_fen,
             "currency": "CNY"
         }
     });
@@ -164,32 +263,20 @@ pub async fn create_native_order(
     let order_id = insert_pending_order(
         db,
         &PendingOrderInput {
-            org_id: org_id.to_string(),
+            org_id: spec.org_id.to_string(),
             provider: "wechat".into(),
-            plan: plan.into(),
-            billing_cycle: billing_cycle.into(),
-            amount_fen,
+            plan: spec.plan.into(),
+            billing_cycle: spec.billing_cycle.into(),
+            quantity: spec.quantity,
+            amount_fen: spec.amount_fen,
             currency: "CNY".into(),
-            out_trade_no: out_trade_no.clone(),
+            out_trade_no: spec.out_trade_no.to_string(),
             code_url: Some(parsed.code_url.clone()),
             expires_at,
         },
     )
     .await?;
-
-    Ok(PaymentOrderView {
-        id: order_id,
-        provider: "wechat".into(),
-        plan: plan.into(),
-        billing_cycle: billing_cycle.into(),
-        amount_fen,
-        currency: "CNY".into(),
-        status: "pending".into(),
-        out_trade_no: Some(out_trade_no),
-        code_url: Some(parsed.code_url),
-        expires_at: expires_at.to_rfc3339(),
-        paid_at: None,
-    })
+    Ok((order_id, parsed.code_url, expires_at))
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,6 +593,7 @@ mod tests {
             wechat_price_pro_monthly_fen: Some(19900),
             wechat_price_team_monthly_fen: Some(69900),
             wechat_price_cloud_5h_fen: Some(4900),
+            wechat_price_seat_yearly_fen: None,
             default_payment_provider: "wechat".into(),
             model_gateway_url: "http://127.0.0.1:43210".into(),
             upstream_key_encryption_secret: None,

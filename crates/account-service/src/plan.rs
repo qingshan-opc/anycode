@@ -98,7 +98,7 @@ pub fn static_limits_for_plan(plan: &str) -> PlanLimits {
         "cloud_5h" => PlanLimits {
             token_limit: 1_000_000_000,
             api_key_limit: 3,
-            seat_limit: 1,
+            seat_limit: 10,
             monthly_price_fen: 9_800,
             yearly_price_fen: 98_000,
             currency: "CNY",
@@ -109,7 +109,7 @@ pub fn static_limits_for_plan(plan: &str) -> PlanLimits {
         "pro" => PlanLimits {
             token_limit: 10_000_000_000,
             api_key_limit: 5,
-            seat_limit: 1,
+            seat_limit: 10,
             monthly_price_fen: 59_900,
             yearly_price_fen: 599_000,
             currency: "CNY",
@@ -131,7 +131,7 @@ pub fn static_limits_for_plan(plan: &str) -> PlanLimits {
         _ => PlanLimits {
             token_limit: 20_000_000,
             api_key_limit: 1,
-            seat_limit: 1,
+            seat_limit: 10,
             monthly_price_fen: 0,
             yearly_price_fen: 0,
             currency: "CNY",

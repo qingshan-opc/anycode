@@ -702,12 +702,54 @@ pub async fn get_subscription(db: &AccountDb, org_id: &str) -> Result<Subscripti
     })
 }
 
+/// Unexpired purchased add-on seats (0 when none or past their yearly term).
+fn active_extra_seats(extra_seats: i32, until: Option<NaiveDate>, today: NaiveDate) -> i64 {
+    match until {
+        Some(d) if d >= today => i64::from(extra_seats.max(0)),
+        _ => 0,
+    }
+}
+
+/// Plan base seats + unexpired seat add-ons — the limit team invites are checked against.
+pub async fn effective_seat_limit(db: &AccountDb, org_id: &str) -> i64 {
+    let row = sqlx::query(
+        "SELECT seat_limit, extra_seats, extra_seats_until FROM entitlements WHERE organization_id = ?",
+    )
+    .bind(org_id)
+    .fetch_optional(db.pool())
+    .await;
+    let today = Utc::now().date_naive();
+    match row {
+        Ok(Some(r)) => {
+            let base: i32 = r.get("seat_limit");
+            let extra = active_extra_seats(r.get("extra_seats"), r.get("extra_seats_until"), today);
+            i64::from(base.max(1)) + extra
+        }
+        _ => {
+            let plan: Option<String> =
+                sqlx::query_scalar("SELECT plan_tier FROM organizations WHERE id = ?")
+                    .bind(org_id)
+                    .fetch_optional(db.pool())
+                    .await
+                    .ok()
+                    .flatten();
+            i64::from(
+                crate::plan::limits_for_plan(db, plan.as_deref().unwrap_or("free"))
+                    .await
+                    .seat_limit
+                    .max(1),
+            )
+        }
+    }
+}
+
 pub async fn get_entitlements(db: &AccountDb, org_id: &str) -> Result<EntitlementsView> {
     ensure_org_defaults(db, org_id).await?;
     let _ = crate::quota::ensure_window_current(db, org_id).await;
     let row = sqlx::query(
         r#"
-        SELECT token_limit, api_key_limit, seat_limit, tokens_used, hosted_models_enabled,
+        SELECT token_limit, api_key_limit, seat_limit, extra_seats, extra_seats_until,
+          tokens_used, hosted_models_enabled,
           quota_window_secs, calls_limit_per_window, calls_used_in_window, quota_window_started_at
         FROM entitlements WHERE organization_id = ?
         "#,
@@ -736,6 +778,19 @@ pub async fn get_entitlements(db: &AccountDb, org_id: &str) -> Result<Entitlemen
         token_limit: row.get("token_limit"),
         api_key_limit: row.get("api_key_limit"),
         seat_limit: row.get("seat_limit"),
+        extra_seats: row.get("extra_seats"),
+        seat_limit_effective: {
+            let base: i32 = row.get("seat_limit");
+            let extra = active_extra_seats(
+                row.get("extra_seats"),
+                row.get("extra_seats_until"),
+                Utc::now().date_naive(),
+            );
+            base.max(1) + extra as i32
+        },
+        extra_seats_until: row
+            .get::<Option<NaiveDate>, _>("extra_seats_until")
+            .map(|d| d.to_string()),
         seat_used: seat_used as i32,
         tokens_used: row.get("tokens_used"),
         hosted_models_enabled: row.get("hosted_models_enabled"),
@@ -827,4 +882,24 @@ fn current_billing_period() -> (NaiveDate, NaiveDate) {
     .pred_opt()
     .unwrap_or(today);
     (start, end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::active_extra_seats;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn extra_seats_only_count_before_expiry() {
+        let today = d(2026, 8, 6);
+        assert_eq!(active_extra_seats(5, Some(d(2027, 8, 6)), today), 5);
+        assert_eq!(active_extra_seats(5, Some(d(2026, 8, 6)), today), 5);
+        assert_eq!(active_extra_seats(5, Some(d(2026, 8, 5)), today), 0);
+        assert_eq!(active_extra_seats(5, None, today), 0);
+        assert_eq!(active_extra_seats(-1, Some(d(2027, 1, 1)), today), 0);
+    }
 }

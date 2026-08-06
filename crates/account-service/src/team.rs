@@ -133,8 +133,7 @@ pub async fn create_invite(
         return Err(anyhow!("user is already a team member"));
     }
 
-    let limits = crate::plan::limits_for_plan(db, "free").await;
-    let seat_limit = limits.seat_limit.max(1) as i64;
+    let seat_limit = crate::store::effective_seat_limit(db, &user.organization_id).await;
     let active_members: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM users WHERE organization_id = ? AND status != 'disabled'",
     )
@@ -195,8 +194,7 @@ pub async fn create_invite_link(db: &AccountDb, user: &AuthUser) -> Result<Creat
         return Err(anyhow!("create the team before sharing invite links"));
     }
 
-    let limits = crate::plan::limits_for_plan(db, "free").await;
-    let seat_limit = limits.seat_limit.max(1) as i64;
+    let seat_limit = crate::store::effective_seat_limit(db, &user.organization_id).await;
     let active_members: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM users WHERE organization_id = ? AND status != 'disabled'",
     )

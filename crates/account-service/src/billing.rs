@@ -7,6 +7,13 @@ use chrono::{Datelike, NaiveDate, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
+/// Default price for one extra team seat, per year (¥300). Overridable via
+/// WECHAT_PRICE_SEAT_YEARLY_FEN.
+pub const SEAT_ADDON_YEARLY_PRICE_FEN: i32 = 30_000;
+
+/// payment_orders.plan value for seat add-on purchases (not a cloud_plans id).
+pub const SEAT_ADDON_PLAN: &str = "seat_addon";
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PaymentOrderView {
     pub id: String,
@@ -16,6 +23,8 @@ pub struct PaymentOrderView {
     pub amount_fen: i32,
     pub currency: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub out_trade_no: Option<String>,
     pub code_url: Option<String>,
@@ -215,6 +224,87 @@ pub async fn activate_prepaid_period(db: &AccountDb, input: &PrepaidActivation) 
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+pub struct SeatAddonActivation {
+    pub org_id: String,
+    pub payment_order_id: String,
+    pub quantity: i32,
+    pub amount_fen: i32,
+}
+
+/// Grant purchased seat add-ons after successful payment. Seats last one year;
+/// buying again while seats are still active extends the term by another year.
+pub async fn activate_seat_addon(db: &AccountDb, input: &SeatAddonActivation) -> Result<()> {
+    if input.quantity <= 0 {
+        return Err(anyhow!("invalid seat quantity"));
+    }
+    let today = Utc::now().date_naive();
+    let current_until: Option<NaiveDate> =
+        sqlx::query_scalar("SELECT extra_seats_until FROM entitlements WHERE organization_id = ?")
+            .bind(&input.org_id)
+            .fetch_optional(db.pool())
+            .await?
+            .flatten();
+    // Expired (or first-time) add-ons restart from today; live ones extend.
+    let term_start = match current_until {
+        Some(d) if d >= today => d,
+        _ => today,
+    };
+    let term_end = add_months(term_start, 12)?;
+
+    let invoice_id = format!("inv_{}", Uuid::new_v4());
+    let invoice_number = format!(
+        "AC-{}-{}",
+        Utc::now().format("%Y%m"),
+        &input.payment_order_id[4..12]
+    );
+    let mut tx = db.pool().begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE entitlements SET
+          extra_seats = CASE
+            WHEN extra_seats_until IS NULL OR extra_seats_until < ? THEN ?
+            ELSE extra_seats + ?
+          END,
+          extra_seats_until = ?, updated_at = NOW()
+        WHERE organization_id = ?
+        "#,
+    )
+    .bind(today)
+    .bind(input.quantity)
+    .bind(input.quantity)
+    .bind(term_end)
+    .bind(&input.org_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE payment_orders SET status = 'paid', paid_at = NOW() WHERE id = ? AND organization_id = ?",
+    )
+    .bind(&input.payment_order_id)
+    .bind(&input.org_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO invoices (id, organization_id, number, period_start, period_end,
+          amount_fen, currency, amount_cny, status, payment_order_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'CNY', ?, 'paid', ?)
+        "#,
+    )
+    .bind(&invoice_id)
+    .bind(&input.org_id)
+    .bind(&invoice_number)
+    .bind(term_start)
+    .bind(term_end)
+    .bind(input.amount_fen)
+    .bind(f64::from(input.amount_fen) / 100.0)
+    .bind(&input.payment_order_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Stripe recurring subscription activation (unchanged semantics).
 pub async fn activate_stripe_subscription(
     db: &AccountDb,
@@ -275,7 +365,7 @@ pub async fn get_payment_order(
 ) -> Result<Option<PaymentOrderView>> {
     let row = sqlx::query(
         r#"
-        SELECT id, provider, plan, billing_cycle, COALESCE(amount_fen, amount_cents) AS amount_fen,
+        SELECT id, provider, plan, billing_cycle, quantity, COALESCE(amount_fen, amount_cents) AS amount_fen,
           currency, status, out_trade_no,
           code_url, expires_at, paid_at
         FROM payment_orders
@@ -297,6 +387,7 @@ pub async fn get_payment_order(
             amount_fen: r.get("amount_fen"),
             currency: r.get("currency"),
             status: r.get("status"),
+            quantity: r.get("quantity"),
             out_trade_no: r.get("out_trade_no"),
             code_url: r.get("code_url"),
             expires_at: expires.to_rfc3339(),
@@ -311,6 +402,7 @@ pub struct PendingOrderInput {
     pub provider: String,
     pub plan: String,
     pub billing_cycle: String,
+    pub quantity: Option<i32>,
     pub amount_fen: i32,
     pub currency: String,
     pub out_trade_no: String,
@@ -323,9 +415,9 @@ pub async fn insert_pending_order(db: &AccountDb, input: &PendingOrderInput) -> 
     sqlx::query(
         r#"
         INSERT INTO payment_orders (
-          id, organization_id, provider, plan, billing_cycle, amount_fen, amount_cents, currency,
+          id, organization_id, provider, plan, billing_cycle, quantity, amount_fen, amount_cents, currency,
           status, out_trade_no, code_url, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
         "#,
     )
     .bind(&id)
@@ -333,6 +425,7 @@ pub async fn insert_pending_order(db: &AccountDb, input: &PendingOrderInput) -> 
     .bind(&input.provider)
     .bind(&input.plan)
     .bind(&input.billing_cycle)
+    .bind(input.quantity)
     .bind(input.amount_fen)
     .bind(input.amount_fen)
     .bind(&input.currency)
@@ -382,7 +475,7 @@ pub async fn mark_order_paid_by_out_trade_no(
 
     let row = sqlx::query(
         r#"
-        SELECT id, organization_id, plan, billing_cycle,
+        SELECT id, organization_id, plan, billing_cycle, quantity,
           COALESCE(amount_fen, amount_cents) AS amount_fen, currency
         FROM payment_orders
         WHERE out_trade_no = ? AND status = 'pending'
@@ -398,6 +491,7 @@ pub async fn mark_order_paid_by_out_trade_no(
     let org_id: String = row.get("organization_id");
     let plan: String = row.get("plan");
     let billing_cycle: String = row.get("billing_cycle");
+    let quantity: Option<i32> = row.get("quantity");
     let amount_fen: i32 = row.get("amount_fen");
     let currency: String = row.get("currency");
 
@@ -408,6 +502,20 @@ pub async fn mark_order_paid_by_out_trade_no(
     .bind(&order_id)
     .execute(db.pool())
     .await?;
+
+    if plan == SEAT_ADDON_PLAN {
+        activate_seat_addon(
+            db,
+            &SeatAddonActivation {
+                org_id,
+                payment_order_id: order_id,
+                quantity: quantity.unwrap_or(1),
+                amount_fen,
+            },
+        )
+        .await?;
+        return Ok(());
+    }
 
     activate_prepaid_period(
         db,

@@ -35,6 +35,12 @@ pub struct EntitlementsView {
     pub token_limit: i64,
     pub api_key_limit: i32,
     pub seat_limit: i32,
+    /// Purchased yearly seat add-ons (0 when none or expired).
+    pub extra_seats: i32,
+    /// Plan base seats + unexpired add-on seats — the limit invites are checked against.
+    pub seat_limit_effective: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_seats_until: Option<String>,
     pub seat_used: i32,
     pub tokens_used: i64,
     pub hosted_models_enabled: bool,

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api } from "../api";
+import { api, type PaymentOrder } from "../api";
 import { ConsolePage } from "../components/ConsolePage";
-import { useT } from "../i18n/context";
+import { WeChatPayModal } from "../components/WeChatPayModal";
+import { formatMessage, useT } from "../i18n/context";
 
 type Member = { id: string; email: string; display_name: string; role: string };
 type Peer = {
@@ -29,6 +30,14 @@ type Invite = {
   expires_at: string;
   created_at: string;
 };
+type SeatInfo = {
+  used: number;
+  limit: number;
+  extraSeats: number;
+  extraUntil: string | null;
+};
+
+const SEAT_ADDON_UNIT_YUAN = 300;
 
 function buildInviteUrl(acceptPath: string): string {
   return `${window.location.origin}${acceptPath}`;
@@ -43,6 +52,10 @@ export function TeamPage() {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [team, setTeam] = useState<TeamStatus | null>(null);
   const [invites, setInvites] = useState<Invite[]>([]);
+  const [seats, setSeats] = useState<SeatInfo | null>(null);
+  const [seatQuantity, setSeatQuantity] = useState(1);
+  const [seatOrder, setSeatOrder] = useState<PaymentOrder | null>(null);
+  const [seatBusy, setSeatBusy] = useState(false);
   const [teamName, setTeamName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
@@ -51,15 +64,29 @@ export function TeamPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const teamReady = team?.gate === "ready";
+  const seatLimitHit = error?.includes("seat limit") ?? false;
 
   const load = () => {
     setError(null);
-    void Promise.all([api.orgMembers(), api.teamPeers(), api.teamStatus(), api.listOrgInvites()])
-      .then(([m, p, ts, inv]) => {
+    void Promise.all([
+      api.orgMembers(),
+      api.teamPeers(),
+      api.teamStatus(),
+      api.listOrgInvites(),
+      api.bundle(),
+    ])
+      .then(([m, p, ts, inv, b]) => {
         setMembers(m.members ?? []);
         setPeers(p.peers ?? []);
         setTeam(ts.team);
         setInvites(inv.invites ?? []);
+        const ent = b.account.entitlements;
+        setSeats({
+          used: ent.seat_used ?? ts.team.member_count,
+          limit: ent.seat_limit_effective ?? ent.seat_limit ?? 10,
+          extraSeats: ent.extra_seats ?? 0,
+          extraUntil: ent.extra_seats_until ?? null,
+        });
         if (!teamName.trim() && ts.team.organization_name) {
           setTeamName(ts.team.organization_name);
         }
@@ -69,6 +96,7 @@ export function TeamPage() {
         setPeers([]);
         setTeam(null);
         setInvites([]);
+        setSeats(null);
         setError(err instanceof Error ? err.message : String(err));
       });
   };
@@ -157,9 +185,26 @@ export function TeamPage() {
   const inviteLabel = (inv: Invite) =>
     inv.kind === "link" ? t("console.teamInviteLinkKind") : (inv.email ?? "");
 
+  const submitSeatPurchase = async () => {
+    setError(null);
+    setNotice(null);
+    setSeatBusy(true);
+    try {
+      const res = await api.checkoutSeatAddon(seatQuantity);
+      if (res.provider === "wechat" && res.order) {
+        setSeatOrder(res.order);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSeatBusy(false);
+    }
+  };
+
   return (
     <ConsolePage title={t("console.team")} description={t("console.teamSubtitle")}>
       {error ? <p className="console-error">{error}</p> : null}
+      {seatLimitHit ? <p className="console-meta">{t("console.teamSeatsFull")}</p> : null}
       {notice ? <p className="form-note">{notice}</p> : null}
 
       {inviteToken ? (
@@ -185,6 +230,56 @@ export function TeamPage() {
             />
             <button className="btn btn-primary" type="button" onClick={() => void submitSetup()}>
               {t("console.teamSetupSubmit")}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {team && team.team_setup ? (
+        <section className="console-section">
+          <h2 className="console-section__title">{t("console.teamSeatsTitle")}</h2>
+          {seats ? (
+            <p className="console-meta">
+              {formatMessage(t("console.teamSeatsUsage"), {
+                used: String(seats.used),
+                limit: String(seats.limit),
+              })}
+              {seats.extraSeats > 0 && seats.extraUntil
+                ? ` · ${formatMessage(t("console.teamSeatsExtraUntil"), {
+                    count: String(seats.extraSeats),
+                    until: seats.extraUntil,
+                  })}`
+                : ""}
+            </p>
+          ) : null}
+          <p className="console-meta">{t("console.teamSeatsPriceHint")}</p>
+          <div className="console-form-row">
+            <label className="console-form-row__label" htmlFor="seat-quantity">
+              {t("console.teamSeatsQuantity")}
+            </label>
+            <input
+              id="seat-quantity"
+              className="auth-input"
+              type="number"
+              min={1}
+              max={50}
+              value={seatQuantity}
+              onChange={(e) =>
+                setSeatQuantity(Math.max(1, Math.min(50, Number(e.target.value) || 1)))
+              }
+            />
+            <span className="console-meta">
+              {formatMessage(t("console.teamSeatsTotal"), {
+                amount: String(seatQuantity * SEAT_ADDON_UNIT_YUAN),
+              })}
+            </span>
+            <button
+              className="btn btn-secondary"
+              type="button"
+              disabled={seatBusy}
+              onClick={() => void submitSeatPurchase()}
+            >
+              {seatBusy ? t("common.loading") : t("console.teamSeatsBuy")}
             </button>
           </div>
         </section>
@@ -284,6 +379,18 @@ export function TeamPage() {
       </section>
 
       {teamReady ? <p className="console-meta">{t("console.teamHandoffHint")}</p> : null}
+
+      {seatOrder ? (
+        <WeChatPayModal
+          order={seatOrder}
+          onClose={() => setSeatOrder(null)}
+          onPaid={() => {
+            setSeatOrder(null);
+            setNotice(t("plans.wechatPaid"));
+            load();
+          }}
+        />
+      ) : null}
     </ConsolePage>
   );
 }

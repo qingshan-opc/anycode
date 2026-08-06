@@ -114,6 +114,11 @@ impl AccountDb {
             include_str!("../migrations/023_org_invite_links.sql"),
         )
         .await?;
+        self.apply_migration(
+            "024_default_10_seats_and_seat_addons",
+            include_str!("../migrations/024_default_10_seats_and_seat_addons.sql"),
+        )
+        .await?;
         Ok(())
     }
 

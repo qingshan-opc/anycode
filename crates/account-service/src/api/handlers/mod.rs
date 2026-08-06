@@ -633,6 +633,9 @@ pub struct CheckoutBody {
     pub provider: Option<String>,
     #[serde(default)]
     pub cycle: Option<String>,
+    /// Seat add-on purchases only: how many extra seats (1–50).
+    #[serde(default)]
+    pub quantity: Option<i32>,
 }
 
 pub async fn billing_checkout(
@@ -644,6 +647,33 @@ pub async fn billing_checkout(
         .provider
         .as_deref()
         .unwrap_or(state.config.default_payment_provider.as_str());
+
+    if body.plan == crate::billing::SEAT_ADDON_PLAN {
+        if provider != "wechat" {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "seat add-ons are only available via WeChat Pay",
+            )
+            .into_response();
+        }
+        let quantity = body.quantity.unwrap_or(1);
+        return match crate::billing_wechat::create_seat_addon_order(
+            &state.config,
+            &state.db,
+            &ctx.user.organization_id,
+            quantity,
+        )
+        .await
+        {
+            Ok(order) => Json(serde_json::json!({
+                "provider": "wechat",
+                "order": order,
+            }))
+            .into_response(),
+            Err(e) => json_error(StatusCode::BAD_REQUEST, &e.to_string()).into_response(),
+        };
+    }
+
     let cycle = if body.plan == "cloud_5h" {
         "monthly"
     } else {

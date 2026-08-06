@@ -58,6 +58,7 @@ export type PaymentOrder = {
   amount_fen: number;
   currency: string;
   status: string;
+  quantity?: number | null;
   code_url?: string | null;
   expires_at: string;
   paid_at?: string | null;
@@ -159,6 +160,10 @@ export const api = {
           tokens_used: number;
           api_key_limit?: number;
           seat_limit?: number;
+          seat_used?: number;
+          extra_seats?: number;
+          seat_limit_effective?: number;
+          extra_seats_until?: string | null;
           hosted_models_enabled: boolean;
         };
         invoices: Array<{
@@ -180,10 +185,22 @@ export const api = {
     plan: string,
     provider: PaymentProvider = "wechat",
     cycle: "monthly" | "yearly" = "monthly",
+    quantity?: number,
   ) =>
     apiFetch<CheckoutResponse>("/api/v1/billing/checkout", {
       method: "POST",
-      body: JSON.stringify({ plan, provider, cycle }),
+      body: JSON.stringify({ plan, provider, cycle, quantity }),
+    }),
+
+  checkoutSeatAddon: (quantity: number) =>
+    apiFetch<CheckoutResponse>("/api/v1/billing/checkout", {
+      method: "POST",
+      body: JSON.stringify({
+        plan: "seat_addon",
+        provider: "wechat",
+        cycle: "yearly",
+        quantity,
+      }),
     }),
 
   getPaymentOrder: (orderId: string) =>
