@@ -216,6 +216,7 @@ impl SessionActorHandle {
             lock.clone(),
             viewport_w,
             viewport_h,
+            true,
         ));
 
         Ok(Self {
@@ -321,6 +322,7 @@ impl SessionActorHandle {
             lock.clone(),
             viewport_w,
             viewport_h,
+            false,
         ));
 
         Ok(Self {
@@ -509,6 +511,11 @@ async fn session_loop(
     lock: Arc<Mutex<LockHolder>>,
     mut viewport_w: u32,
     mut viewport_h: u32,
+    // Attached to the desktop CEF host: the NSView owns the layout size, so
+    // SetViewport must NOT push Emulation.setDeviceMetricsOverride onto the
+    // shared page (screen-sized metrics against a panel-sized view = page shows
+    // only a corner and can't scroll).
+    cef_attached: bool,
 ) {
     let mut screencast_tx: Option<broadcast::Sender<ScreencastFrame>> = None;
     let mut screencast_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -721,6 +728,16 @@ async fn session_loop(
                     height,
                     device_scale_factor,
                 )));
+                if cef_attached {
+                    // CEF sizes the page to the NSView; a device-metrics
+                    // override here would blow the layout up past the panel.
+                    // Report the clamped request without touching the page.
+                    let _ = respond.send(Ok(BrowserViewport {
+                        width: vp.width,
+                        height: vp.height,
+                    }));
+                    continue;
+                }
                 let result = apply_viewport(
                     &tabs,
                     &active_tab,
