@@ -37,6 +37,9 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [cefError, setCefError] = useState<string | null>(null);
   const [cefSurfaceReady, setCefSurfaceReady] = useState(false);
+  /** Ref mirror of cefSurfaceReady so ResizeObserver retries show() until created. */
+  const cefSurfaceReadyRef = useRef(false);
+  cefSurfaceReadyRef.current = cefSurfaceReady;
   const [cefAssetsReady, setCefAssetsReady] = useState(false);
   const [cefTabs, setCefTabs] = useState<CefTabInfo[]>([]);
   const [urlFocused, setUrlFocused] = useState(false);
@@ -115,6 +118,12 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
   }, [designMode, clearHoverHit]);
 
   // Embed CEF native view over the panel content rect (not over chrome / design bar).
+  // `status.isLoading` is a dep on purpose: while the status query loads, the early
+  // return below renders a loading placeholder WITHOUT the host div, so a first-fire
+  // of this effect finds `embedHostRef.current === null` and bails. Without the dep
+  // the effect never re-fires (deps unchanged) and CEF is never shown — the
+  // deterministic "panel open but no live view" failure on cold panel opens.
+  const browserStatusLoading = status.isLoading;
   useEffect(() => {
     if (!useCefEmbed || !active) {
       void cefBrowserHide();
@@ -150,6 +159,13 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
     syncShow();
     const ro = new ResizeObserver(() => {
       const rect = el.getBoundingClientRect();
+      if (!cefSurfaceReadyRef.current) {
+        // Host just got a real size (dock animation, late layout): the initial
+        // syncShow may have bailed on a <2px rect — retry creation instead of
+        // resize-into-void.
+        syncShow();
+        return;
+      }
       void cefBrowserResize({
         x: Math.floor(rect.left),
         y: Math.floor(rect.top),
@@ -168,7 +184,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
       void cefBrowserHide();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- urlInput only for first create
-  }, [useCefEmbed, active]);
+  }, [useCefEmbed, active, browserStatusLoading]);
 
   // Design mode only changes host height — debounce a resize, never recreate CEF.
   useEffect(() => {
