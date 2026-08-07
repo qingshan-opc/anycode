@@ -295,6 +295,16 @@ pub fn clear_stale_cdp_port_if_disabled() {
 
 #[tauri::command]
 pub fn cef_browser_status(_app: AppHandle) -> Result<CefEmbedStatus, String> {
+    if matches!(
+        std::env::var("ANYCODE_CEF_DEBUG").as_deref(),
+        Ok("1") | Ok("true")
+    ) {
+        eprintln!(
+            "anycode-desktop: cef_browser_status invoked (assets_present={}, port={})",
+            assets_present(),
+            anycode_browser_cef::remote_debugging_port()
+        );
+    }
     // Do not CefInitialize here — init happens in cef_browser_show once the
     // AppKit run loop is settled and the panel has a host rect.
     if !cef_embed_env_enabled() {
@@ -329,6 +339,9 @@ pub fn cef_browser_show(
     height: f64,
     url: String,
 ) -> Result<CefEmbedStatus, String> {
+    eprintln!(
+        "anycode-desktop: cef_browser_show invoked rect=({x},{y} {width}x{height}) url={url}"
+    );
     let app_main = app.clone();
     run_on_main(&app, move || {
         ensure_cef()?;
