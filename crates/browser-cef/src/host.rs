@@ -327,6 +327,13 @@ fn create_browser_in_container(url: &str) -> Result<(), String> {
     if ok != 1 {
         return Err("browser_host_create_browser failed".into());
     }
+    // The container is hidden after a last-tab close; new_tab / popup paths
+    // don't go through ensure_container, so unhide here or the fresh browser
+    // renders into an invisible container.
+    unsafe {
+        let view = &*(container as *const NSView);
+        view.setHidden(false);
+    }
     Ok(())
 }
 
@@ -777,6 +784,48 @@ pub fn select_tab(id: i32) -> Result<(), String> {
 }
 
 pub fn close_tab(id: i32) -> Result<(), String> {
+    let last_tab = {
+        let g = state().lock().map_err(|e| e.to_string())?;
+        if !g.tabs.iter().any(|t| t.id == id) {
+            return Err(format!("unknown tab {id}"));
+        }
+        g.tabs.len() == 1
+    };
+    if last_tab {
+        // Last tab: tear down deterministically. The soft path is provably
+        // stuck for the final browser — DoClose returns 1 (else the whole
+        // Tauri window would close) and CEF then waits for native view
+        // destruction before firing OnBeforeClose, which never happens, so
+        // the tab lived in g.tabs forever.
+        let browser = {
+            let mut g = state().lock().map_err(|e| e.to_string())?;
+            g.active_id = None;
+            g.tabs.pop().map(|t| t.browser)
+        };
+        if let Ok(mut pending) = FORCE_CLOSE_AFTER.lock() {
+            pending.retain(|(existing, _)| *existing != id);
+        }
+        if let Some(browser) = browser {
+            if let Some(host) = browser.host() {
+                let handle = host.window_handle();
+                if !handle.is_null() {
+                    let view = unsafe { &*(handle as *const NSView) };
+                    view.removeFromSuperview();
+                }
+                // Force close: skips DoClose/beforeunload, guaranteeing browser
+                // destruction. The late OnBeforeClose is a no-op (the tab is
+                // already gone from g.tabs → position() → None).
+                host.close_browser(1);
+            }
+            if let Ok(mut pending) = PENDING_BROWSER_DROPS.lock() {
+                pending.push(browser);
+            }
+        }
+        // No empty container rect left behind; the next show/new-tab unhides.
+        hide();
+        schedule_pump_work(0);
+        return Ok(());
+    }
     let browser = {
         let g = state().lock().map_err(|e| e.to_string())?;
         g.tabs

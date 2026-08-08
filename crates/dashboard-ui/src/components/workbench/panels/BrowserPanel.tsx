@@ -17,6 +17,7 @@ import {
   cefBrowserSelectTab,
   cefBrowserShow,
   cefBrowserStatus,
+  type CefEmbedStatus,
   type CefTabInfo,
 } from "@/lib/cefBrowserEmbed";
 import { isTauriDesktop } from "@/lib/desktopShell";
@@ -185,6 +186,39 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- urlInput only for first create
   }, [useCefEmbed, active, browserStatusLoading]);
+
+  // Navigate the CEF surface; after a last-tab close there is no browser to
+  // navigate, so recreate one via show (show_in_parent creates when tabs==0).
+  const navigateCef = (target: string) => {
+    const applyStatus = (s: CefEmbedStatus) => {
+      if (s.tabs) setCefTabs(s.tabs);
+      if (s.url) {
+        lastSyncedUrlRef.current = s.url;
+        setUrlInput(s.url);
+      }
+    };
+    if (cefTabs.length === 0) {
+      const el = embedHostRef.current;
+      const rect = el?.getBoundingClientRect();
+      if (!rect || rect.width < 2 || rect.height < 2) {
+        setCefError("browser surface not ready");
+        return;
+      }
+      void cefBrowserShow(
+        {
+          x: Math.floor(rect.left),
+          y: Math.floor(rect.top),
+          width: Math.floor(rect.width),
+          height: Math.floor(rect.height),
+        },
+        target,
+      )
+        .then(applyStatus)
+        .catch((err: Error) => setCefError(err.message));
+      return;
+    }
+    void cefBrowserNavigate(target).then(applyStatus).catch((err: Error) => setCefError(err.message));
+  };
 
   // Design mode only changes host height — debounce a resize, never recreate CEF.
   useEffect(() => {
@@ -390,15 +424,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
           setUrlFocused(false);
           // CEF embed owns navigation — do not also CDP Page.goto (dual-nav races).
           if (useCefEmbed) {
-            void cefBrowserNavigate(target)
-              .then((s) => {
-                if (s.tabs) setCefTabs(s.tabs);
-                if (s.url) {
-                  lastSyncedUrlRef.current = s.url;
-                  setUrlInput(s.url);
-                }
-              })
-              .catch((err: Error) => setCefError(err.message));
+            navigateCef(target);
           } else {
             navigate.mutate(target);
           }
@@ -425,15 +451,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
             const target = urlInput.trim();
             if (!target || target === "about:blank") return;
             if (useCefEmbed) {
-              void cefBrowserNavigate(target)
-                .then((s) => {
-                  if (s.tabs) setCefTabs(s.tabs);
-                  if (s.url) {
-                    lastSyncedUrlRef.current = s.url;
-                    setUrlInput(s.url);
-                  }
-                })
-                .catch((err: Error) => setCefError(err.message));
+              navigateCef(target);
             } else {
               refresh();
             }
