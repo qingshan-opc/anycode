@@ -9,6 +9,8 @@ type Props = {
   width: number;
   onResizeStart: (e: React.PointerEvent) => void;
   onCollapse: () => void;
+  /** Move this panel into the conversation area as a main-area tab. */
+  onMoveToConversation?: () => void;
   children: ReactNode;
 };
 
@@ -17,6 +19,7 @@ export function WorkbenchPanel({
   width: _width,
   onResizeStart,
   onCollapse,
+  onMoveToConversation,
   children,
 }: Props) {
   const t = useT();
@@ -40,15 +43,28 @@ export function WorkbenchPanel({
           <Icon name="view_sidebar" size={16} />
           {t(workbenchPanelById(activeTab).titleKey)}
         </span>
-        <button
-          type="button"
-          className="dw-btn-ghost p-1"
-          title={t("workbench.collapse")}
-          aria-label={t("workbench.collapse")}
-          onClick={onCollapse}
-        >
-          <Icon name="close" size={18} />
-        </button>
+        <span className="inline-flex items-center gap-1 dw-no-drag" data-no-window-drag>
+          {onMoveToConversation && (
+            <button
+              type="button"
+              className="dw-btn-ghost p-1"
+              title={t("workbench.moveToConversation")}
+              aria-label={t("workbench.moveToConversation")}
+              onClick={onMoveToConversation}
+            >
+              <Icon name="dock_to_left" size={18} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="dw-btn-ghost p-1"
+            title={t("workbench.collapse")}
+            aria-label={t("workbench.collapse")}
+            onClick={onCollapse}
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </span>
       </div>
       <div className="flex-1 min-h-[12rem] flex flex-col overflow-y-auto overflow-x-hidden">
         {children}

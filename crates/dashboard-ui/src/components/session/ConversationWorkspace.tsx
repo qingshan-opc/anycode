@@ -10,7 +10,7 @@ import { WorkbenchPanel } from "@/components/workbench/WorkbenchPanel";
 import { useWorkbenchSidebarState } from "@/components/workbench/hooks/useWorkbenchSidebarState";
 import { useWorkbenchAutoOpen } from "@/components/workbench/hooks/useWorkbenchAutoOpen";
 import { useWorkbenchBadges } from "@/components/workbench/hooks/useWorkbenchBadges";
-import { workbenchPanelById } from "@/components/workbench/registry";
+import { WORKBENCH_PANELS_ORDERED, workbenchPanelById } from "@/components/workbench/registry";
 import { useConversationShell } from "@/context/ConversationShellContext";
 import { useT } from "@/i18n/context";
 import { isBrowserToolBlock } from "@/lib/browserToolDetect";
@@ -58,18 +58,24 @@ export function ConversationWorkspace() {
     expanded: workbenchExpanded,
     activeTab: workbenchTab,
     panelWidth,
+    tabbedPanels,
+    conversationTab,
     selectTab,
     setExpanded: setWorkbenchExpanded,
     setPanelWidth,
     openTab,
     markSeen,
+    moveToConversationTab,
+    moveToDock,
+    selectConversationTab,
   } = useWorkbenchSidebarState();
 
   const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
 
   useEffect(() => {
     setWorkbenchExpanded(false);
-  }, [displaySessionId, setWorkbenchExpanded]);
+    selectConversationTab("chat");
+  }, [displaySessionId, setWorkbenchExpanded, selectConversationTab]);
 
   useEffect(() => {
     setWorkbenchDrawerOpen(workbenchExpanded);
@@ -103,10 +109,18 @@ export function ConversationWorkspace() {
 
   // Opening the Artifacts panel marks its deliverables as seen (badge clears).
   useEffect(() => {
-    if (workbenchExpanded && workbenchTab === "artifacts") {
+    if ((workbenchExpanded && workbenchTab === "artifacts") || conversationTab === "artifacts") {
       markSeen("artifacts");
     }
-  }, [workbenchExpanded, workbenchTab, markSeen]);
+  }, [workbenchExpanded, workbenchTab, conversationTab, markSeen]);
+
+  // Defensive: a dangling conversationTab (e.g. merged from another window
+  // after the panel moved back) falls back to the chat.
+  useEffect(() => {
+    if (conversationTab !== "chat" && !tabbedPanels.includes(conversationTab)) {
+      selectConversationTab("chat");
+    }
+  }, [conversationTab, tabbedPanels, selectConversationTab]);
 
   const onResizeStart = useCallback(
     (e: React.PointerEvent) => {
@@ -128,7 +142,10 @@ export function ConversationWorkspace() {
     [panelWidth, setPanelWidth],
   );
 
-  const renderWorkbenchPanel = () => {
+  const renderPanelById = (
+    tab: WorkbenchTab,
+    opts: { active: boolean; collapse: () => void },
+  ) => {
     if (!displaySessionId) {
       return (
         <p className="text-sm text-secondary px-4 py-6 m-0 text-center">
@@ -136,7 +153,7 @@ export function ConversationWorkspace() {
         </p>
       );
     }
-    const def = workbenchPanelById(workbenchTab);
+    const def = workbenchPanelById(tab);
     if (def.needsProject && !projectId) {
       return (
         <p className="text-sm text-secondary px-4 py-6 m-0 text-center">
@@ -154,13 +171,19 @@ export function ConversationWorkspace() {
         <PanelComponent
           projectId={projectId}
           sessionId={displaySessionId}
-          active={workbenchExpanded}
+          active={opts.active}
           isRunning={selected?.status === "running"}
-          collapse={() => setWorkbenchExpanded(false)}
+          collapse={opts.collapse}
         />
       </Suspense>
     );
   };
+
+  const renderWorkbenchPanel = () =>
+    renderPanelById(workbenchTab, {
+      active: workbenchExpanded,
+      collapse: () => setWorkbenchExpanded(false),
+    });
 
   if (sessionsError) {
     return (
@@ -242,42 +265,107 @@ export function ConversationWorkspace() {
               workbenchExpanded ? " conv-thread--workbench-open" : ""
             }`}
           >
-            <ConversationThread
-              session={selected}
-              onFollowUpStarted={selectSession}
-              showHeader={true}
-              sseLive={sseLive}
-              liveBlocks={liveBlocks}
-              liveEvents={liveEvents}
-              chatStreamLive={chatStreamLive}
-              sessionLive={sessionLive}
-              questionsRespondAllowed={questionsRespondAllowed}
-              approvalsRespondAllowed={approvalsRespondAllowed}
-              pendingApprovalCount={
-                selected ? (pendingCounts.get(selected.id) ?? 0) : 0
+            {tabbedPanels.length > 0 ? (
+              <div className="conv-main-tabs shrink-0" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={conversationTab === "chat"}
+                  className={`conv-main-tabs__tab${conversationTab === "chat" ? " conv-main-tabs__tab--active" : ""}`}
+                  onClick={() => selectConversationTab("chat")}
+                >
+                  <Icon name="forum" size={16} />
+                  {t("workbench.tabChat")}
+                </button>
+                {WORKBENCH_PANELS_ORDERED.filter((p) => tabbedPanels.includes(p.id)).map((p) => (
+                  <span
+                    key={p.id}
+                    className={`conv-main-tabs__tab conv-main-tabs__tab--panel${
+                      conversationTab === p.id ? " conv-main-tabs__tab--active" : ""
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={conversationTab === p.id}
+                      className="conv-main-tabs__tab-label"
+                      onClick={() => selectConversationTab(p.id)}
+                    >
+                      <Icon name={p.icon} size={16} />
+                      {t(p.titleKey)}
+                    </button>
+                    <button
+                      type="button"
+                      className="conv-main-tabs__tab-action"
+                      title={t("workbench.moveToDock")}
+                      aria-label={t("workbench.moveToDock")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        moveToDock(p.id);
+                      }}
+                    >
+                      <Icon name="dock_to_right" size={14} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+
+            <div
+              className={
+                conversationTab === "chat"
+                  ? "flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden"
+                  : "hidden"
               }
-              sseStatus={sseStatus}
-              isOptimisticStreaming={isOptimisticStreaming}
-              markSessionStreaming={markSessionStreaming}
-              clearOptimisticStreaming={clearOptimisticStreaming}
-              selectedToolId={selectedTool?.id ?? null}
-              onSelectTool={(tool) => {
-                setSelectedTool(tool);
-                if (isBrowserToolBlock(tool)) {
-                  openTab("browser");
+            >
+              <ConversationThread
+                session={selected}
+                onFollowUpStarted={selectSession}
+                showHeader={true}
+                sseLive={sseLive}
+                liveBlocks={liveBlocks}
+                liveEvents={liveEvents}
+                chatStreamLive={chatStreamLive}
+                sessionLive={sessionLive}
+                questionsRespondAllowed={questionsRespondAllowed}
+                approvalsRespondAllowed={approvalsRespondAllowed}
+                pendingApprovalCount={
+                  selected ? (pendingCounts.get(selected.id) ?? 0) : 0
                 }
-              }}
-              onRenameSession={onRenameSession}
-              headerEnd={
-                <ConversationWorkbenchHeaderIcons
-                  activeTab={workbenchTab}
-                  expanded={workbenchExpanded}
-                  onSelectTab={onSelectWorkbenchTab}
-                  disabled={!displaySessionId}
-                  badges={workbenchBadges}
-                />
-              }
-            />
+                sseStatus={sseStatus}
+                isOptimisticStreaming={isOptimisticStreaming}
+                markSessionStreaming={markSessionStreaming}
+                clearOptimisticStreaming={clearOptimisticStreaming}
+                selectedToolId={selectedTool?.id ?? null}
+                onSelectTool={(tool) => {
+                  setSelectedTool(tool);
+                  if (isBrowserToolBlock(tool)) {
+                    openTab("browser");
+                  }
+                }}
+                onRenameSession={onRenameSession}
+                headerEnd={
+                  <ConversationWorkbenchHeaderIcons
+                    activeTab={workbenchTab}
+                    expanded={workbenchExpanded}
+                    onSelectTab={onSelectWorkbenchTab}
+                    disabled={!displaySessionId}
+                    badges={workbenchBadges}
+                    tabbedPanels={tabbedPanels}
+                    conversationTab={conversationTab}
+                  />
+                }
+              />
+            </div>
+
+            {conversationTab !== "chat" ? (
+              <div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-hidden">
+                {renderPanelById(conversationTab, {
+                  active: true,
+                  collapse: () => moveToDock(conversationTab),
+                })}
+              </div>
+            ) : null}
           </div>
 
           {workbenchExpanded ? (
@@ -290,6 +378,7 @@ export function ConversationWorkspace() {
                 width={panelWidth}
                 onResizeStart={onResizeStart}
                 onCollapse={() => setWorkbenchExpanded(false)}
+                onMoveToConversation={() => moveToConversationTab(workbenchTab)}
               >
                 {renderWorkbenchPanel()}
               </WorkbenchPanel>

@@ -648,6 +648,8 @@ export const zh = {
   workbench: {
     title: "工作台",
     collapse: "折叠面板",
+    moveToConversation: "在会话区打开",
+    moveToDock: "移回侧边栏",
     tabChat: "会话",
     tabFiles: "文件",
     tabBrowser: "浏览器",
@@ -729,7 +731,6 @@ export const zh = {
     agentAuto: "自动",
     agentAutoSubtitle: "全局路由",
     agentAutoLabel: "自动 · 全局路由",
-    skillsPicker: "技能（可选）",
     newSession: "新建会话",
     selectProjectFirst: "请先选择项目",
     selectProjectFirstDesc: "请从上方下拉框选择项目后再开始会话。",

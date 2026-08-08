@@ -1,4 +1,5 @@
 import type { WorkbenchTab } from "@/api/types/workbench";
+import type { ConversationTabId } from "./hooks/useWorkbenchSidebarState";
 import { Icon } from "@/components/Icon";
 import { useT } from "@/i18n/context";
 import { WORKBENCH_PANELS_ORDERED } from "./registry";
@@ -10,6 +11,9 @@ type Props = {
   disabled?: boolean;
   /** Unread counts per tab (rendered as a badge dot); omitted/zero = hidden. */
   badges?: Partial<Record<WorkbenchTab, number>>;
+  /** Panels living as conversation-area tabs (their active signal differs). */
+  tabbedPanels?: WorkbenchTab[];
+  conversationTab?: ConversationTabId;
 };
 
 export function ConversationWorkbenchHeaderIcons({
@@ -18,13 +22,16 @@ export function ConversationWorkbenchHeaderIcons({
   onSelectTab,
   disabled,
   badges,
+  tabbedPanels,
+  conversationTab,
 }: Props) {
   const t = useT();
 
   return (
     <div className="conv-workbench-header-icons" role="toolbar" aria-label={t("workbench.title")}>
       {WORKBENCH_PANELS_ORDERED.map((tab) => {
-        const active = expanded && activeTab === tab.id;
+        const tabbed = tabbedPanels?.includes(tab.id) ?? false;
+        const active = tabbed ? conversationTab === tab.id : expanded && activeTab === tab.id;
         const badge = badges?.[tab.id] ?? 0;
         return (
           <button

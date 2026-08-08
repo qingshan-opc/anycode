@@ -657,6 +657,8 @@ export const en = {
   workbench: {
     title: "Workbench",
     collapse: "Collapse panel",
+    moveToConversation: "Open in conversation area",
+    moveToDock: "Move back to sidebar",
     tabChat: "Chat",
     tabFiles: "Files",
     tabBrowser: "Browser",
@@ -740,7 +742,6 @@ export const en = {
     agentAuto: "Auto",
     agentAutoSubtitle: "Global routing",
     agentAutoLabel: "Auto · Global routing",
-    skillsPicker: "Skills (optional)",
     newSession: "New session",
     selectProjectFirst: "Select a project first",
     selectProjectFirstDesc: "Choose a project from the dropdown above to start a conversation.",

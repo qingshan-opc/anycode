@@ -2008,10 +2008,6 @@
     background-position: right 0.55rem center;
   }
 
-  .dw-composer-chip__badge {
-    @apply ml-0.5 inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-primary/15 px-1.5 text-[12px] font-medium leading-none text-primary;
-  }
-
   .dw-model-picker__menu {
     @apply absolute left-0 bottom-full z-[300] mb-2 flex w-[min(20rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl shadow-lg;
   }
@@ -2306,6 +2302,31 @@
 
   .conv-workbench-header-icons__btn:disabled {
     @apply opacity-40 cursor-not-allowed;
+  }
+
+  /* Main-area tab strip: panels moved out of the dock into the conversation area. */
+  .conv-main-tabs {
+    @apply flex items-center gap-1 px-2 py-1 border-b border-outline-variant bg-surface-container-low overflow-x-auto;
+  }
+
+  .conv-main-tabs__tab {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-0 cursor-pointer transition-colors bg-transparent text-secondary text-sm whitespace-nowrap hover:bg-surface-container-high hover:text-on-surface;
+  }
+
+  .conv-main-tabs__tab--active {
+    @apply bg-primary/15 text-primary;
+  }
+
+  .conv-main-tabs__tab--panel {
+    @apply pr-1 cursor-default;
+  }
+
+  .conv-main-tabs__tab-label {
+    @apply inline-flex items-center gap-1.5 border-0 bg-transparent cursor-pointer text-inherit text-sm p-0;
+  }
+
+  .conv-main-tabs__tab-action {
+    @apply inline-flex items-center p-0.5 rounded border-0 bg-transparent cursor-pointer text-secondary opacity-60 hover:opacity-100 hover:bg-surface-container-high;
   }
 
   .conv-git-bar__row {

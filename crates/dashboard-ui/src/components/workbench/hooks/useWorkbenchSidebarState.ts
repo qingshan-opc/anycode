@@ -6,6 +6,9 @@ const STORAGE_KEY = "anycode-workbench-sidebar";
 
 export type WorkbenchFocus = { tab: WorkbenchTab; payload: unknown };
 
+/** Main-area tab: the conversation itself ("chat") or a dock panel moved over. */
+export type ConversationTabId = "chat" | WorkbenchTab;
+
 export type WorkbenchSidebarState = {
   expanded: boolean;
   activeTab: WorkbenchTab;
@@ -14,6 +17,10 @@ export type WorkbenchSidebarState = {
   focus: WorkbenchFocus | null;
   /** Per-tab "seen" watermark (ISO timestamp) for badge unread semantics. */
   lastSeen: Partial<Record<WorkbenchTab, string>>;
+  /** Panels living as conversation-area tabs instead of in the dock. */
+  tabbedPanels: WorkbenchTab[];
+  /** Selected main-area tab; "chat" = the conversation thread. */
+  conversationTab: ConversationTabId;
 };
 
 const DEFAULT: WorkbenchSidebarState = {
@@ -22,6 +29,8 @@ const DEFAULT: WorkbenchSidebarState = {
   panelWidth: 420,
   focus: null,
   lastSeen: {},
+  tabbedPanels: [],
+  conversationTab: "chat",
 };
 
 const PANEL_WIDTH_MIN = 280;
@@ -33,6 +42,15 @@ function clampPanelWidth(w: unknown): number {
 }
 
 function sanitize(raw: Partial<WorkbenchSidebarState>): WorkbenchSidebarState {
+  const tabbedPanels = Array.isArray(raw.tabbedPanels)
+    ? raw.tabbedPanels.filter((t, i, arr): t is WorkbenchTab => isWorkbenchTab(t) && arr.indexOf(t) === i)
+    : DEFAULT.tabbedPanels;
+  const conversationTab: ConversationTabId =
+    raw.conversationTab === "chat"
+      ? "chat"
+      : isWorkbenchTab(raw.conversationTab) && tabbedPanels.includes(raw.conversationTab)
+        ? raw.conversationTab
+        : DEFAULT.conversationTab;
   return {
     expanded: raw.expanded ?? DEFAULT.expanded,
     activeTab: isWorkbenchTab(raw.activeTab) ? raw.activeTab : DEFAULT.activeTab,
@@ -46,6 +64,8 @@ function sanitize(raw: Partial<WorkbenchSidebarState>): WorkbenchSidebarState {
             ),
           )
         : {},
+    tabbedPanels,
+    conversationTab,
   };
 }
 
@@ -130,7 +150,10 @@ export const workbenchSidebarStore = {
   },
   selectTab(tab: WorkbenchTab): void {
     ensureInit();
-    if (state.expanded && state.activeTab === tab) {
+    if (state.tabbedPanels.includes(tab)) {
+      // Tabbed panels don't live in the dock — toggle the main-area tab.
+      update({ conversationTab: state.conversationTab === tab ? "chat" : tab });
+    } else if (state.expanded && state.activeTab === tab) {
       update({ expanded: false });
     } else {
       update({ expanded: true, activeTab: tab });
@@ -146,11 +169,50 @@ export const workbenchSidebarStore = {
   },
   openTab(tab: WorkbenchTab, opts?: { focus?: unknown }): void {
     ensureInit();
+    if (state.tabbedPanels.includes(tab)) {
+      // Panel lives as a conversation-area tab: reveal it there instead of
+      // expanding the dock — every auto-open call site works in both modes.
+      update({
+        conversationTab: tab,
+        focus: opts && "focus" in opts ? { tab, payload: opts.focus } : state.focus,
+      });
+      return;
+    }
     update({
       expanded: true,
       activeTab: tab,
       focus: opts && "focus" in opts ? { tab, payload: opts.focus } : state.focus,
     });
+  },
+  /** Move a dock panel into the conversation area as a main-area tab. */
+  moveToConversationTab(tab: WorkbenchTab): void {
+    ensureInit();
+    const tabbedPanels = state.tabbedPanels.includes(tab)
+      ? state.tabbedPanels
+      : [...state.tabbedPanels, tab];
+    update({
+      tabbedPanels,
+      conversationTab: tab,
+      // Prevent double-mount of the same panel (CEF surface is a singleton).
+      expanded: state.expanded && state.activeTab === tab ? false : state.expanded,
+    });
+  },
+  /** Move a conversation-area tab back into the dock. */
+  moveToDock(tab: WorkbenchTab): void {
+    ensureInit();
+    update({
+      tabbedPanels: state.tabbedPanels.filter((t) => t !== tab),
+      conversationTab: state.conversationTab === tab ? "chat" : state.conversationTab,
+      // Reveal the panel where it landed.
+      expanded: true,
+      activeTab: tab,
+    });
+  },
+  /** Select the main-area tab ("chat" or a tabbed panel). */
+  selectConversationTab(id: ConversationTabId): void {
+    ensureInit();
+    if (id !== "chat" && !state.tabbedPanels.includes(id)) return;
+    update({ conversationTab: id });
   },
   /** Consume (read + clear) a pending focus request for `tab`. */
   consumeFocus(tab: WorkbenchTab): unknown {
@@ -194,6 +256,15 @@ export function useWorkbenchSidebarState() {
     [],
   );
   const markSeen = useCallback((tab: WorkbenchTab) => workbenchSidebarStore.markSeen(tab), []);
+  const moveToConversationTab = useCallback(
+    (tab: WorkbenchTab) => workbenchSidebarStore.moveToConversationTab(tab),
+    [],
+  );
+  const moveToDock = useCallback((tab: WorkbenchTab) => workbenchSidebarStore.moveToDock(tab), []);
+  const selectConversationTab = useCallback(
+    (id: ConversationTabId) => workbenchSidebarStore.selectConversationTab(id),
+    [],
+  );
 
   return {
     ...snapshot,
@@ -203,6 +274,9 @@ export function useWorkbenchSidebarState() {
     openTab,
     consumeFocus,
     markSeen,
+    moveToConversationTab,
+    moveToDock,
+    selectConversationTab,
   };
 }
 
