@@ -51,9 +51,14 @@ function sanitize(raw: Partial<WorkbenchSidebarState>): WorkbenchSidebarState {
       : isWorkbenchTab(raw.conversationTab) && tabbedPanels.includes(raw.conversationTab)
         ? raw.conversationTab
         : DEFAULT.conversationTab;
+  const activeTab = isWorkbenchTab(raw.activeTab) ? raw.activeTab : DEFAULT.activeTab;
+  const expanded = raw.expanded ?? DEFAULT.expanded;
   return {
-    expanded: raw.expanded ?? DEFAULT.expanded,
-    activeTab: isWorkbenchTab(raw.activeTab) ? raw.activeTab : DEFAULT.activeTab,
+    // Invariant: a tabbed panel never stays expanded in the dock — that would
+    // double-mount the panel (CEF surface is a singleton; two mounted
+    // BrowserPanels fight over show/hide and resurrect closed tabs).
+    expanded: expanded && tabbedPanels.includes(activeTab) ? false : expanded,
+    activeTab,
     panelWidth: clampPanelWidth(raw.panelWidth),
     focus: null,
     lastSeen:
@@ -136,7 +141,13 @@ function setState(next: WorkbenchSidebarState, persist = true): void {
 }
 
 function update(patch: Partial<WorkbenchSidebarState>): void {
-  setState({ ...state, ...patch });
+  const next = { ...state, ...patch };
+  // Same invariant as sanitize(): never expanded in the dock on a tab that
+  // lives as a conversation-area tab (double-mounts the singleton CEF surface).
+  if (next.expanded && next.tabbedPanels.includes(next.activeTab)) {
+    next.expanded = false;
+  }
+  setState(next);
 }
 
 /**

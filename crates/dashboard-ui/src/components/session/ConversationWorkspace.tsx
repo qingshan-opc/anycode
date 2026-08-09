@@ -368,7 +368,7 @@ export function ConversationWorkspace() {
             ) : null}
           </div>
 
-          {workbenchExpanded ? (
+          {workbenchExpanded && !tabbedPanels.includes(workbenchTab) ? (
             <div
               className="conv-workbench-dock"
               style={{ flex: `1 1 ${panelWidth}px`, minWidth: panelWidth }}

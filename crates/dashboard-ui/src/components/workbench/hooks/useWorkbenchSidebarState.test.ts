@@ -186,6 +186,33 @@ describe("workbenchSidebarStore", () => {
     expect(s.conversationTab).toBe("chat");
   });
 
+  it("hydration collapses a dock expanded on a tabbed panel (no double-mount)", () => {
+    // Poisoned/seeded state: tabbed + dock-expanded on the same tab would mount
+    // BrowserPanel twice; the second instance's syncShow resurrects closed CEF
+    // tabs via show_in_parent.
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        expanded: true,
+        activeTab: "browser",
+        tabbedPanels: ["browser"],
+        conversationTab: "browser",
+      }),
+    );
+    const s = workbenchSidebarStore.getState();
+    expect(s.expanded).toBe(false);
+    expect(s.activeTab).toBe("browser");
+    expect(s.conversationTab).toBe("browser");
+  });
+
+  it("update guard: setting expanded on a tabbed activeTab is collapsed centrally", () => {
+    workbenchSidebarStore.moveToConversationTab("browser");
+    // Force the illegal combination through a raw patch path (openTab on the
+    // tabbed panel must not re-expand the dock either).
+    workbenchSidebarStore.openTab("browser");
+    expect(workbenchSidebarStore.getState().expanded).toBe(false);
+  });
+
   it("persists tabbedPanels and conversationTab", () => {
     workbenchSidebarStore.moveToConversationTab("browser");
     const persisted = JSON.parse(backing.get(STORAGE_KEY)!) as {
