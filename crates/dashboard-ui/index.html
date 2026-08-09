@@ -7,13 +7,22 @@
     <title>anyCode Workbench</title>
     <link rel="icon" type="image/svg+xml" href="./anycode-mark.svg" />
     <link rel="alternate icon" type="image/png" href="./favicon.png" />
+    <!-- Font CDN stylesheets must never render-block: when fonts.googleapis.com
+         is unreachable (offline / GFW) a plain stylesheet link hangs the first
+         paint forever and the whole Workbench stays a blank splash. Load them
+         async; text renders with system-font fallbacks and swaps when/if the
+         CDN responds. -->
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      media="print"
+      onload="this.media='all'"
     />
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+      media="print"
+      onload="this.media='all'"
     />
   </head>
   <body>

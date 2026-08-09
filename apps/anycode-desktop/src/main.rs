@@ -38,6 +38,7 @@ fn wait_for_dashboard_ready(timeout_secs: u64) -> bool {
 
 fn navigate_workbench(app: &tauri::AppHandle, w: &tauri::WebviewWindow) -> bool {
     let Some(api_base) = desktop_api_base() else {
+        eprintln!("anycode-desktop: navigate_workbench: no api base yet");
         return false;
     };
     // Serve bundled UI from the in-process loopback server (same origin as /api/*).
@@ -50,8 +51,20 @@ fn navigate_workbench(app: &tauri::AppHandle, w: &tauri::WebviewWindow) -> bool 
         }
         _ => format!("{api_base}/"),
     };
-    w.eval(&format!("window.location.replace({url:?});"))
-        .is_ok()
+    // Native loadRequest navigation: on this machine (macOS 26, after sleep/
+    // wake cycles) `window.location.replace` via eval starts the load but the
+    // provisional navigation never commits — the splash stays forever while
+    // the server does receive the request. UI-process `navigate()` does not
+    // hit that stall.
+    let r = tauri::Url::parse(&url).map_err(|e| e.to_string()).and_then(|u| {
+        w.navigate(u).map_err(|e| e.to_string())
+    });
+    eprintln!(
+        "anycode-desktop: navigate_workbench url={} navigate={:?}",
+        url.replace(bootstrap.as_deref().unwrap_or(""), "<token>"),
+        r.is_ok()
+    );
+    r.is_ok()
 }
 
 
@@ -200,7 +213,9 @@ fn open_local_path(path: String) -> Result<(), String> {
 }
 
 fn show_workbench(app: &tauri::AppHandle, ready: bool) {
+    eprintln!("anycode-desktop: show_workbench ready={ready}");
     let Some(w) = app.get_webview_window("main") else {
+        eprintln!("anycode-desktop: show_workbench: no main window");
         return;
     };
     if ready {
