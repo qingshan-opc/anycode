@@ -38,3 +38,10 @@ objc2-app-kit = { version = "0.3", optional = true, features = [
   "NSApplication",
   "NSGraphics",
 ] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+block2 = "0.6"
+
+[[example]]
+name = "repro_last_tab"
+required-features = ["host"]

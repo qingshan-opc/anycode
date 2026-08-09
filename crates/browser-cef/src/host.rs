@@ -287,8 +287,10 @@ fn container_child_bounds() -> Rect {
     Rect {
         x: 0,
         y: 0,
-        width: bounds.size.width as i32,
-        height: bounds.size.height as i32,
+        // Never hand CEF a zero-size child widget — a transient 0×0 container
+        // (layout settling, occluded window) must not create a 0-area browser.
+        width: (bounds.size.width as i32).max(1),
+        height: (bounds.size.height as i32).max(1),
     }
 }
 
@@ -807,14 +809,13 @@ pub fn close_tab(id: i32) -> Result<(), String> {
         }
         if let Some(browser) = browser {
             if let Some(host) = browser.host() {
-                let handle = host.window_handle();
-                if !handle.is_null() {
-                    let view = unsafe { &*(handle as *const NSView) };
-                    view.removeFromSuperview();
-                }
                 // Force close: skips DoClose/beforeunload, guaranteeing browser
-                // destruction. The late OnBeforeClose is a no-op (the tab is
-                // already gone from g.tabs → position() → None).
+                // destruction. CEF's own teardown removes the browser NSView
+                // from the container — do NOT removeFromSuperview early: in the
+                // layer-backed WKWebView window that can leave CEF touching a
+                // detached view during the next pump (observed as EXC_BAD_ACCESS
+                // inside do_message_loop_work). The late OnBeforeClose is a
+                // no-op (the tab is already gone from g.tabs → position() → None).
                 host.close_browser(1);
             }
             if let Ok(mut pending) = PENDING_BROWSER_DROPS.lock() {
