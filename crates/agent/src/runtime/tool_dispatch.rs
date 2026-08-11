@@ -501,6 +501,41 @@ impl AgentRuntime {
             Some(ctx.working_directory),
         );
         let extracted = extract_artifacts(tool_call, &tool_result);
+        if !extracted.is_empty() {
+            // P1 申报点验收:交付物一经显式申报立即按类型验收,不通过当场返修。
+            let acceptance = self
+                .check_declared_deliverables(
+                    &extracted,
+                    &mut state.checked_deliverables,
+                    std::path::Path::new(ctx.working_directory),
+                )
+                .await;
+            if acceptance.checked > 0 {
+                super::delivery_metrics::record_declaration_checks(
+                    &ctx.task_id,
+                    ctx.session_label,
+                    &acceptance.results,
+                );
+                let failed = acceptance
+                    .results
+                    .iter()
+                    .filter(|r| {
+                        r.outcome != anycode_core::VerificationOutcome::Passed
+                            && r.severity != anycode_core::GateSeverity::Info
+                    })
+                    .count();
+                logger.line(
+                    ctx.task_id,
+                    &format!(
+                        "[delivery_acceptance] checked={} failed={}",
+                        acceptance.checked, failed
+                    ),
+                );
+                if let Some(msg) = acceptance.repair_message() {
+                    sink.push(super::context_user_message(msg)).await;
+                }
+            }
+        }
         emit_artifacts_ready(
             &ctx.live_trace_tx,
             ctx.turn,

@@ -29,6 +29,8 @@ pub(super) struct TurnToolState {
     pub artifacts: Vec<anycode_core::Artifact>,
     pub budget_state: Option<super::budget::RuntimeBudgetState>,
     pub progress_seq: u32,
+    /// 申报点验收去重键(path:bytes)——同一版本只验一次,修复重报会再验。
+    pub checked_deliverables: std::collections::HashSet<String>,
 }
 
 pub(super) enum TurnToolCancel<'a> {

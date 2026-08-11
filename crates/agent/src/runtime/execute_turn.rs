@@ -901,6 +901,7 @@ impl AgentRuntime {
                 artifacts: std::mem::take(&mut artifacts),
                 budget_state: budget_state.clone(),
                 progress_seq,
+                checked_deliverables: std::collections::HashSet::new(),
             };
             let mut sink = MessageAppendSink::Shared(&messages);
             match self

@@ -87,6 +87,18 @@ impl AgentRuntime {
                 state.last_repair_diagnostics.as_deref(),
             )
             .await;
+        super::delivery_metrics::record_guard_verdict(
+            &input.task_id,
+            input.session_label,
+            match guard_out.decision {
+                GuardDecision::Complete => "complete",
+                GuardDecision::Repair => "repair",
+                GuardDecision::Partial => "partial",
+                GuardDecision::Failed => "failed",
+            },
+            state.repairs_used,
+            guard_out.report.as_ref(),
+        );
         match guard_out.decision {
             GuardDecision::Complete => {
                 let verification_snapshot = input

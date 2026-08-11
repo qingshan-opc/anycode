@@ -7,6 +7,8 @@ mod automem;
 mod budget;
 mod compile_context;
 mod completion_guard;
+mod delivery_acceptance;
+mod delivery_metrics;
 mod discoverable_verification;
 mod evidence;
 mod execute_eval;

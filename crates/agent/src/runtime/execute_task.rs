@@ -522,6 +522,7 @@ impl AgentRuntime {
                 artifacts: std::mem::take(&mut artifacts),
                 budget_state: budget_state.clone(),
                 progress_seq: 0,
+                checked_deliverables: std::collections::HashSet::new(),
             };
             let mut sink = MessageAppendSink::Vec(&mut messages);
             match self
