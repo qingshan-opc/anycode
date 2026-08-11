@@ -84,7 +84,8 @@ pub use message::{Message, MessageContent, MessageRole};
 pub use model_profile::ModelRouteProfile;
 pub use plan_tree::{
     apply_plan_patches, format_plan_tree_summary, format_plan_tree_terminal,
-    plan_tree_all_completed, plan_tree_is_empty, rollup_plan_statuses, validate_plan_tree,
+    plan_tree_all_completed, plan_tree_current_focus, plan_tree_in_progress_leaf_count,
+    plan_tree_is_empty, plan_tree_next_pending, rollup_plan_statuses, validate_plan_tree,
     PlanLimits, PlanNode, PlanNodeKind, PlanPatch, PlanStatus, PlanTree, PlanValidationError,
     PLAN_TREE_CONTEXT_PREFIX, PLAN_TREE_MAX_DEPTH, PLAN_TREE_MAX_NODES,
 };

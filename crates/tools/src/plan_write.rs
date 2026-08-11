@@ -4,7 +4,8 @@ use crate::services::ToolServices;
 use crate::session_store::resolve_session_key;
 use anycode_core::prelude::*;
 use anycode_core::{
-    apply_plan_patches, format_plan_tree_summary, plan_tree_all_completed, plan_tree_is_empty,
+    apply_plan_patches, format_plan_tree_summary, plan_tree_all_completed, plan_tree_current_focus,
+    plan_tree_in_progress_leaf_count, plan_tree_is_empty, plan_tree_next_pending,
     rollup_plan_statuses, validate_plan_tree, PlanLimits, PlanNode, PlanNodeKind, PlanPatch,
     PlanStatus, PlanTree, PlanValidationError,
 };
@@ -86,7 +87,7 @@ impl Tool for PlanWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Update the session hierarchical plan tree. Use `tree` for full replacement or `updates` for incremental changes."
+        "Update the session plan tree for multi-step work. Use `tree` for the initial plan (phase nodes group task leaves), `updates` for status changes by id. Status rules: mark a leaf in_progress before starting it and completed immediately when done; keep at most ONE in_progress leaf at a time; update leaves only — parent status is derived automatically. Skip planning for simple tasks. The result echoes a compact summary with Current (active node) and Next (upcoming leaf)."
     }
 
     fn schema(&self) -> serde_json::Value {
@@ -197,19 +198,28 @@ impl Tool for PlanWriteTool {
             rollup_plan_statuses(&mut tree);
             self.services.replace_plan_tree(session_id.as_deref(), tree)
         };
-        let (old, new) = result;
+        let (_old, new) = result;
         self.services
             .persist_plan_tree(session_id.as_deref(), &new)
             .await;
         let summary = format_plan_tree_summary(&new);
+        // 引导而非强制：多个 in_progress 叶子时返回警告，由模型自我纠正。
+        let mut warnings: Vec<String> = Vec::new();
+        let in_progress = plan_tree_in_progress_leaf_count(&new);
+        if in_progress > 1 {
+            warnings.push(format!(
+                "{in_progress} leaves are in_progress; keep at most one — finish or requeue the others to pending."
+            ));
+        }
         Ok(ToolOutput {
             result: serde_json::json!({
-                "oldTree": old,
-                "newTree": new,
                 "summary": summary,
-                "sessionId": session_key,
-                "cleared": plan_tree_is_empty(&new),
+                "currentFocus": plan_tree_current_focus(&new),
+                "nextPending": plan_tree_next_pending(&new),
                 "allCompleted": plan_tree_all_completed(&new),
+                "cleared": plan_tree_is_empty(&new),
+                "sessionId": session_key,
+                "warnings": warnings,
             }),
             error: None,
             duration_ms: start.elapsed().as_millis() as u64,
@@ -249,7 +259,6 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(out.result["newTree"]["roots"].is_array());
         assert!(out.result["summary"]
             .as_str()
             .unwrap()
@@ -259,5 +268,60 @@ mod tests {
             "Implement feature"
         );
         assert!(plan_tree_is_empty(&services.plan_tree(Some("other"))));
+    }
+
+    fn tool_input(input: serde_json::Value) -> ToolInput {
+        ToolInput {
+            name: "PlanWrite".into(),
+            input,
+            working_directory: Some(".".into()),
+            sandbox_mode: false,
+            dashboard_session_id: Some("sess_guide".into()),
+            task_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_write_result_guides_focus_and_next() {
+        let services = Arc::new(ToolServices::default());
+        let tool = PlanWriteTool::new(services);
+        let out = tool
+            .execute(tool_input(json!({
+                "tree": [{
+                    "id": "phase-1",
+                    "title": "Build",
+                    "children": [
+                        { "id": "t1", "title": "Read code", "status": "in_progress" },
+                        { "id": "t2", "title": "Write tests" }
+                    ]
+                }]
+            })))
+            .await
+            .unwrap();
+        assert_eq!(out.result["currentFocus"], "Build / Read code");
+        assert_eq!(out.result["nextPending"], "Build / Write tests");
+        assert!(out.result["warnings"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn plan_write_warns_on_multiple_in_progress() {
+        let services = Arc::new(ToolServices::default());
+        let tool = PlanWriteTool::new(services);
+        let out = tool
+            .execute(tool_input(json!({
+                "tree": [{
+                    "id": "phase-1",
+                    "title": "Build",
+                    "children": [
+                        { "id": "t1", "title": "A", "status": "in_progress" },
+                        { "id": "t2", "title": "B", "status": "in_progress" }
+                    ]
+                }]
+            })))
+            .await
+            .unwrap();
+        let warnings = out.result["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].as_str().unwrap().contains("at most one"));
     }
 }

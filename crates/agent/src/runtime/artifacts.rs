@@ -1,4 +1,9 @@
 //! 工具结果截断与产物提取（纯函数，便于单测）。
+//!
+//! 申报制：只有显式声明的产物才会成为交付物——
+//! 工具结果 JSON 的 `artifacts[]`、同目录 `*.anycode-artifact.json` sidecar、
+//! stdout 末行 `ANYCODE_ARTIFACT:{...}`，或 GenerateImage/GenerateVideo 的生成路径。
+//! FileWrite/Edit 写的文件（多为代码）一律不自动登记。
 
 use anycode_core::prelude::*;
 use anycode_core::{
@@ -6,7 +11,6 @@ use anycode_core::{
     Artifact,
 };
 use std::collections::HashMap;
-use std::path::Path;
 
 pub(crate) fn truncate_text(s: String, max_bytes: usize) -> (String, bool) {
     if s.len() <= max_bytes {
@@ -174,16 +178,6 @@ pub(crate) fn extract_artifacts(tool_call: &ToolCall, tool_output: &ToolOutput) 
     }
 
     match tool_call.name.as_str() {
-        "FileWrite" | "Edit" => {
-            if let Some(path) = tool_output
-                .result
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-            {
-                push_unique(&mut out, enrich_path_artifact(Artifact::from_path(path)));
-            }
-        }
         "NotebookEdit" => {
             if let Some(path) = tool_output
                 .result
@@ -198,7 +192,7 @@ pub(crate) fn extract_artifacts(tool_call: &ToolCall, tool_output: &ToolOutput) 
                 push_unique(&mut out, art);
             }
         }
-        "Bash" | "Skill" => {
+        "Bash" => {
             let command = tool_call
                 .input
                 .get("command")
@@ -218,7 +212,7 @@ pub(crate) fn extract_artifacts(tool_call: &ToolCall, tool_output: &ToolOutput) 
                 .unwrap_or(serde_json::Value::Null);
 
             // Prefer structured deliverables; keep bash text artifact only when no path cards.
-            if out.is_empty() && tool_call.name == "Bash" {
+            if out.is_empty() {
                 let mut metadata = HashMap::new();
                 metadata.insert("command".to_string(), serde_json::Value::String(command));
                 metadata.insert("exit_code".to_string(), exit_code);
@@ -257,29 +251,6 @@ pub(crate) fn extract_artifacts(tool_call: &ToolCall, tool_output: &ToolOutput) 
                     preview_path: None,
                     inline: Some(false),
                 });
-            }
-
-            // Skill stdout path scan: fallback only when no structured emit.
-            if tool_call.name == "Skill" && out.is_empty() {
-                for token in stdout.split_whitespace() {
-                    let cleaned = token.trim_matches(|c: char| {
-                        c == '"' || c == '\'' || c == ',' || c == ')' || c == '('
-                    });
-                    let looks_deliverable = cleaned.ends_with(".pptx")
-                        || cleaned.ends_with(".pdf")
-                        || cleaned.ends_with(".png")
-                        || cleaned.ends_with(".jpg")
-                        || cleaned.ends_with(".jpeg")
-                        || cleaned.ends_with(".webp")
-                        || cleaned.ends_with(".docx")
-                        || cleaned.ends_with(".xlsx")
-                        || cleaned.ends_with(".csv")
-                        || cleaned.ends_with(".mp4")
-                        || cleaned.ends_with(".md");
-                    if Path::new(cleaned).is_absolute() && looks_deliverable {
-                        push_unique(&mut out, enrich_path_artifact(Artifact::from_path(cleaned)));
-                    }
-                }
             }
         }
         "GenerateImage" | "GenerateVideo" => {
@@ -379,5 +350,39 @@ mod tests {
         let arts = extract_artifacts(&tc, &out);
         assert!(!arts.is_empty());
         assert_eq!(arts[0].resolved_kind(), "presentation");
+    }
+
+    #[test]
+    fn file_write_and_edit_do_not_auto_register() {
+        // 申报制：写文件（多为代码）不再自动成为交付物，需显式声明。
+        for name in ["FileWrite", "Edit"] {
+            let tc = ToolCall {
+                id: "1".into(),
+                name: name.into(),
+                input: json!({ "path": "/tmp/anycode-no-such-file-12345.html" }),
+            };
+            let out = ToolOutput {
+                result: json!({ "path": "/tmp/anycode-no-such-file-12345.html" }),
+                error: None,
+                duration_ms: 1,
+            };
+            assert!(extract_artifacts(&tc, &out).is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn skill_stdout_path_scan_removed() {
+        // 未申报的 Skill stdout 路径不再兜底成卡片。
+        let tc = ToolCall {
+            id: "1".into(),
+            name: "Skill".into(),
+            input: json!({}),
+        };
+        let out = ToolOutput {
+            result: json!({ "stdout": "done\nwrote /tmp/anycode-no-such-deck-12345.pptx\n" }),
+            error: None,
+            duration_ms: 1,
+        };
+        assert!(extract_artifacts(&tc, &out).is_empty());
     }
 }

@@ -418,8 +418,15 @@ pub fn cef_browser_select_tab(app: AppHandle, id: i32) -> Result<CefEmbedStatus,
 
 #[tauri::command]
 pub fn cef_browser_close_tab(app: AppHandle, id: i32) -> Result<CefEmbedStatus, String> {
-    run_on_main(&app, move || {
+    eprintln!("anycode-desktop: cef_browser_close_tab invoked id={id}");
+    let r = run_on_main(&app, move || {
         anycode_browser_cef::close_tab(id)?;
         Ok(status_snapshot())
-    })
+    });
+    let tab_count: Option<usize> = match &r {
+        Ok(s) => Some(s.tabs.len()),
+        Err(_) => None,
+    };
+    eprintln!("anycode-desktop: cef_browser_close_tab id={id} -> tabs={tab_count:?} err={}", r.is_err());
+    r
 }

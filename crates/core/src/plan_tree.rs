@@ -334,6 +334,69 @@ fn insert_child(
 /// Prefix for hidden runtime context messages that carry the active plan tree.
 pub const PLAN_TREE_CONTEXT_PREFIX: &str = "## Active Plan Tree";
 
+/// Depth-first path of the deepest in-progress node, e.g. "Phase 1 / Build UI".
+/// Parents derive `in_progress` via rollup, so the deepest match is the real focus.
+pub fn plan_tree_current_focus(tree: &PlanTree) -> Option<String> {
+    for root in &tree.roots {
+        if let Some(path) = deepest_in_progress_path(root, vec![root.title.as_str()]) {
+            return Some(path.join(" / "));
+        }
+    }
+    None
+}
+
+fn deepest_in_progress_path<'a>(node: &'a PlanNode, path: Vec<&'a str>) -> Option<Vec<&'a str>> {
+    // Descend regardless of parent status: an un-rolled-up parent may still
+    // contain an in-progress leaf, and the deepest match is the real focus.
+    for child in &node.children {
+        let mut child_path = path.clone();
+        child_path.push(child.title.as_str());
+        if let Some(found) = deepest_in_progress_path(child, child_path) {
+            return Some(found);
+        }
+    }
+    if matches!(node.status, PlanStatus::InProgress) {
+        return Some(path);
+    }
+    None
+}
+
+/// Depth-first path of the first actionable pending leaf.
+pub fn plan_tree_next_pending(tree: &PlanTree) -> Option<String> {
+    for root in &tree.roots {
+        if let Some(path) = first_pending_leaf_path(root, vec![root.title.as_str()]) {
+            return Some(path.join(" / "));
+        }
+    }
+    None
+}
+
+fn first_pending_leaf_path<'a>(node: &'a PlanNode, path: Vec<&'a str>) -> Option<Vec<&'a str>> {
+    // Only leaf status matters: a parent may be in-progress while later
+    // siblings are still pending.
+    if node.children.is_empty() {
+        return matches!(node.status, PlanStatus::Pending).then_some(path);
+    }
+    for child in &node.children {
+        let mut child_path = path.clone();
+        child_path.push(child.title.as_str());
+        if let Some(found) = first_pending_leaf_path(child, child_path) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Count of user-authored in-progress leaves (guidance target: at most one).
+pub fn plan_tree_in_progress_leaf_count(tree: &PlanTree) -> usize {
+    fn count(node: &PlanNode) -> usize {
+        let own =
+            usize::from(node.children.is_empty() && matches!(node.status, PlanStatus::InProgress));
+        own + node.children.iter().map(count).sum::<usize>()
+    }
+    tree.roots.iter().map(count).sum()
+}
+
 /// Compact text summary for LLM context reinjection.
 pub fn format_plan_tree_summary(tree: &PlanTree) -> String {
     if tree.roots.is_empty() {
@@ -343,6 +406,12 @@ pub fn format_plan_tree_summary(tree: &PlanTree) -> String {
     out.push_str("\n\n");
     for root in &tree.roots {
         format_node_summary(root, 0, &mut out);
+    }
+    if let Some(focus) = plan_tree_current_focus(tree) {
+        out.push_str(&format!("Current: {focus}\n"));
+    }
+    if let Some(next) = plan_tree_next_pending(tree) {
+        out.push_str(&format!("Next: {next}\n"));
     }
     out.trim_end().to_string()
 }
@@ -508,5 +577,75 @@ mod tests {
         let lines = format_plan_tree_terminal(&tree, 80);
         assert!(!lines.is_empty());
         assert!(lines[0].contains("Research"));
+    }
+
+    #[test]
+    fn focus_and_next_guide_lines() {
+        let mut tree = PlanTree {
+            roots: vec![PlanNode {
+                id: "phase-1".into(),
+                title: "Build".into(),
+                status: PlanStatus::Pending,
+                children: vec![
+                    PlanNode {
+                        id: "t1".into(),
+                        title: "Read code".into(),
+                        status: PlanStatus::InProgress,
+                        children: vec![],
+                        detail: None,
+                        kind: None,
+                    },
+                    PlanNode {
+                        id: "t2".into(),
+                        title: "Write tests".into(),
+                        status: PlanStatus::Pending,
+                        children: vec![],
+                        detail: None,
+                        kind: None,
+                    },
+                ],
+                detail: None,
+                kind: None,
+            }],
+        };
+        rollup_plan_statuses(&mut tree);
+        assert_eq!(
+            plan_tree_current_focus(&tree).as_deref(),
+            Some("Build / Read code")
+        );
+        assert_eq!(
+            plan_tree_next_pending(&tree).as_deref(),
+            Some("Build / Write tests")
+        );
+        assert_eq!(plan_tree_in_progress_leaf_count(&tree), 1);
+        let summary = format_plan_tree_summary(&tree);
+        assert!(summary.contains("Current: Build / Read code"));
+        assert!(summary.contains("Next: Build / Write tests"));
+    }
+
+    #[test]
+    fn focus_prefers_deepest_in_progress() {
+        let tree = PlanTree {
+            roots: vec![PlanNode {
+                id: "p".into(),
+                title: "Phase".into(),
+                status: PlanStatus::InProgress,
+                children: vec![PlanNode {
+                    id: "t".into(),
+                    title: "Leaf task".into(),
+                    status: PlanStatus::InProgress,
+                    children: vec![],
+                    detail: None,
+                    kind: None,
+                }],
+                detail: None,
+                kind: None,
+            }],
+        };
+        assert_eq!(
+            plan_tree_current_focus(&tree).as_deref(),
+            Some("Phase / Leaf task")
+        );
+        assert_eq!(plan_tree_in_progress_leaf_count(&tree), 1);
     }
 }

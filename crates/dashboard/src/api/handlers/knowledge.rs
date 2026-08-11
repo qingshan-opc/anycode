@@ -265,9 +265,10 @@ pub async fn list_orchestration_tasks() -> impl IntoResponse {
 
 pub async fn list_automation_templates() -> impl IntoResponse {
     let mut templates = Vec::new();
+    // Prefer cwd override for operators; ship defaults next to the dashboard crate.
     let candidates = [
         std::path::PathBuf::from("automation-templates"),
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../automation-templates"),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/automation-templates"),
     ];
     for dir in candidates {
         if !dir.is_dir() {
@@ -287,5 +288,21 @@ pub async fn list_automation_templates() -> impl IntoResponse {
         }
         break;
     }
+    if templates.is_empty() {
+        templates.extend(builtin_automation_templates());
+    }
     Json(json!({ "templates": templates })).into_response()
+}
+
+/// Compile-time fallback when the resources dir is absent (packaged desktop).
+fn builtin_automation_templates() -> Vec<serde_json::Value> {
+    const FILES: &[&str] = &[
+        include_str!("../../../resources/automation-templates/daily-brief.json"),
+        include_str!("../../../resources/automation-templates/follow-up-monitor.json"),
+        include_str!("../../../resources/automation-templates/weekly-review.json"),
+    ];
+    FILES
+        .iter()
+        .filter_map(|text| serde_json::from_str(text).ok())
+        .collect()
 }

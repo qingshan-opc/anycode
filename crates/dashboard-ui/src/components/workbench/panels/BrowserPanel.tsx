@@ -50,6 +50,12 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
   const lastSyncedUrlRef = useRef<string>("");
   const urlFocusedRef = useRef(false);
   urlFocusedRef.current = urlFocused;
+  /**
+   * After the user closes the last tab, ResizeObserver / layout sync must not
+   * call show_in_parent (that recreates about:blank). Cleared on intentional
+   * navigate or "+".
+   */
+  const suppressAutoCreateRef = useRef(false);
 
   useEffect(() => {
     if (!isTauriDesktop() || !active) {
@@ -142,6 +148,13 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
         width: Math.floor(rect.width),
         height: Math.floor(rect.height),
       };
+      // User closed every tab — never recreate via layout churn.
+      if (suppressAutoCreateRef.current) {
+        void cefBrowserResize(payload).catch(() => {
+          /* ignore while empty */
+        });
+        return;
+      }
       // url only used when creating the first CEF browser; later calls only resize.
       void cefBrowserShow(payload, urlInput.trim() || "about:blank")
         .then((s) => {
@@ -160,10 +173,10 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
     syncShow();
     const ro = new ResizeObserver(() => {
       const rect = el.getBoundingClientRect();
-      if (!cefSurfaceReadyRef.current) {
+      if (!cefSurfaceReadyRef.current || suppressAutoCreateRef.current) {
         // Host just got a real size (dock animation, late layout): the initial
         // syncShow may have bailed on a <2px rect — retry creation instead of
-        // resize-into-void.
+        // resize-into-void. After last-tab close, syncShow is a no-create resize.
         syncShow();
         return;
       }
@@ -197,6 +210,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
         setUrlInput(s.url);
       }
     };
+    suppressAutoCreateRef.current = false;
     if (cefTabs.length === 0) {
       const el = embedHostRef.current;
       const rect = el?.getBoundingClientRect();
@@ -213,11 +227,28 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
         },
         target,
       )
-        .then(applyStatus)
+        .then((s) => {
+          setCefSurfaceReady(true);
+          applyStatus(s);
+        })
         .catch((err: Error) => setCefError(err.message));
       return;
     }
     void cefBrowserNavigate(target).then(applyStatus).catch((err: Error) => setCefError(err.message));
+  };
+
+  const applyTabsFromStatus = (s: CefEmbedStatus) => {
+    const tabs = s.tabs ?? [];
+    setCefTabs(tabs);
+    if (tabs.length === 0) {
+      suppressAutoCreateRef.current = true;
+      setCefSurfaceReady(false);
+      return;
+    }
+    if (s.url) {
+      lastSyncedUrlRef.current = s.url;
+      setUrlInput(s.url);
+    }
   };
 
   // Design mode only changes host height — debounce a resize, never recreate CEF.
@@ -247,7 +278,14 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
     const id = window.setInterval(() => {
       void cefBrowserStatus().then((s) => {
         if (!s) return;
-        if (s.tabs) setCefTabs(s.tabs);
+        if (s.tabs) {
+          setCefTabs(s.tabs);
+          // Do not flip suppressAutoCreate here — a cold poll before the first
+          // show completes would permanently block browser creation.
+          if (s.tabs.length === 0 && suppressAutoCreateRef.current) {
+            setCefSurfaceReady(false);
+          }
+        }
         const cefUrl = s.url?.trim();
         if (!cefUrl) return;
         if (urlFocusedRef.current) return;
@@ -345,62 +383,78 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
       </div>
       {useCefEmbed && (
         <div className="flex items-center gap-1 px-1 py-1 border-b border-outline-variant/60 bg-surface-container-low shrink-0 overflow-x-auto">
-          {(cefTabs.length > 0 ? cefTabs : [{ id: -1, url: urlInput, title: urlInput || "New Tab", active: true }]).map(
-            (tab) => {
-              const isActive = tab.active;
-              const label = (tab.title || tab.url || t("workbench.browserNewTab")).slice(0, 28);
-              return (
-                <span
-                  key={tab.id}
-                  role="tab"
-                  aria-selected={isActive}
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap border cursor-pointer select-none max-w-[10rem] ${
-                    isActive
-                      ? "bg-surface-container-high text-on-surface border-outline-variant"
-                      : "text-secondary border-transparent hover:bg-surface-container-high/60"
-                  }`}
-                  onClick={() => {
-                    if (tab.id < 0) return;
-                    void cefBrowserSelectTab(tab.id)
-                      .then((s) => {
-                        if (s.tabs) setCefTabs(s.tabs);
-                        if (s.url) setUrlInput(s.url);
-                      })
+          {cefTabs.map((tab) => {
+            const isActive = tab.active;
+            const label = (tab.title || tab.url || t("workbench.browserNewTab")).slice(0, 28);
+            return (
+              <span
+                key={tab.id}
+                role="tab"
+                aria-selected={isActive}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap border cursor-pointer select-none max-w-[10rem] ${
+                  isActive
+                    ? "bg-surface-container-high text-on-surface border-outline-variant"
+                    : "text-secondary border-transparent hover:bg-surface-container-high/60"
+                }`}
+                onClick={() => {
+                  void cefBrowserSelectTab(tab.id)
+                    .then(applyTabsFromStatus)
+                    .catch((err: Error) => setCefError(err.message));
+                }}
+              >
+                <span className="truncate min-w-0">{label}</span>
+                <button
+                  type="button"
+                  className="dw-btn-ghost p-0 text-[10px] leading-none shrink-0"
+                  aria-label={t("workbench.browserCloseTab")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void cefBrowserCloseTab(tab.id)
+                      .then(applyTabsFromStatus)
                       .catch((err: Error) => setCefError(err.message));
                   }}
                 >
-                  <span className="truncate">{label}</span>
-                  {tab.id >= 0 && (
-                    <button
-                      type="button"
-                      className="dw-btn-ghost p-0 text-[10px] leading-none"
-                      aria-label={t("workbench.browserCloseTab")}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void cefBrowserCloseTab(tab.id)
-                          .then((s) => {
-                            if (s.tabs) setCefTabs(s.tabs);
-                            if (s.url) setUrlInput(s.url);
-                          })
-                          .catch((err: Error) => setCefError(err.message));
-                      }}
-                    >
-                      <Icon name="close" size={12} />
-                    </button>
-                  )}
-                </span>
-              );
-            },
-          )}
+                  <Icon name="close" size={12} />
+                </button>
+              </span>
+            );
+          })}
           <button
             type="button"
-            className="dw-btn-ghost p-0.5 text-secondary"
+            className="dw-btn-ghost p-0.5 text-secondary shrink-0"
             title={t("workbench.browserNewTab")}
             aria-label={t("workbench.browserNewTab")}
             onClick={() => {
+              suppressAutoCreateRef.current = false;
+              // Zero tabs: new_tab needs a live container — recreate via show first.
+              if (cefTabs.length === 0) {
+                const el = embedHostRef.current;
+                const rect = el?.getBoundingClientRect();
+                if (!rect || rect.width < 2 || rect.height < 2) {
+                  setCefError("browser surface not ready");
+                  return;
+                }
+                void cefBrowserShow(
+                  {
+                    x: Math.floor(rect.left),
+                    y: Math.floor(rect.top),
+                    width: Math.floor(rect.width),
+                    height: Math.floor(rect.height),
+                  },
+                  "about:blank",
+                )
+                  .then((s) => {
+                    setCefSurfaceReady(true);
+                    applyTabsFromStatus(s);
+                    setUrlInput(s.url || "about:blank");
+                  })
+                  .catch((err: Error) => setCefError(err.message));
+                return;
+              }
               void cefBrowserNewTab("about:blank")
                 .then((s) => {
-                  if (s.tabs) setCefTabs(s.tabs);
+                  setCefSurfaceReady(true);
+                  applyTabsFromStatus(s);
                   setUrlInput(s.url || "about:blank");
                 })
                 .catch((err: Error) => setCefError(err.message));
@@ -523,6 +577,13 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
               }`}
               aria-label={t("workbench.browserCefEmbed")}
             />
+            {cefTabs.length === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none px-4">
+                <p className="m-0 text-xs text-secondary text-center">
+                  {t("workbench.browserEmpty")}
+                </p>
+              </div>
+            )}
             {designMode && (
               <form
                 className="conv-browser-design-bar"

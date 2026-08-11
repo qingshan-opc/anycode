@@ -1662,8 +1662,9 @@ impl Tool for FileWriteLikeTool {
     }
 }
 
+/// 申报制：FileWrite/Edit 写的文件（多为代码）不再自动登记为 artifact。
 #[tokio::test]
-async fn test_filewrite_artifact_is_returned() {
+async fn test_filewrite_artifact_not_auto_registered() {
     let temp = TempDir::new().unwrap();
     let disk = DiskTaskOutput::new(temp.path().to_path_buf());
 
@@ -1762,9 +1763,141 @@ async fn test_filewrite_artifact_is_returned() {
     let res = runtime.execute_task(task).await.unwrap();
     match res {
         TaskResult::Success { artifacts, .. } => {
-            assert!(artifacts
+            assert!(!artifacts
                 .iter()
                 .any(|a| a.path.as_deref() == Some("/tmp/a.txt")));
+        }
+        _ => panic!("expected success"),
+    }
+}
+
+/// 显式声明（工具结果 `artifacts[]`）仍会进入最终 artifact 索引。
+struct DeclaringTool;
+
+#[async_trait]
+impl Tool for DeclaringTool {
+    fn name(&self) -> &str {
+        "Skill"
+    }
+    fn description(&self) -> &str {
+        "Mock Skill declaring an artifact"
+    }
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+    fn permission_mode(&self) -> PermissionMode {
+        PermissionMode::Auto
+    }
+    fn security_policy(&self) -> Option<&SecurityPolicy> {
+        None
+    }
+    async fn execute(&self, _input: ToolInput) -> Result<ToolOutput, CoreError> {
+        Ok(ToolOutput {
+            result: serde_json::json!({
+                "success": true,
+                "artifacts": [{ "path": "/tmp/report.xlsx", "kind": "spreadsheet" }]
+            }),
+            error: None,
+            duration_ms: 1,
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_declared_artifact_is_returned() {
+    let temp = TempDir::new().unwrap();
+    let disk = DiskTaskOutput::new(temp.path().to_path_buf());
+
+    let mk = |tool_calls: Vec<ToolCall>| LLMResponse {
+        message: msg_text(MessageRole::Assistant, "turn"),
+        tool_calls,
+        usage: Usage {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
+        },
+    };
+    let first = mk(vec![ToolCall {
+        id: "tooluse_1".to_string(),
+        name: "Skill".to_string(),
+        input: serde_json::json!({}),
+    }]);
+    let second = mk(vec![]);
+
+    let llm = Arc::new(MockLLM::new(vec![first, second]));
+    let mut tools: HashMap<ToolName, Box<dyn Tool>> = HashMap::new();
+    tools.insert("Skill".to_string(), Box::new(DeclaringTool));
+
+    let runtime = AgentRuntime::new(
+        RuntimeCoreDeps {
+            llm_client: llm,
+            tools,
+            memory_store: Arc::new(DummyMemoryStore),
+            default_model_config: ModelConfig {
+                provider: LLMProvider::Custom("mock".to_string()),
+                model: "mock".to_string(),
+                base_url: None,
+                temperature: None,
+                max_tokens: None,
+                api_key: None,
+                ..Default::default()
+            },
+            model_overrides: HashMap::new(),
+            failover_chain: vec![],
+            disk_output: Some(disk),
+            security: Arc::new(SecurityLayer::new(PermissionMode::BypassPermissions)),
+            sandbox_mode: false,
+            prompt_config: RuntimePromptConfig::default(),
+        },
+        RuntimeMemoryOptions {
+            memory_pipeline: None,
+            memory_pipeline_settings: None,
+            memory_project_autosave_enabled: false,
+            session_notifications: None,
+            automem: None,
+            automem_base_path: None,
+        },
+        RuntimeToolPolicy {
+            tool_name_deny: vec![],
+            claude_gating: AgentClaudeToolGating::default(),
+            expose_skill_on_explore_plan: false,
+        },
+    );
+
+    let task = Task {
+        id: Uuid::new_v4(),
+        agent_type: AgentType::new("general-purpose"),
+        prompt: "test".to_string(),
+        context: TaskContext {
+            session_id: Uuid::new_v4(),
+            working_directory: ".".to_string(),
+            environment: HashMap::new(),
+            user_id: None,
+            system_prompt_append: None,
+            context_injections: vec![],
+            nested_model_override: None,
+            nested_worktree_path: None,
+            nested_worktree_repo_root: None,
+            nested_cancel: None,
+            channel_progress_tx: None,
+            live_trace_tx: None,
+            tool_deny_names: vec![],
+            tool_deny_prefixes: vec![],
+            user_vision_images: vec![],
+            budget: TaskBudget::default(),
+            loop_limits: AgentLoopLimits::default(),
+            chat_turn: None,
+        },
+        created_at: chrono::Utc::now(),
+    };
+
+    let res = runtime.execute_task(task).await.unwrap();
+    match res {
+        TaskResult::Success { artifacts, .. } => {
+            assert!(artifacts
+                .iter()
+                .any(|a| a.path.as_deref() == Some("/tmp/report.xlsx")));
         }
         _ => panic!("expected success"),
     }

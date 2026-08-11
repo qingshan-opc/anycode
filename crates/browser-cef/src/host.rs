@@ -789,10 +789,15 @@ pub fn close_tab(id: i32) -> Result<(), String> {
     let last_tab = {
         let g = state().lock().map_err(|e| e.to_string())?;
         if !g.tabs.iter().any(|t| t.id == id) {
+            eprintln!(
+                "anycode-cef: close_tab({id}) unknown (live tabs: {:?})",
+                g.tabs.iter().map(|t| t.id).collect::<Vec<_>>()
+            );
             return Err(format!("unknown tab {id}"));
         }
         g.tabs.len() == 1
     };
+    eprintln!("anycode-cef: close_tab({id}) last_tab={last_tab}");
     if last_tab {
         // Last tab: tear down deterministically. The soft path is provably
         // stuck for the final browser — DoClose returns 1 (else the whole

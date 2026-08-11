@@ -100,7 +100,7 @@ export function AskUserQuestionInbox({
                 <p className="text-sm font-medium text-on-surface m-0">{row.question}</p>
               </div>
             </div>
-            <div className="flex flex-col gap-1.5 mb-3">
+            <div className="flex flex-col gap-1.5 mb-3 max-h-[min(16rem,40vh)] overflow-y-auto overscroll-contain pr-1">
               {row.options.map((opt) => {
                 const active = sel.has(opt.label);
                 return (

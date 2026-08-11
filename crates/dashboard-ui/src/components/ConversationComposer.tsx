@@ -11,8 +11,7 @@ import { mergeVoiceTranscript, VoiceInputButton } from "@/components/VoiceInputB
 import { appendOcrToMessage, ImageOcrButton } from "@/components/ImageOcrButton";
 import { agentDisplayLabel, isPrimaryAgentId } from "@/lib/agentCatalog";
 import { useLocale, useT } from "@/i18n/context";
-import { skillDisplayDescription, skillDisplayName } from "@/lib/skillCatalog";
-import { skillIconMeta, skillIconToneClass } from "@/lib/skillIcons";
+import { extractMentionedSkillIds } from "@/lib/composerMentions";
 import {
   mergeQueueItems,
   nextOptimisticSeq,
@@ -154,7 +153,6 @@ export function ConversationComposer(props: Props) {
   const queryClient = useQueryClient();
   const titleTouched = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const skillsTriggerRef = useRef<HTMLButtonElement>(null);
 
   const isStart = props.mode === "start";
   const session = props.mode === "follow-up" ? props.session : null;
@@ -170,8 +168,6 @@ export function ConversationComposer(props: Props) {
     const fromSession = session?.agent_type ?? "";
     return fromSession === "general-purpose" ? "" : fromSession;
   });
-  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
-  const [skillsOpen, setSkillsOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [attachedImages, setAttachedImages] = useState<VisionAttachment[]>([]);
@@ -411,14 +407,6 @@ export function ConversationComposer(props: Props) {
     return ids.filter((id) => allow.includes(id));
   }, [agent, agentProfiles.data?.profiles, allSkills.data?.skills]);
 
-  const skillById = useMemo(() => {
-    const map = new Map<string, NonNullable<typeof allSkills.data>["skills"][number]>();
-    for (const s of allSkills.data?.skills ?? []) {
-      map.set(s.id, s);
-    }
-    return map;
-  }, [allSkills.data?.skills]);
-
   const { primaryProfiles, moreProfiles } = useMemo(() => {
     const profiles = agentProfiles.data?.profiles ?? [];
     return {
@@ -427,9 +415,11 @@ export function ConversationComposer(props: Props) {
     };
   }, [agentProfiles.data?.profiles]);
 
-  useEffect(() => {
-    setSelectedSkills((prev) => prev.filter((id) => skillOptions.includes(id)));
-  }, [skillOptions]);
+  // Skills are pinned by typing @skill-id in the message (picker chip removed).
+  const mentionedSkills = useMemo(
+    () => extractMentionedSkillIds(message, skillOptions),
+    [message, skillOptions],
+  );
 
   const mentionFilter = parseMentionFilter(message);
   const mentionCandidates = useMemo(() => {
@@ -564,7 +554,7 @@ export function ConversationComposer(props: Props) {
         title: sessionTitle.trim() || undefined,
         prompt: vars.prompt,
         agent: vars.goal ? GOAL_AGENT_ID : agent.trim() || undefined,
-        skills: selectedSkills.length > 0 ? selectedSkills : undefined,
+        skills: mentionedSkills.length > 0 ? mentionedSkills : undefined,
         vision_images:
           attachedImages.length > 0 ? visionPayloadsForApi(attachedImages) : undefined,
         text_files:
@@ -641,20 +631,9 @@ export function ConversationComposer(props: Props) {
   const suggestMenuStyle = useAnchoredAboveStyle(showSuggestMenu, textareaRef, {
     matchWidth: true,
   });
-  const skillsMenuStyle = useAnchoredAboveStyle(skillsOpen, skillsTriggerRef, {
-    minWidth: 288,
-    maxWidth: 384,
-  });
-
-  function toggleSkill(id: string) {
-    setSelectedSkills((prev) =>
-      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
-    );
-  }
 
   function applyMention(skillId: string) {
     setMessage((prev) => `${prev.replace(/@[\w.-]*$/, `@${skillId} `)}`);
-    setSelectedSkills((prev) => (prev.includes(skillId) ? prev : [...prev, skillId]));
     setMentionIndex(0);
     textareaRef.current?.focus();
   }
@@ -702,7 +681,7 @@ export function ConversationComposer(props: Props) {
     return {
       prompt: prompt.trim(),
       agent: goal ? GOAL_AGENT_ID : agent.trim() || undefined,
-      skills: selectedSkills.length > 0 ? selectedSkills : undefined,
+      skills: mentionedSkills.length > 0 ? mentionedSkills : undefined,
       composer_mode: composerModeForSend(grill),
       vision_images:
         attachedImages.length > 0 ? visionPayloadsForApi(attachedImages) : undefined,
@@ -1139,79 +1118,6 @@ export function ConversationComposer(props: Props) {
           </select>
 
           <ModelPicker disabled={running || pending} compact />
-
-          {skillOptions.length > 0 && (
-            <div className="relative">
-              <button
-                ref={skillsTriggerRef}
-                type="button"
-                className="dw-composer-chip"
-                onClick={() => setSkillsOpen((v) => !v)}
-                disabled={running || pending}
-                aria-expanded={skillsOpen}
-              >
-                <Icon name="extension" size={16} />
-                {t("conversations.skillsPicker")}
-                {selectedSkills.length > 0 && (
-                  <span className="dw-composer-chip__badge">
-                    {selectedSkills.length}
-                  </span>
-                )}
-              </button>
-              {skillsOpen &&
-                createPortal(
-                  <>
-                    <button
-                      type="button"
-                      className="fixed inset-0 z-[299] cursor-default border-0 bg-transparent"
-                      aria-hidden
-                      onClick={() => setSkillsOpen(false)}
-                    />
-                    <div
-                      className="dw-composer-skills-menu"
-                      style={skillsMenuStyle}
-                      role="menu"
-                    >
-                      {skillOptions.map((id) => {
-                        const row = skillById.get(id);
-                        const desc = row ? skillDisplayDescription(row, locale) : "";
-                        const label = row ? skillDisplayName(row, locale) : id;
-                        const active = selectedSkills.includes(id);
-                        const { icon, tone } = skillIconMeta(row ?? { id });
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            role="menuitemcheckbox"
-                            aria-checked={active}
-                            className={`dw-composer-skills-menu__item${active ? " is-active" : ""}`}
-                            onClick={() => toggleSkill(id)}
-                          >
-                            <span
-                              className={`dw-composer-skills-menu__icon ${skillIconToneClass(tone)}`}
-                            >
-                              <Icon name={icon} size={16} />
-                            </span>
-                            <span className="min-w-0 flex-1 text-left">
-                              <span className="text-sm font-medium block truncate">{label}</span>
-                              {desc ? (
-                                <span className="text-[13px] leading-snug text-secondary line-clamp-2 block mt-0.5">
-                                  {desc}
-                                </span>
-                              ) : null}
-                            </span>
-                            {active ? (
-                              <Icon name="check" size={18} className="text-primary shrink-0" />
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>,
-                  document.body,
-                )}
-            </div>
-          )}
 
           <button
             type="button"
