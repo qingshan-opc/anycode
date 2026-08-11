@@ -244,6 +244,7 @@ impl AgentRuntime {
                                     t.starts_with("## Task Spec")
                                         || t.starts_with("## Experience Pack")
                                         || t.starts_with("## Selected Skills")
+                                        || t.starts_with("## Recommended Skills")
                                         || t.starts_with("## Gate Plan")
                                         || t.starts_with("## Preferences")
                                         || t.starts_with("## Memories (")

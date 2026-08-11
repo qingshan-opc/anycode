@@ -2,7 +2,7 @@
 
 use anycode_core::{
     AgentPromptPack, ClarifyingQuestion, ExpectedArtifact, ExperiencePack, GatePlan, GatePolicy,
-    Memory, MemoryType, TaskFamily, TaskSpec,
+    Memory, MemoryType, TaskFamily, TaskSpec, DEFAULT_CONSTRAINT_PREFIX,
 };
 
 /// Independent recall budgets so types are not mashed into one unattributed blob.
@@ -241,6 +241,13 @@ impl<'a> TaskCompiler<'a> {
         .any(|k| p.contains(k))
     }
 
+    /// Mark a keyword-inferred SOP constraint as an overridable default: the
+    /// user's explicit instructions always win over these (see
+    /// [`TaskSpec::to_prompt_segment`] for the rendered override note).
+    fn default_constraint(s: impl std::fmt::Display) -> String {
+        format!("{DEFAULT_CONSTRAINT_PREFIX} {s}")
+    }
+
     /// Capability / artifact derivation — must not read Experience.
     pub fn compile_base_intent(prompt: &str) -> BaseTaskIntent {
         let family = Self::infer_family(prompt);
@@ -254,8 +261,7 @@ impl<'a> TaskCompiler<'a> {
             required_capabilities.push("media.generate".into());
             deliverables.push("generated image/video file via GenerateImage/GenerateVideo".into());
             constraints.push(
-                "call GenerateImage or GenerateVideo directly — do NOT build slides/documents unless the user also asks for them"
-                    .into(),
+                Self::default_constraint("call GenerateImage or GenerateVideo directly — do NOT build slides/documents unless the user also asks for them"),
             );
         }
 
@@ -269,17 +275,19 @@ impl<'a> TaskCompiler<'a> {
                     path_globs: vec!["**/*.html".into(), "index.html".into()],
                 });
                 deliverables.push("self-contained HTML landing page".into());
-                constraints.push("no purple/violet AI-slop gradients".into());
+                constraints.push(Self::default_constraint(
+                    "no purple/violet AI-slop gradients",
+                ));
             }
             TaskFamily::OfficeDelivery => {
                 let p = prompt.to_ascii_lowercase();
                 let brand = infer_office_brand_kit(prompt);
                 let scenario = infer_office_scenario(prompt);
-                constraints.push(format!("brand_kit=`{brand}`"));
+                constraints.push(Self::default_constraint(format!("brand_kit=`{brand}`")));
                 if let Some(s) = scenario.as_deref() {
-                    constraints.push(format!(
+                    constraints.push(Self::default_constraint(format!(
                         "scenario=`{s}` — follow scenarios/{s} when present"
-                    ));
+                    )));
                 }
 
                 if p.contains("xlsx")
@@ -301,8 +309,9 @@ impl<'a> TaskCompiler<'a> {
                         path_globs: vec!["**/*.xlsx".into()],
                     });
                     deliverables.push("Excel .xlsx workbook".into());
-                    constraints
-                        .push("use Skill anycode-xlsx (workbook.json → validate → .xlsx)".into());
+                    constraints.push(Self::default_constraint(
+                        "use Skill anycode-xlsx (workbook.json → validate → .xlsx)",
+                    ));
                 } else if p.contains("pptx")
                     || p.contains("ppt")
                     || p.contains("slides")
@@ -324,10 +333,9 @@ impl<'a> TaskCompiler<'a> {
                             path_globs: vec!["**/*.pptx".into()],
                         });
                         deliverables.push("PowerPoint .pptx deck".into());
-                        constraints.push(
-                            "use anycode-ppt + presentation-commercial-delivery → native .pptx"
-                                .into(),
-                        );
+                        constraints.push(Self::default_constraint(
+                            "use anycode-ppt + presentation-commercial-delivery → native .pptx",
+                        ));
                     } else {
                         required_capabilities.push("presentation.author".into());
                         expected_artifacts.push(ExpectedArtifact {
@@ -341,10 +349,9 @@ impl<'a> TaskCompiler<'a> {
                             ],
                         });
                         deliverables.push("HTML slide deck (slides/*.html + index.html)".into());
-                        constraints.push(
-                            "use Skill anycode-ppt (templates → validate → index.html); deliver HTML not pptx"
-                                .into(),
-                        );
+                        constraints.push(Self::default_constraint(
+                            "use Skill anycode-ppt (templates → validate → index.html); deliver HTML not pptx",
+                        ));
                     }
                 } else if p.contains("pdf")
                     || p.contains("导出 pdf")
@@ -366,8 +373,9 @@ impl<'a> TaskCompiler<'a> {
                         path_globs: vec!["report.preview.html".into(), "**/*.preview.html".into()],
                     });
                     deliverables.push("PDF report (+ HTML preview)".into());
-                    constraints
-                        .push("use Skill anycode-pdf (MD template → preview.html → .pdf)".into());
+                    constraints.push(Self::default_constraint(
+                        "use Skill anycode-pdf (MD template → preview.html → .pdf)",
+                    ));
                 } else {
                     required_capabilities
                         .extend(["document.author".into(), "document.export.docx".into()]);
@@ -384,8 +392,9 @@ impl<'a> TaskCompiler<'a> {
                         path_globs: vec!["report.preview.html".into(), "**/*.preview.html".into()],
                     });
                     deliverables.push("Word .docx (+ HTML preview)".into());
-                    constraints
-                        .push("use Skill anycode-docx (MD template → preview.html → .docx)".into());
+                    constraints.push(Self::default_constraint(
+                        "use Skill anycode-docx (MD template → preview.html → .docx)",
+                    ));
                 }
             }
             TaskFamily::CrossFileCoding => {
@@ -528,6 +537,15 @@ impl<'a> TaskCompiler<'a> {
                     "Respect recalled preferences; do not re-ask known stable prefs.".into(),
                     "Keep tool use minimal and verify deliverables.".into(),
                 ];
+                if intent
+                    .constraints
+                    .iter()
+                    .any(|s| s.starts_with(DEFAULT_CONSTRAINT_PREFIX))
+                {
+                    c.push(format!(
+                        "constraints marked `{DEFAULT_CONSTRAINT_PREFIX}` are keyword-inferred suggestions; explicit user instructions always override them."
+                    ));
+                }
                 c.extend(intent.constraints.clone());
                 c
             },
@@ -656,14 +674,28 @@ fn infer_office_brand_kit(prompt: &str) -> String {
 }
 
 /// Explicit request for native PowerPoint OOXML (rare); default slides are HTML.
+/// Bare "ppt"/"slides" words keep the HTML default, but an explicit `.pptx`
+/// file target ("导出为 .pptx"、"pptx 文件") is unambiguous user intent and
+/// must route native instead of being overridden by the SOP default.
 fn wants_native_pptx(prompt: &str) -> bool {
     let p = prompt.to_ascii_lowercase();
     [
+        ".pptx",
         "native pptx",
         "pptx附件",
         "pptx 附件",
+        "pptx文件",
+        "pptx 文件",
+        "pptx版",
+        "pptx 版",
         "导出 pptx",
         "导出.pptx",
+        "导出为 pptx",
+        "做成 pptx",
+        "转成 pptx",
+        "转为 pptx",
+        "存为 pptx",
+        "保存为 pptx",
         "powerpoint文件",
         "powerpoint 文件",
         "要 powerpoint 文件",
@@ -968,6 +1000,57 @@ mod tests {
             .constraints
             .iter()
             .any(|c| c.contains("anycode-ppt") && c.contains("HTML")));
+    }
+
+    #[test]
+    fn explicit_pptx_file_intent_routes_native() {
+        // ".pptx" 作为显式文件目标是用户明确意图,不再被 HTML 默认值拦截。
+        let intent = TaskCompiler::compile_base_intent("把本周周报导出为 .pptx 文件");
+        assert!(intent
+            .expected_artifacts
+            .iter()
+            .any(|a| a.kind == "pptx" && a.required));
+        assert!(intent
+            .required_capabilities
+            .contains(&"presentation.export.pptx".into()));
+        // 泛化的 "ppt" 措辞仍保持 HTML 默认。
+        let generic = TaskCompiler::compile_base_intent("写一份 ppt 产品 briefing");
+        assert!(generic
+            .expected_artifacts
+            .iter()
+            .any(|a| a.id == "deck_html_slides"));
+    }
+
+    #[test]
+    fn sop_constraints_are_marked_as_overridable_defaults() {
+        let pack = builtin_web_and_rust_pack();
+        let compiler = TaskCompiler::new(&pack);
+        let parts = compiler.compile("用 anycode ppt 做产品发布幻灯片", &[]);
+        assert!(
+            !parts.task_spec.constraints.is_empty(),
+            "office intent should carry SOP constraints"
+        );
+        assert!(
+            parts
+                .task_spec
+                .constraints
+                .iter()
+                .all(|c| c.starts_with(DEFAULT_CONSTRAINT_PREFIX)),
+            "all keyword-inferred constraints must be defaults: {:?}",
+            parts.task_spec.constraints
+        );
+        let segment = parts.task_spec.to_prompt_segment();
+        assert!(
+            segment.contains("explicit instructions always take precedence"),
+            "prompt segment must tell the model defaults yield to the user: {segment}"
+        );
+        let lead = &parts.task_spec.agent_packs[0];
+        assert!(
+            lead.constraints
+                .iter()
+                .any(|c| c.contains("explicit user instructions always override")),
+            "lead pack must carry the override note"
+        );
     }
 
     #[test]

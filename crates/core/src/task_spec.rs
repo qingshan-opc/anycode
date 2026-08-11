@@ -5,6 +5,11 @@ use std::collections::HashMap;
 
 use crate::workflow::WorkflowDefinition;
 
+/// Prefix marking a constraint inferred from keyword matching rather than
+/// stated by the user. Such constraints are defaults: any explicit user
+/// instruction overrides them (see [`TaskSpec::to_prompt_segment`]).
+pub const DEFAULT_CONSTRAINT_PREFIX: &str = "default:";
+
 /// High-level task family used for experience retrieval and workflow recipes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -136,6 +141,16 @@ impl TaskSpec {
         }
         if !self.constraints.is_empty() {
             lines.push(format!("constraints: {}", self.constraints.join("; ")));
+            if self
+                .constraints
+                .iter()
+                .any(|c| c.starts_with(DEFAULT_CONSTRAINT_PREFIX))
+            {
+                lines.push(
+                    "note: `default:` constraints are keyword-inferred suggestions — the user's explicit instructions always take precedence over them."
+                        .into(),
+                );
+            }
         }
         if !self.deliverables.is_empty() {
             lines.push(format!("deliverables: {}", self.deliverables.join("; ")));
@@ -200,5 +215,35 @@ mod tests {
         let seg = spec.to_prompt_segment();
         assert!(seg.contains("family: web_design"));
         assert!(seg.contains("dark theme"));
+    }
+
+    #[test]
+    fn default_constraints_get_override_note() {
+        let spec = TaskSpec {
+            goal: "make slides".into(),
+            constraints: vec![
+                "default: use Skill anycode-ppt".into(),
+                "verify before delivery".into(),
+            ],
+            ..Default::default()
+        };
+        let seg = spec.to_prompt_segment();
+        assert!(seg.contains("default: use Skill anycode-ppt"));
+        assert!(
+            seg.contains("explicit instructions always take precedence"),
+            "default constraints must carry the override note, got: {seg}"
+        );
+
+        let hard_only = TaskSpec {
+            goal: "make slides".into(),
+            constraints: vec!["verify before delivery".into()],
+            ..Default::default()
+        };
+        assert!(
+            !hard_only
+                .to_prompt_segment()
+                .contains("explicit instructions always take precedence"),
+            "no default constraints → no override note"
+        );
     }
 }

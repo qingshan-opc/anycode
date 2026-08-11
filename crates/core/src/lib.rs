@@ -109,7 +109,10 @@ pub use task_gate_log::{
     format_gate_log_line, format_user_prompt_log_line,
 };
 pub use task_output::DiskTaskOutput;
-pub use task_spec::{AgentPromptPack, ClarifyingQuestion, ExpectedArtifact, TaskFamily, TaskSpec};
+pub use task_spec::{
+    AgentPromptPack, ClarifyingQuestion, ExpectedArtifact, TaskFamily, TaskSpec,
+    DEFAULT_CONSTRAINT_PREFIX,
+};
 pub use tool_catalog::{
     tool_catalog, tool_catalog_entry, ToolCatalogEntry, DEFAULT_TOOL_IDS,
     SECURITY_SENSITIVE_TOOL_IDS, TOOL_BROWSER_CDP, TOOL_BROWSER_CLICK, TOOL_BROWSER_CONSOLE,

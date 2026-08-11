@@ -1,10 +1,15 @@
 //! Capability → skill resolution (pure function; no side effects).
+//!
+//! Skills are **recommended, never preloaded**: the full catalog listing is
+//! already injected into the system prompt at bootstrap
+//! (`crates/bootstrap/src/prompt_runtime.rs`), so this module only emits a
+//! compact recommendation segment. The model loads full instructions on
+//! demand via the `Skill` tool when it judges the recommendation relevant —
+//! keyword-inferred routing must not force a production SOP onto creative
+//! user intent.
 
 use super::effective::SkillsGovernance;
-use super::{load_skill_instructions, SkillCatalog, SkillMeta};
-
-const MAX_PRELOAD: usize = 2;
-const MAX_INSTRUCTION_BUDGET: usize = 16 * 1024;
+use super::{SkillCatalog, SkillMeta};
 
 #[derive(Debug, Clone)]
 pub struct SkillResolutionContext {
@@ -39,7 +44,8 @@ pub struct SelectedSkill {
     pub capability: String,
     pub skill_id: String,
     pub status: SkillMatchStatus,
-    pub instruction_excerpt: String,
+    /// One-line skill description from the catalog (empty when unresolved).
+    pub description: String,
     pub candidates: Vec<String>,
 }
 
@@ -75,7 +81,7 @@ pub fn resolve_capabilities(
                 capability: cap.clone(),
                 skill_id: String::new(),
                 status: SkillMatchStatus::Disabled,
-                instruction_excerpt: String::new(),
+                description: String::new(),
                 candidates: vec![],
             });
         }
@@ -84,8 +90,6 @@ pub fn resolve_capabilities(
         return out;
     }
 
-    let mut used = 0usize;
-    let mut budget = 0usize;
     for cap in required {
         let mut matches: Vec<&SkillMeta> = catalog
             .metas()
@@ -108,7 +112,7 @@ pub fn resolve_capabilities(
                 capability: cap.clone(),
                 skill_id: String::new(),
                 status: SkillMatchStatus::Unresolved,
-                instruction_excerpt: String::new(),
+                description: String::new(),
                 candidates,
             });
             continue;
@@ -118,7 +122,7 @@ pub fn resolve_capabilities(
                 capability: cap.clone(),
                 skill_id: best.id.clone(),
                 status: SkillMatchStatus::Denied,
-                instruction_excerpt: String::new(),
+                description: String::new(),
                 candidates,
             });
             out.denied_skill_ids.push(best.id.clone());
@@ -129,38 +133,16 @@ pub fn resolve_capabilities(
                 capability: cap.clone(),
                 skill_id: best.id.clone(),
                 status: SkillMatchStatus::DependencyUnavailable,
-                instruction_excerpt: String::new(),
+                description: String::new(),
                 candidates,
             });
             continue;
         }
-        if used >= MAX_PRELOAD || budget >= MAX_INSTRUCTION_BUDGET {
-            out.selected.push(SelectedSkill {
-                capability: cap.clone(),
-                skill_id: best.id.clone(),
-                status: SkillMatchStatus::Selected,
-                instruction_excerpt: String::new(),
-                candidates,
-            });
-            continue;
-        }
-        let root = catalog
-            .resolve_skill_root(&best.id, context.project_root.as_deref())
-            .unwrap_or_else(|| best.root_dir.clone());
-        let mut excerpt = load_skill_instructions(&root).unwrap_or_default();
-        let remaining = MAX_INSTRUCTION_BUDGET.saturating_sub(budget);
-        if excerpt.len() > remaining {
-            let boundary = crate::skills::floor_char_boundary(&excerpt, remaining);
-            excerpt.truncate(boundary);
-            excerpt.push_str("\n… [truncated]");
-        }
-        budget += excerpt.len();
-        used += 1;
         out.selected.push(SelectedSkill {
             capability: cap.clone(),
             skill_id: best.id.clone(),
             status: SkillMatchStatus::Selected,
-            instruction_excerpt: excerpt,
+            description: best.description.clone(),
             candidates,
         });
     }
@@ -171,19 +153,20 @@ pub fn resolve_capabilities(
             continue;
         }
         if lines.is_empty() {
-            lines.push("## Selected Skills".to_string());
+            lines.push("## Recommended Skills".to_string());
             lines.push(
-                "Use the Skill tool with these ids when executing the production SOP.".into(),
+                "Keyword-inferred matches — recommendations, not mandates. Load full \
+                 instructions with the **Skill** tool (`{\"name\": \"<id>\"}`) when relevant, \
+                 use **SkillSearch** for alternatives, or proceed without a skill if your \
+                 reading of the task differs. The user's explicit instructions always take \
+                 precedence over any skill SOP."
+                    .into(),
             );
         }
         lines.push(format!(
-            "### skill `{}` for capability `{}`",
-            sel.skill_id, sel.capability
+            "- `{}` (for capability `{}`): {}",
+            sel.skill_id, sel.capability, sel.description
         ));
-        if !sel.instruction_excerpt.is_empty() {
-            lines.push(sel.instruction_excerpt.clone());
-        }
-        lines.push(String::new());
     }
     out.prompt_segment = lines.join("\n");
     out
@@ -220,6 +203,30 @@ mod tests {
         assert_eq!(res.selected[0].skill_id, "web-b");
         assert_eq!(res.selected[0].status, SkillMatchStatus::Selected);
         assert!(!res.prompt_segment.is_empty());
+    }
+
+    #[test]
+    fn recommendations_do_not_preload_sop_instructions() {
+        // 预载 SOP 会把关键词路由的猜测强加给用户意图——segment 只应包含
+        // 推荐清单,绝不能内联 skill 正文。
+        let temp = tempfile::tempdir().unwrap();
+        write_skill(temp.path(), "web-a", "web.implement", 10);
+        let catalog = SkillCatalog::scan(&[temp.path().to_path_buf()], None, 120_000, false);
+        let gov = SkillsGovernance::default();
+        let ctx = SkillResolutionContext::default();
+        let res = resolve_capabilities(&["web.implement".into()], &catalog, &gov, &ctx);
+        assert!(res.prompt_segment.starts_with("## Recommended Skills"));
+        assert!(
+            !res.prompt_segment.contains("Do work."),
+            "prompt segment must not inline skill instructions: {}",
+            res.prompt_segment
+        );
+        assert!(
+            res.prompt_segment.contains("recommendations, not mandates"),
+            "segment must frame skills as overridable recommendations: {}",
+            res.prompt_segment
+        );
+        assert!(res.prompt_segment.contains("`web-a`"));
     }
 
     #[test]
