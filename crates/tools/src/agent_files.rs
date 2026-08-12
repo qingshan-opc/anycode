@@ -50,7 +50,8 @@ pub struct AgentFileManifest {
     /// 基线 builtin：general-purpose / explore / plan / workspace-assistant / goal。
     #[serde(default)]
     pub extends: Option<String>,
-    /// 路由模型 shorthand（v1 不接 ModelProfile，见 bootstrap 说明）。
+    /// 路由模型（`inherit` / `sonnet` / `opus` / `haiku` / 裸模型 id）；bootstrap 映射为
+    /// `routing: ModelProfile`（见 `anycode_bootstrap::agents::model_routing_from_frontmatter`）。
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]

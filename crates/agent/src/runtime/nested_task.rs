@@ -37,14 +37,15 @@ impl SubAgentExecutor for AgentRuntime {
 
         let task_id = invoke.task_id.unwrap_or_else(Uuid::new_v4);
         let agent_type_str = invoke.agent_type.as_str().to_string();
+        let parent_task_id = invoke.parent_task_id;
         // Step 3b：子任务事件经 Subagent 包装转发到父 live trace 通道；
         // 父侧无通道时保持 None（嵌套运行不可见的旧行为）。
         let nested_trace_tx = invoke.live_trace_tx.as_ref().map(|parent_tx| {
             spawn_nested_trace_forwarder(
                 parent_tx.clone(),
                 task_id,
-                agent_type_str,
-                invoke.parent_task_id,
+                agent_type_str.clone(),
+                parent_task_id,
             )
         });
 
@@ -75,6 +76,17 @@ impl SubAgentExecutor for AgentRuntime {
             created_at: chrono::Utc::now(),
         };
         let result = self.execute_task(task).await?;
+        // 嵌套可观测性（token 指标链路）：子任务日志落在自己的 tasks/<id>/output.log，
+        // 父 recorder 只 tail 父日志。此处把子任务完成标记写入父日志，dashboard recorder
+        // 据此摄取子任务 log 的 llm_response_end → llm_usage（payload 带 agent_type）。
+        // 子任务日志此时已完整（execute_task 同步写完）；best-effort，失败不影响结果。
+        log_nested_task_end_to_parent(
+            &self.disk_output,
+            parent_task_id,
+            task_id,
+            &agent_type_str,
+            nested_status_str(&result),
+        );
         Ok(NestedTaskRun { task_id, result })
     }
 
@@ -114,6 +126,34 @@ fn spawn_nested_trace_forwarder(
     tx
 }
 
+/// 父日志中的嵌套任务完成标记（dashboard `log_parser` 的 `nested_task_end` 消费）。
+/// 单行 KV 格式与 `[task_end]` 等既有标记一致。
+pub(crate) fn nested_task_end_marker(task_id: Uuid, agent_type: &str, status: &str) -> String {
+    format!("[nested_task_end] task_id={task_id} agent_type={agent_type} status={status}")
+}
+
+fn nested_status_str(result: &TaskResult) -> &'static str {
+    match result {
+        TaskResult::Success { .. } => "completed",
+        TaskResult::Partial { .. } => "partial",
+        TaskResult::Failure { .. } => "failed",
+    }
+}
+
+/// 把嵌套任务完成标记追加到父任务 output.log（best-effort：无父 id / 无磁盘句柄 / 写失败均静默）。
+fn log_nested_task_end_to_parent(
+    disk: &Option<DiskTaskOutput>,
+    parent_task_id: Option<Uuid>,
+    task_id: Uuid,
+    agent_type: &str,
+    status: &str,
+) {
+    let (Some(disk), Some(parent)) = (disk.as_ref(), parent_task_id) else {
+        return;
+    };
+    let _ = disk.append_line(parent, &nested_task_end_marker(task_id, agent_type, status));
+}
+
 fn nested_budget_from_env() -> TaskBudget {
     fn env_or<T: std::str::FromStr>(primary: &str, fallback: &str) -> Option<T> {
         std::env::var(primary)
@@ -138,6 +178,63 @@ fn nested_budget_from_env() -> TaskBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_task_end_marker_is_single_line_kv() {
+        let tid = Uuid::new_v4();
+        let line = nested_task_end_marker(tid, "explore", "completed");
+        assert!(line.starts_with("[nested_task_end] "));
+        assert!(line.contains(&format!("task_id={tid}")));
+        assert!(line.contains("agent_type=explore"));
+        assert!(line.contains("status=completed"));
+        assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn nested_status_str_maps_variants() {
+        assert_eq!(
+            nested_status_str(&TaskResult::Success {
+                output: String::new(),
+                artifacts: vec![],
+            }),
+            "completed"
+        );
+        assert_eq!(
+            nested_status_str(&TaskResult::Failure {
+                error: "e".into(),
+                details: None,
+            }),
+            "failed"
+        );
+        assert_eq!(
+            nested_status_str(&TaskResult::Partial {
+                success: "s".into(),
+                remaining: "r".into(),
+            }),
+            "partial"
+        );
+    }
+
+    #[test]
+    fn marker_appended_to_parent_log_only_when_parent_and_disk_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = DiskTaskOutput::new(dir.path().to_path_buf());
+        let parent = Uuid::new_v4();
+        let nested = Uuid::new_v4();
+
+        log_nested_task_end_to_parent(&Some(disk.clone()), Some(parent), nested, "plan", "failed");
+        let content = std::fs::read_to_string(disk.output_path(parent)).unwrap();
+        assert_eq!(
+            content.trim(),
+            nested_task_end_marker(nested, "plan", "failed")
+        );
+
+        // 无父 id / 无磁盘句柄 → 静默不写
+        log_nested_task_end_to_parent(&Some(disk.clone()), None, nested, "plan", "failed");
+        log_nested_task_end_to_parent(&None, Some(parent), nested, "plan", "failed");
+        let content = std::fs::read_to_string(disk.output_path(parent)).unwrap();
+        assert_eq!(content.lines().count(), 1);
+    }
 
     #[tokio::test]
     async fn nested_trace_forwarder_wraps_inner_events_with_identity() {

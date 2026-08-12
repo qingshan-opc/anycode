@@ -6,7 +6,7 @@ use anycode_agent::{
     AgentProfileSpec, AgentRuntime, ProfileAgent, ResolvedAgentProfile,
 };
 use anycode_config::{
-    AgentProfileFile, AgentProfileSkillsFile, AgentProfileToolsFile, AgentsConfig,
+    AgentProfileFile, AgentProfileSkillsFile, AgentProfileToolsFile, AgentsConfig, ModelProfile,
 };
 use anycode_core::prelude::*;
 use std::collections::HashMap;
@@ -152,10 +152,13 @@ fn agent_profile_file_from_spec(spec: &AgentProfileSpec) -> AgentProfileFile {
 }
 
 /// 文件式 agent 定义（`.anycode/agents/*.md`）→ `AgentProfileFile`。
-/// markdown 正文 → `system_prompt`（替换默认段落语义）。`model:` frontmatter v1 不接
-/// routing（`ModelProfile` 为结构化类型），由嵌套调用方的 per-call `model` 参数承接。
-pub fn agent_file_to_profile(def: &anycode_tools::agent_files::AgentFileDef) -> AgentProfileFile {
-    AgentProfileFile {
+/// markdown 正文 → `system_prompt`（替换默认段落语义）。`model:` frontmatter 映射为
+/// `routing: ModelProfile`（见 [`model_routing_from_frontmatter`]），经
+/// `merge_profile_routing` → `model_overrides` → 嵌套 `model_for_task` 链路生效。
+pub fn agent_file_to_profile(
+    def: &anycode_tools::agent_files::AgentFileDef,
+) -> Result<AgentProfileFile, String> {
+    Ok(AgentProfileFile {
         extends: def.extends.clone(),
         description: def.description.clone(),
         tools: if def.tools_allow.is_some() || def.tools_deny.is_some() {
@@ -172,10 +175,54 @@ pub fn agent_file_to_profile(def: &anycode_tools::agent_files::AgentFileDef) -> 
             .map(|allowlist| AgentProfileSkillsFile {
                 allowlist: Some(allowlist.clone()),
             }),
-        routing: None,
+        routing: def
+            .model
+            .as_deref()
+            .map(model_routing_from_frontmatter)
+            .transpose()?
+            .flatten(),
         prompt_overlay: None,
         system_prompt: def.system_prompt.clone(),
+    })
+}
+
+/// frontmatter `model:` 值 → `ModelProfile`（routing 只承载 `model` 字段，其余继承默认）。
+///
+/// - `inherit` → `Ok(None)`：不置 routing，嵌套运行回退默认模型（Claude Code 语义）。
+/// - `sonnet` / `opus` / `haiku` → 具体 Anthropic 模型 id（与 per-call hint 同一映射源；
+///   OpenAI 兼容网关用户应写全限定裸 id，不做 `anthropic/` 前缀推断）。
+/// - 其它合法模型 id → 原样 verbatim。
+/// - 非法值（空白、空白字符、字符集外的符号）→ `Err`，调用方拒加载该 agent（fail-closed，
+///   避免静默回退默认模型掩盖配置错误）。
+pub fn model_routing_from_frontmatter(model: &str) -> Result<Option<ModelProfile>, String> {
+    let value = model.trim();
+    if value.is_empty() {
+        return Err("model must not be empty".into());
     }
+    if value.eq_ignore_ascii_case("inherit") {
+        return Ok(None);
+    }
+    if let Some(concrete) = anycode_agent::concrete_model_for_family_hint(value) {
+        return Ok(Some(ModelProfile {
+            model: Some(concrete.to_string()),
+            ..Default::default()
+        }));
+    }
+    // 裸模型 id 字符集：字母数字 + `. _ - / : @ +`（覆盖 `anthropic/claude-…`、
+    // `deepseek-chat`、`gpt-4o`、`provider:model` 等形态；禁空白防止日志/API 断词）。
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "._-/:@+".contains(c))
+    {
+        return Ok(Some(ModelProfile {
+            model: Some(value.to_string()),
+            ..Default::default()
+        }));
+    }
+    Err(format!(
+        "invalid model `{value}`: expected inherit | sonnet | opus | haiku | a model id \
+         (letters, digits, `. _ - / : @ +` only)"
+    ))
 }
 
 /// 扫描 `~/.anycode/agents` 与 `<project>/.anycode/agents`，把文件式 agent 合并进
@@ -217,6 +264,22 @@ pub fn merge_agent_defs_into_config(
             );
             continue;
         }
+        let profile = match agent_file_to_profile(&def) {
+            Ok(p) => p,
+            Err(reason) => {
+                // Fail-closed：非法 `model:` 值不静默回退默认模型，拒加载该 agent
+                //（与 `narrowed_to_empty_surface` 拒注册同一纪律），使用时按未知 agent 报错。
+                tracing::warn!(
+                    target: "anycode_cli",
+                    kind = "agent_file_invalid_model",
+                    agent = %id,
+                    path = %def.path.display(),
+                    reason = %reason,
+                    "skipping file agent definition: invalid `model:` frontmatter"
+                );
+                continue;
+            }
+        };
         tracing::info!(
             target: "anycode_cli",
             kind = "agent_file_loaded",
@@ -227,7 +290,7 @@ pub fn merge_agent_defs_into_config(
             tools_narrowed = def.tools_allow.is_some() || def.tools_deny.is_some(),
             "file agent definition loaded"
         );
-        agents.profiles.insert(id, agent_file_to_profile(&def));
+        agents.profiles.insert(id, profile);
         merged += 1;
     }
     merged
@@ -401,12 +464,96 @@ mod tests {
             "You are a markdown-defined agent.",
             anycode_tools::agent_files::AgentFileSource::User,
         );
-        let profile = agent_file_to_profile(&def);
+        let profile = agent_file_to_profile(&def).expect("profile");
         let resolved = resolve_profile_from_file("md-agent", &profile, false);
         let agent = ProfileAgent::new(resolved, ModelConfig::default());
         assert_eq!(
             agent.system_prompt_replaces_default_sections(),
             Some("You are a markdown-defined agent.")
         );
+    }
+
+    #[test]
+    fn frontmatter_model_maps_to_model_profile_routing() {
+        // family shorthand → 具体 Anthropic id（与 per-call nested hint 同一映射源）
+        let mut def = file_def(
+            "sonnet-agent",
+            "body",
+            anycode_tools::agent_files::AgentFileSource::User,
+        );
+        def.model = Some(" Sonnet ".into());
+        let profile = agent_file_to_profile(&def).expect("profile");
+        let routing = profile.routing.expect("routing");
+        assert_eq!(routing.model.as_deref(), Some("claude-sonnet-4-5-20250929"));
+
+        // inherit → 不置 routing（嵌套运行回退默认模型）
+        def.model = Some("INHERIT".into());
+        let profile = agent_file_to_profile(&def).expect("profile");
+        assert!(profile.routing.is_none());
+
+        // 裸模型 id → verbatim
+        def.model = Some("deepseek-v4-flash".into());
+        let profile = agent_file_to_profile(&def).expect("profile");
+        assert_eq!(
+            profile.routing.and_then(|r| r.model).as_deref(),
+            Some("deepseek-v4-flash")
+        );
+
+        // 限定形态 id（含 `/`、`:`）→ verbatim
+        def.model = Some("anthropic/claude-haiku-4-5-20251001".into());
+        let profile = agent_file_to_profile(&def).expect("profile");
+        assert_eq!(
+            profile.routing.and_then(|r| r.model).as_deref(),
+            Some("anthropic/claude-haiku-4-5-20251001")
+        );
+    }
+
+    #[test]
+    fn invalid_frontmatter_model_is_rejected_fail_closed() {
+        for bad in ["bad model", "sonnet!", "model with\ttab", ""] {
+            assert!(
+                model_routing_from_frontmatter(bad).is_err(),
+                "`{bad}` must be rejected"
+            );
+        }
+        let mut def = file_def(
+            "bad-model-agent",
+            "body",
+            anycode_tools::agent_files::AgentFileSource::Project,
+        );
+        def.model = Some("bad model".into());
+        let mut agents = AgentsConfig::default();
+        let n = merge_agent_defs_into_config(&mut agents, vec![def]);
+        assert_eq!(n, 0, "非法 model 的 agent 必须拒加载");
+        assert!(!agents.profiles.contains_key("bad-model-agent"));
+    }
+
+    #[tokio::test]
+    async fn frontmatter_model_routing_flows_into_model_overrides() {
+        // 全链路：frontmatter `model:` → routing → merge_profile_routing → model_overrides。
+        let mut def = file_def(
+            "opus-agent",
+            "body",
+            anycode_tools::agent_files::AgentFileSource::User,
+        );
+        def.model = Some("opus".into());
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            r#"{"provider":"deepseek","plan":"general","model":"deepseek-chat","api_key":"test-key","temperature":0.3,"max_tokens":8192}"#,
+        )
+        .unwrap();
+        let mut config = anycode_config::load_config(Some(config_path))
+            .await
+            .expect("load minimal config");
+        let n = merge_agent_defs_into_config(&mut config.agents, vec![def]);
+        assert_eq!(n, 1);
+        let mut overrides: HashMap<AgentType, ModelConfig> = HashMap::new();
+        merge_profile_routing(&config, &mut overrides);
+        let cfg = overrides
+            .get(&AgentType::new("opus-agent"))
+            .expect("override registered");
+        assert_eq!(cfg.model, "claude-opus-4-5-20250929");
     }
 }

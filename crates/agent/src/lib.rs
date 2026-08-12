@@ -39,6 +39,7 @@ pub use model_instructions::{
     discover_model_instructions, ModelInstructionsConfig, ModelInstructionsFile,
     DEFAULT_MODEL_INSTRUCTIONS_FILENAME, MODEL_INSTRUCTIONS_FILENAMES,
 };
+pub use nested_model::concrete_model_for_family_hint;
 pub use plugins::{load_builtin_plugins, load_plugins, set_plugin_enabled, PluginManifest};
 pub use prompt_assembler::{
     compose_runtime_system_segments, render_system_prompt_segments, PromptAssembler,

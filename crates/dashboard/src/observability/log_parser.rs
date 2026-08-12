@@ -98,6 +98,25 @@ fn parse_tagged(tag: &str, kv: &str) -> Option<ParsedLine> {
                 payload: fields_to_json(&fields),
             })
         }
+        // 父日志中的嵌套子代理完成标记（agent runtime 在子任务 execute_task 返回后写入）；
+        // recorder 据此摄取子任务 output.log 的 token usage（by_agent 指标链路）。
+        "nested_task_end" => {
+            let status = field(&fields, "status");
+            let severity = if status == "failed" {
+                "error"
+            } else if status == "cancelled" {
+                "warn"
+            } else {
+                "info"
+            };
+            Some(ParsedLine {
+                event_type: "nested_task_end".into(),
+                severity: severity.into(),
+                title: format!("Subagent {} {status}", field(&fields, "agent_type")),
+                body: kv.into(),
+                payload: fields_to_json(&fields),
+            })
+        }
         "turn_start" => Some(ParsedLine {
             event_type: "turn_start".into(),
             severity: "info".into(),
@@ -439,6 +458,23 @@ mod tests {
         let p = parse_line("[task_end] status=failed").unwrap();
         assert_eq!(p.severity, "error");
         assert_eq!(p.payload["status"], "failed");
+    }
+
+    #[test]
+    fn parses_nested_task_end() {
+        let p = parse_line(
+            "[nested_task_end] task_id=4b6b0d1a-0000-4000-8000-000000000000 agent_type=explore status=completed",
+        )
+        .unwrap();
+        assert_eq!(p.event_type, "nested_task_end");
+        assert_eq!(p.severity, "info");
+        assert_eq!(p.payload["agent_type"], "explore");
+        assert_eq!(p.payload["task_id"], "4b6b0d1a-0000-4000-8000-000000000000");
+        assert!(p.title.contains("explore"));
+
+        let failed =
+            parse_line("[nested_task_end] task_id=x agent_type=plan status=failed").unwrap();
+        assert_eq!(failed.severity, "error");
     }
 
     #[test]

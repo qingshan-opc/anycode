@@ -8,6 +8,19 @@ use anycode_core::{LLMProvider, ModelConfig};
 /// **`sonnet`**, **`opus`**, **`haiku`** (case-insensitive). For **`Anthropic`**
 /// provider, uses Messages API model ids; for OpenAI-compatible gateways, uses
 /// **`anthropic/<id>`** qualified refs. Any other non-empty string sets **`model`** verbatim.
+/// Map a Claude Code family shorthand (`sonnet` / `opus` / `haiku`, case-insensitive)
+/// to its concrete Anthropic model id. Single source of truth shared by the per-call
+/// nested hint chain and declarative agent frontmatter `model:` mapping.
+#[must_use]
+pub fn concrete_model_for_family_hint(hint: &str) -> Option<&'static str> {
+    match hint.trim().to_ascii_lowercase().as_str() {
+        "sonnet" => Some("claude-sonnet-4-5-20250929"),
+        "opus" => Some("claude-opus-4-5-20250929"),
+        "haiku" => Some("claude-haiku-4-5-20251001"),
+        _ => None,
+    }
+}
+
 pub fn resolve_nested_model_hint(base: &ModelConfig, hint: &str) -> ModelConfig {
     let mut out = base.clone();
     let h = hint.trim();
@@ -19,12 +32,7 @@ pub fn resolve_nested_model_hint(base: &ModelConfig, hint: &str) -> ModelConfig 
         // Claude Code `model: "inherit"`: reuse the parent's model configuration unchanged.
         return out;
     }
-    let family = match lower.as_str() {
-        "sonnet" => Some("claude-sonnet-4-5-20250929"),
-        "opus" => Some("claude-opus-4-5-20250929"),
-        "haiku" => Some("claude-haiku-4-5-20251001"),
-        _ => None,
-    };
+    let family = concrete_model_for_family_hint(&lower);
     if let Some(mid) = family {
         match &base.provider {
             LLMProvider::Anthropic => {
@@ -44,6 +52,24 @@ pub fn resolve_nested_model_hint(base: &ModelConfig, hint: &str) -> ModelConfig 
 mod tests {
     use super::*;
     use anycode_core::LLMProvider;
+
+    #[test]
+    fn family_hint_mapping_is_case_insensitive_and_trimmed() {
+        assert_eq!(
+            concrete_model_for_family_hint("  SONNET "),
+            Some("claude-sonnet-4-5-20250929")
+        );
+        assert_eq!(
+            concrete_model_for_family_hint("opus"),
+            Some("claude-opus-4-5-20250929")
+        );
+        assert_eq!(
+            concrete_model_for_family_hint("haiku"),
+            Some("claude-haiku-4-5-20251001")
+        );
+        assert_eq!(concrete_model_for_family_hint("inherit"), None);
+        assert_eq!(concrete_model_for_family_hint("gpt-4o"), None);
+    }
 
     #[test]
     fn anthropic_sonnet_hint() {

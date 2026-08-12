@@ -45,6 +45,14 @@ pub fn usage_payload_from_parsed_with_model(
             .map(str::trim)
             .filter(|s| !s.is_empty())
     });
+    // `llm_response_end` 行由 execute_task 写入时自带 agent_type=（含嵌套子代理日志）；
+    // 透传进 payload 解锁 by_agent 分组（execute_turn 路径无此字段，由 session join 兜底）。
+    let agent_type = parsed
+        .payload
+        .get("agent_type")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let mut payload = json!({
         "turn": turn,
         "input_tokens": input_tokens,
@@ -55,6 +63,9 @@ pub fn usage_payload_from_parsed_with_model(
     });
     if let Some(model) = model {
         payload["model"] = json!(model);
+    }
+    if let Some(agent_type) = agent_type {
+        payload["agent_type"] = json!(agent_type);
     }
     Some(payload)
 }
@@ -102,5 +113,23 @@ mod tests {
         let payload =
             usage_payload_from_parsed_with_model(&parsed, Some("claude-sonnet-4")).unwrap();
         assert_eq!(payload["model"], "claude-sonnet-4");
+    }
+
+    #[test]
+    fn passes_through_agent_type_when_present() {
+        let parsed = parse_line(
+            "[llm_response_end] turn=3 elapsed_ms=10 input_tokens=1 output_tokens=2 agent_type=explore",
+        )
+        .unwrap();
+        let payload = usage_payload_from_parsed(&parsed).unwrap();
+        assert_eq!(payload["agent_type"], "explore");
+        assert_eq!(payload["turn"], "3");
+
+        // 无 agent_type 字段（execute_turn 路径）→ payload 不带该键
+        let parsed =
+            parse_line("[llm_response_end] turn=1 elapsed_ms=10 input_tokens=1 output_tokens=2")
+                .unwrap();
+        let payload = usage_payload_from_parsed(&parsed).unwrap();
+        assert!(payload.get("agent_type").is_none());
     }
 }
