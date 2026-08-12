@@ -2,4 +2,5 @@
 
 mod integration;
 mod support;
+mod tool_pairing;
 mod unit;

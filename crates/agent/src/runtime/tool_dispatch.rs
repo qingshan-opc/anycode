@@ -120,9 +120,23 @@ impl AgentRuntime {
         record_evidence: bool,
         cancel_outcome: TurnToolCancelOutcome,
     ) -> Result<TurnToolBatchOutcome, CoreError> {
-        let batches = partition_tool_calls(tool_calls);
+        let batches = partition_tool_calls(tool_calls.clone());
+        // 配对不变量(CORE-13):每个已记录的 tool_use 都必须有 tool_result,
+        // 否则下一轮请求 Anthropic 会以 400 拒绝 dangling tool_use。
+        // `pending` 始终等于「尚未产生 result 的调用」——任何提前出口
+        // (cancel / max_tool_calls / budget)都必须先排空它再返回。
+        let mut pending: Vec<ToolCall> = tool_calls;
         for batch in batches {
             if cancel.cancelled() {
+                self.emit_synthetic_for_remaining(
+                    logger,
+                    ctx,
+                    state,
+                    sink,
+                    &mut pending,
+                    "cooperative_cancel",
+                )
+                .await;
                 return Ok(TurnToolBatchOutcome::Cancelled(cancel_outcome));
             }
             if batch.concurrent && batch.calls.len() > 1 {
@@ -136,9 +150,19 @@ impl AgentRuntime {
                         batch.calls,
                         record_evidence,
                         cancel_outcome,
+                        &mut pending,
                     )
                     .await?;
                 if !matches!(outcome, TurnToolBatchOutcome::Ok) {
+                    self.emit_synthetic_for_remaining(
+                        logger,
+                        ctx,
+                        state,
+                        sink,
+                        &mut pending,
+                        drain_reason(&outcome),
+                    )
+                    .await;
                     return Ok(outcome);
                 }
             } else {
@@ -153,9 +177,19 @@ impl AgentRuntime {
                             tool_call,
                             record_evidence,
                             cancel_outcome,
+                            &mut pending,
                         )
                         .await?;
                     if !matches!(outcome, TurnToolBatchOutcome::Ok) {
+                        self.emit_synthetic_for_remaining(
+                            logger,
+                            ctx,
+                            state,
+                            sink,
+                            &mut pending,
+                            drain_reason(&outcome),
+                        )
+                        .await;
                         return Ok(outcome);
                     }
                 }
@@ -174,6 +208,7 @@ impl AgentRuntime {
         tool_calls: Vec<ToolCall>,
         record_evidence: bool,
         cancel_outcome: TurnToolCancelOutcome,
+        pending: &mut Vec<ToolCall>,
     ) -> Result<TurnToolBatchOutcome, CoreError> {
         let mut planned: Vec<(ToolCall, usize)> = Vec::new();
         for tool_call in tool_calls {
@@ -187,6 +222,9 @@ impl AgentRuntime {
                     "cooperative_cancel",
                 )
                 .await;
+                for (done, _) in &planned {
+                    mark_tool_result_emitted(pending, &done.id);
+                }
                 return Ok(TurnToolBatchOutcome::Cancelled(cancel_outcome));
             }
             let outcome = self
@@ -199,6 +237,7 @@ impl AgentRuntime {
                 let idx = state.total_tool_calls;
                 self.finalize_budget_denied(logger, ctx, state, sink, &tool_call, idx)
                     .await;
+                mark_tool_result_emitted(pending, &tool_call.id);
                 continue;
             }
             planned.push((tool_call, state.total_tool_calls));
@@ -230,6 +269,7 @@ impl AgentRuntime {
                     record_evidence,
                 )
                 .await;
+                mark_tool_result_emitted(pending, &tool_call.id);
             }
             if cancel.cancelled() {
                 return Ok(TurnToolBatchOutcome::Cancelled(cancel_outcome));
@@ -248,6 +288,7 @@ impl AgentRuntime {
         tool_call: ToolCall,
         record_evidence: bool,
         cancel_outcome: TurnToolCancelOutcome,
+        pending: &mut Vec<ToolCall>,
     ) -> Result<TurnToolBatchOutcome, CoreError> {
         if cancel.cancelled() {
             return Ok(TurnToolBatchOutcome::Cancelled(cancel_outcome));
@@ -262,6 +303,7 @@ impl AgentRuntime {
         if budget_degrade_blocks(state, &tool_call) {
             self.finalize_budget_denied(logger, ctx, state, sink, &tool_call, tool_idx)
                 .await;
+            mark_tool_result_emitted(pending, &tool_call.id);
             return Ok(TurnToolBatchOutcome::Ok);
         }
         let _activity =
@@ -281,6 +323,7 @@ impl AgentRuntime {
             record_evidence,
         )
         .await;
+        mark_tool_result_emitted(pending, &tool_call.id);
         if cancel.cancelled() {
             return Ok(TurnToolBatchOutcome::Cancelled(cancel_outcome));
         }
@@ -546,6 +589,38 @@ impl AgentRuntime {
         state.artifacts.extend(extracted);
     }
 
+    /// 提前出口前排空 pending:为每个尚未产生 result 的调用补合成
+    /// tool_result,保住 pairing 不变量(否则下一轮请求 400)。
+    async fn emit_synthetic_for_remaining(
+        &self,
+        logger: &RunLogger,
+        ctx: &TurnToolCtx<'_>,
+        state: &mut TurnToolState,
+        sink: &mut MessageAppendSink<'_>,
+        pending: &mut Vec<ToolCall>,
+        reason: &str,
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+        let base = state.total_tool_calls;
+        let planned: Vec<(ToolCall, usize)> = pending
+            .drain(..)
+            .enumerate()
+            .map(|(i, c)| (c, base + i + 1))
+            .collect();
+        logger.line(
+            ctx.task_id,
+            &format!(
+                "[tool_pairing_drain] count={} reason={}",
+                planned.len(),
+                reason
+            ),
+        );
+        self.emit_synthetic_for_planned(logger, ctx, state, sink, &planned, reason)
+            .await;
+    }
+
     async fn emit_synthetic_for_planned(
         &self,
         logger: &RunLogger,
@@ -597,6 +672,23 @@ async fn wait_cancel_flag(flag: Option<Arc<AtomicBool>>) {
     };
     while !flag.load(Ordering::SeqCst) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// 调用产生 result 后从 pending 移除(id 唯一;位置无关,保持顺序)。
+fn mark_tool_result_emitted(pending: &mut Vec<ToolCall>, id: &str) {
+    if let Some(pos) = pending.iter().position(|c| c.id == id) {
+        pending.remove(pos);
+    }
+}
+
+/// 非 Ok 出口对应的合成 result 原因串(供 drain 与日志使用)。
+fn drain_reason(outcome: &TurnToolBatchOutcome) -> &'static str {
+    match outcome {
+        TurnToolBatchOutcome::Cancelled(_) => "cooperative_cancel",
+        TurnToolBatchOutcome::MaxToolCalls => "max_tool_calls",
+        TurnToolBatchOutcome::BudgetExceeded => "budget_exceeded",
+        TurnToolBatchOutcome::Ok => "unknown",
     }
 }
 
