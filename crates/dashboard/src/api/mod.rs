@@ -713,6 +713,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/audit/events", get(handlers::list_audit_events))
         .route("/plugins", get(handlers::list_plugins))
+        .route("/files/read-paths", post(handlers::read_file_paths))
         .route(
             "/plugins/{plugin_id}",
             axum::routing::put(handlers::put_plugin_enabled),

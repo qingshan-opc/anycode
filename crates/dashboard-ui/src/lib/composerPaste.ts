@@ -18,12 +18,15 @@ import {
   visionAttachmentFromBase64,
   type VisionAttachment,
 } from "@/lib/composerVision";
+import { pastedFilePaths } from "@/lib/filePathPaste";
+import { readFilePaths } from "@/api/client/files";
 import { readApplePasteboard } from "@/lib/desktopShell";
 
 export type ComposerPasteResult =
   | { kind: "ignored" }
   | { kind: "images"; images: VisionAttachment[]; error?: string }
   | { kind: "text-card"; file: TextAttachment; hint: string }
+  | { kind: "text-cards"; files: TextAttachment[]; hint: string }
   | { kind: "error"; error: string };
 
 type PasteHandlers = {
@@ -34,6 +37,12 @@ type PasteHandlers = {
   locale: string;
   t: (key: string) => string;
   ingestImageFiles: (files: File[]) => Promise<void>;
+  /**
+   * Local file paths pasted as text — the composer supplies the backend
+   * read + attachment conversion. When omitted, path-looking text falls
+   * through to the default paste.
+   */
+  ingestFilePaths?: (paths: string[]) => Promise<ComposerPasteResult>;
 };
 
 /**
@@ -62,6 +71,14 @@ export async function handleComposerPasteEvent(
 
   // Long text must be gated before any await — otherwise default paste wins.
   const pastedText = plainTextFromPasteEvent(event);
+
+  // 粘贴本地文件路径(单行或多行):读文件内容并作为参考附件。
+  const paths = pastedFilePaths(pastedText);
+  if (paths && handlers.ingestFilePaths) {
+    event.preventDefault();
+    return handlers.ingestFilePaths(paths);
+  }
+
   if (shouldPasteAsTextCard(pastedText)) {
     event.preventDefault();
     if (attachedTextFiles.length >= MAX_TEXT_FILES) {
@@ -116,4 +133,52 @@ export async function handleComposerPasteEvent(
     kind: "images",
     images: [visionAttachmentFromBase64(payload.mime_type, payload.data_base64)],
   };
+}
+
+/**
+ * Default `ingestFilePaths` implementation: read the pasted local paths via
+ * the dashboard API and turn readable text files into reference attachments.
+ */
+export async function ingestPastedFilePaths(
+  paths: string[],
+  t: (key: string) => string,
+): Promise<ComposerPasteResult> {
+  try {
+    const { files } = await readFilePaths(paths);
+    const texts = files.filter((f) => f.kind === "text" && f.content != null);
+    if (texts.length === 0) {
+      return {
+        kind: "error",
+        error: t("conversations.attachmentPathUnreadable").replace(
+          "{names}",
+          files.map((f) => f.name).join(", "),
+        ),
+      };
+    }
+    const skipped = files.filter((f) => f.kind !== "text");
+    const notes: string[] = [];
+    if (skipped.length > 0) {
+      notes.push(
+        t("conversations.attachmentPathSkipped").replace(
+          "{names}",
+          skipped.map((f) => `${f.name}(${f.kind})`).join(", "),
+        ),
+      );
+    }
+    if (texts.some((f) => f.truncated)) {
+      notes.push(t("conversations.attachmentPathTruncated"));
+    }
+    let hint = t("conversations.attachmentPathLoaded").replace(
+      "{n}",
+      String(texts.length),
+    );
+    if (notes.length > 0) hint = `${hint} · ${notes.join(" · ")}`;
+    return {
+      kind: "text-cards",
+      files: texts.map((f) => ({ filename: f.name, content: f.content ?? "" })),
+      hint,
+    };
+  } catch (e) {
+    return { kind: "error", error: e instanceof Error ? e.message : String(e) };
+  }
 }
