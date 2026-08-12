@@ -109,7 +109,11 @@ impl Tool for PowerShellTool {
             result: json!({
                 "stdout": capture.stdout,
                 "stderr": capture.stderr,
-                "exit_code": capture.exit_code
+                "exit_code": capture.exit_code,
+                "stdout_truncated": capture.stdout_truncated(),
+                "stderr_truncated": capture.stderr_truncated(),
+                "stdout_dropped_bytes": capture.stdout_dropped_bytes,
+                "stderr_dropped_bytes": capture.stderr_dropped_bytes,
             }),
             error: if failed {
                 Some("powershell failed".into())

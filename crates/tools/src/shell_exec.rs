@@ -12,6 +12,21 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 pub const MIN_TIMEOUT_MS: u64 = 1_000;
 pub const MAX_TIMEOUT_MS: u64 = 600_000;
 
+/// Per-stream (stdout / stderr) in-memory capture cap for foreground shells.
+/// Without a cap a runaway or malicious command (`yes`, log spam) can OOM the
+/// host process, since output is captured into memory before returning.
+/// Follows the truncation convention of `MAX_SKILL_OUTPUT_BYTES` (256KB) but
+/// defaults to a larger 1MB per stream; override via env for tests / tuning.
+pub const DEFAULT_STREAM_MAX_BYTES: usize = 1024 * 1024;
+
+pub fn shell_stream_max_bytes() -> usize {
+    std::env::var("ANYCODE_SHELL_STREAM_MAX_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_STREAM_MAX_BYTES)
+}
+
 pub fn clamp_timeout_ms(raw: u64) -> u64 {
     raw.clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
 }
@@ -30,6 +45,21 @@ pub struct ShellCapture {
     pub stderr: String,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
+    /// Bytes discarded from the FRONT of stdout because it exceeded the
+    /// per-stream cap (0 = not truncated). See `read_capped_tail`.
+    pub stdout_dropped_bytes: u64,
+    /// Same as above, for stderr.
+    pub stderr_dropped_bytes: u64,
+}
+
+impl ShellCapture {
+    pub fn stdout_truncated(&self) -> bool {
+        self.stdout_dropped_bytes > 0
+    }
+
+    pub fn stderr_truncated(&self) -> bool {
+        self.stderr_dropped_bytes > 0
+    }
 }
 
 fn apply_cwd(cmd: &mut Command, wd: Option<&Path>) {
@@ -58,12 +88,45 @@ fn kill_process_group(child: &mut tokio::process::Child) {
     let _ = child.start_kill();
 }
 
-/// Run a program with wall-clock timeout; stdout/stderr captured into memory.
-pub async fn run_foreground(
+/// Read a child stdio stream into memory with a hard byte cap.
+///
+/// Keeps the TAIL (last `cap` bytes), dropping from the front, and reports how
+/// many bytes were discarded. Tail-preserving is deliberate: downstream parses
+/// the END of stdout (e.g. the last-line `ANYCODE_ARTIFACT:` marker), so a
+/// head-truncation would silently break that contract; with tail-truncation the
+/// marker survives and callers can detect data loss via the dropped-byte count
+/// (surfaced as `*_truncated` / `*_dropped_bytes` in the tool result JSON).
+async fn read_capped_tail(
+    mut reader: impl tokio::io::AsyncRead + Unpin,
+    cap: usize,
+) -> (Vec<u8>, u64) {
+    let mut buf: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024));
+    let mut dropped: u64 = 0;
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > cap {
+                    let excess = buf.len() - cap;
+                    buf.drain(..excess);
+                    dropped += excess as u64;
+                }
+            }
+        }
+    }
+    (buf, dropped)
+}
+
+/// Run a program with wall-clock timeout; stdout/stderr captured into memory
+/// (each capped at `max_stream_bytes`, tail-preserving — see `read_capped_tail`).
+pub async fn run_foreground_capped(
     program: &str,
     args: &[&str],
     cwd: Option<&Path>,
     timeout_ms: u64,
+    max_stream_bytes: usize,
 ) -> Result<ShellCapture, CoreError> {
     let timeout = Duration::from_millis(clamp_timeout_ms(timeout_ms));
     let mut cmd = Command::new(program);
@@ -79,29 +142,29 @@ pub async fn run_foreground(
     let mut stderr_pipe = child.stderr.take();
 
     let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut r) = stdout_pipe.take() {
-            let _ = r.read_to_end(&mut buf).await;
+        match stdout_pipe.take() {
+            Some(r) => read_capped_tail(r, max_stream_bytes).await,
+            None => (Vec::new(), 0),
         }
-        buf
     });
     let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut r) = stderr_pipe.take() {
-            let _ = r.read_to_end(&mut buf).await;
+        match stderr_pipe.take() {
+            Some(r) => read_capped_tail(r, max_stream_bytes).await,
+            None => (Vec::new(), 0),
         }
-        buf
     });
 
     match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => {
-            let stdout = stdout_task.await.unwrap_or_default();
-            let stderr = stderr_task.await.unwrap_or_default();
+            let (stdout, stdout_dropped) = stdout_task.await.unwrap_or_default();
+            let (stderr, stderr_dropped) = stderr_task.await.unwrap_or_default();
             Ok(ShellCapture {
                 stdout: String::from_utf8_lossy(&stdout).into_owned(),
                 stderr: String::from_utf8_lossy(&stderr).into_owned(),
                 exit_code: status.code(),
                 timed_out: false,
+                stdout_dropped_bytes: stdout_dropped,
+                stderr_dropped_bytes: stderr_dropped,
             })
         }
         Ok(Err(e)) => {
@@ -119,9 +182,22 @@ pub async fn run_foreground(
                 stderr: String::new(),
                 exit_code: None,
                 timed_out: true,
+                stdout_dropped_bytes: 0,
+                stderr_dropped_bytes: 0,
             })
         }
     }
+}
+
+/// Run a program with wall-clock timeout; stdout/stderr captured into memory,
+/// each capped at `shell_stream_max_bytes()` (default 1MB per stream).
+pub async fn run_foreground(
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+    timeout_ms: u64,
+) -> Result<ShellCapture, CoreError> {
+    run_foreground_capped(program, args, cwd, timeout_ms, shell_stream_max_bytes()).await
 }
 
 pub struct BackgroundChild {
@@ -168,4 +244,58 @@ pub fn spawn_background_child(
 
 pub fn kill_background_child(child: &mut tokio::process::Child) {
     kill_process_group(child);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn small_output_is_not_truncated() {
+        let cap = run_foreground_capped("echo", &["hello-stream"], None, 10_000, 1024)
+            .await
+            .expect("echo");
+        assert!(!cap.timed_out);
+        assert_eq!(cap.stdout.trim_end(), "hello-stream");
+        assert_eq!(cap.stdout_dropped_bytes, 0);
+        assert!(!cap.stdout_truncated());
+        assert_eq!(cap.stderr_dropped_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn oversized_stdout_is_capped_and_keeps_tail() {
+        // 4KB of filler followed by a tail marker (mimics ANYCODE_ARTIFACT: on
+        // the last line); cap at 1KB. The tail must survive truncation.
+        let script = "head -c 4096 /dev/zero | tr '\\0' 'x'; echo; echo TAIL-MARKER";
+        let cap = run_foreground_capped("bash", &["-c", script], None, 10_000, 1024)
+            .await
+            .expect("run");
+        assert!(!cap.timed_out);
+        assert!(cap.stdout_truncated(), "{:?}", cap);
+        assert!(cap.stdout_dropped_bytes > 0);
+        // Tail-preserving: the end of the stream (marker line) is retained.
+        assert!(
+            cap.stdout.trim_end().ends_with("TAIL-MARKER"),
+            "tail marker must survive truncation: {:?}",
+            cap.stdout
+        );
+        assert!(
+            cap.stdout.len() <= 1024 + 8,
+            "capped output length: {}",
+            cap.stdout.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_stderr_is_capped_independently() {
+        let script = "head -c 4096 /dev/zero | tr '\\0' 'e' 1>&2; echo ERR-TAIL 1>&2; echo ok-out";
+        let cap = run_foreground_capped("bash", &["-c", script], None, 10_000, 512)
+            .await
+            .expect("run");
+        assert!(cap.stderr_truncated());
+        assert!(cap.stderr.trim_end().ends_with("ERR-TAIL"));
+        // stdout is small and must not be affected by the stderr cap.
+        assert!(!cap.stdout_truncated());
+        assert_eq!(cap.stdout.trim_end(), "ok-out");
+    }
 }

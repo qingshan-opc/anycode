@@ -48,12 +48,174 @@ impl BashTool {
     }
 }
 
-/// Naive substring deny caused false positives (e.g. `git add` contains `dd `).
+/// Naive substring deny caused false positives (e.g. `git add` contains `dd `),
+/// and raw substring matching is trivially evaded by shell quoting/escaping
+/// (`r\m`, `r''m`, `$EMPTY` splicing). Normalize before matching.
 fn command_matches_deny_pattern(command: &str, pattern: &str) -> bool {
+    let normalized_command = normalize_command_for_deny(command);
     match pattern {
-        "dd " => command_has_standalone_dd(command),
-        _ => command.contains(pattern),
+        "dd " => command_has_standalone_dd(&normalized_command),
+        _ => normalized_command.contains(&normalize_command_for_deny(pattern)),
     }
+}
+
+/// Best-effort shell normalization used ONLY for deny-pattern matching.
+///
+/// This is depth-in-defense, **not** a shell parser, and it cannot stop a
+/// determined attacker: variable values and command-substitution results are
+/// unknowable statically, and encodings (`base64 -d | bash`, `eval`, hex
+/// escapes) still evade. It exists to defeat trivial obfuscation of the
+/// built-in deny list:
+/// - backslash escapes: `r\m` -> `rm` (`\<newline>` line-continuation dropped)
+/// - quote removal / splicing: `r''m` -> `rm`, `"r"m` -> `rm`
+/// - `$VAR` / `${VAR}` / `$(...)` / backticks: replaced by nothing, so
+///   `$EMPTYrm -rf` -> `rm -rf` (unresolvable expansions simply vanish)
+/// - whitespace runs collapsed to a single space
+///
+/// The real gates remain human approval and the sandbox cwd restriction;
+/// a miss here fails open to approval, a false hit only costs one denial.
+fn normalize_command_for_deny(cmd: &str) -> String {
+    fn push_norm(out: &mut String, c: char) {
+        if c.is_whitespace() {
+            if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+
+    fn skip_balanced_parens<I: Iterator<Item = char>>(it: &mut I) {
+        let mut depth = 1usize;
+        for c in it.by_ref() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Consume a `$...` expansion (var / ${} / $() / special $?, $$, ...).
+    /// Returns true when something was consumed; false for a lone `$`.
+    /// Expansions vanish (unknowable statically) EXCEPT `$IFS` / `${IFS}`,
+    /// the canonical space-via-variable trick (`rm${IFS}-rf` == `rm -rf`),
+    /// which normalizes to a space.
+    fn skip_dollar_expansion<I: Iterator<Item = char>>(
+        it: &mut std::iter::Peekable<I>,
+        out: &mut String,
+    ) -> bool {
+        match it.peek().copied() {
+            Some('(') => {
+                it.next();
+                skip_balanced_parens(it);
+                true
+            }
+            Some('{') => {
+                it.next();
+                let mut name = String::new();
+                for c in it.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                    name.push(c);
+                }
+                if name == "IFS" {
+                    push_norm(out, ' ');
+                }
+                true
+            }
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                let mut name = String::new();
+                while matches!(it.peek(), Some(p) if p.is_ascii_alphanumeric() || *p == '_') {
+                    name.push(it.next().unwrap_or_default());
+                }
+                if name == "IFS" {
+                    push_norm(out, ' ');
+                }
+                true
+            }
+            // Special / positional vars are a single character: $1 $? $$ $! $@ $* $# $-
+            Some(c) if c.is_ascii_digit() || "?$!@*#-".contains(c) => {
+                it.next();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    let mut out = String::with_capacity(cmd.len());
+    let mut it = cmd.chars().peekable();
+    while let Some(c) = it.next() {
+        match c {
+            // Backslash escape outside quotes: `\x` is literal `x`;
+            // `\<newline>` is a line continuation (dropped).
+            '\\' => match it.next() {
+                Some('\n') | None => {}
+                Some(next) => push_norm(&mut out, next),
+            },
+            // Single quotes: fully literal content, quotes dropped so
+            // `r''m` normalizes to `rm`.
+            '\'' => {
+                for inner in it.by_ref() {
+                    if inner == '\'' {
+                        break;
+                    }
+                    push_norm(&mut out, inner);
+                }
+            }
+            // Double quotes: expansions still happen inside; keep literal
+            // chars, drop the quotes, and handle `\`/`$`/backticks within.
+            '"' => {
+                while let Some(inner) = it.next() {
+                    match inner {
+                        '"' => break,
+                        '\\' => match it.next() {
+                            Some(n @ ('$' | '`' | '"' | '\\')) => push_norm(&mut out, n),
+                            Some('\n') | None => {}
+                            Some(other) => {
+                                push_norm(&mut out, '\\');
+                                push_norm(&mut out, other);
+                            }
+                        },
+                        '$' => {
+                            if !skip_dollar_expansion(&mut it, &mut out) {
+                                push_norm(&mut out, '$');
+                            }
+                        }
+                        '`' => {
+                            for b in it.by_ref() {
+                                if b == '`' {
+                                    break;
+                                }
+                            }
+                        }
+                        other => push_norm(&mut out, other),
+                    }
+                }
+            }
+            '`' => {
+                // Command substitution: result unknowable statically; drop it.
+                for b in it.by_ref() {
+                    if b == '`' {
+                        break;
+                    }
+                }
+            }
+            '$' => {
+                if !skip_dollar_expansion(&mut it, &mut out) {
+                    push_norm(&mut out, '$');
+                }
+            }
+            other => push_norm(&mut out, other),
+        }
+    }
+    out.trim_end().to_string()
 }
 
 fn command_has_standalone_dd(command: &str) -> bool {
@@ -352,6 +514,12 @@ impl Tool for BashTool {
             "stdout": capture.stdout,
             "stderr": capture.stderr,
             "exit_code": capture.exit_code,
+            // Streams are capped in memory (default 1MB each, tail kept).
+            // When truncated, these tell the model output was cut from the front.
+            "stdout_truncated": capture.stdout_truncated(),
+            "stderr_truncated": capture.stderr_truncated(),
+            "stdout_dropped_bytes": capture.stdout_dropped_bytes,
+            "stderr_dropped_bytes": capture.stderr_dropped_bytes,
             "sandbox_escape_ignored": sandbox_escape_ignored,
         });
 
@@ -483,6 +651,55 @@ mod tests {
         let tool = BashTool::new(false, services());
         assert!(tool.check_denied("dd if=/dev/zero of=/dev/null bs=1M count=1"));
         assert!(tool.check_denied("echo ok && dd if=/dev/zero of=/tmp/x"));
+    }
+
+    #[test]
+    fn deny_catches_backslash_escape_obfuscation() {
+        let tool = BashTool::new(false, services());
+        // `r\m` executes as `rm` in a real shell; raw substring matching missed it.
+        assert!(tool.check_denied("r\\m -rf /tmp/x"));
+        assert!(tool.check_denied("r\\m \\-\\r\\f /tmp/x"));
+        // Backslash-escaped dd.
+        assert!(tool.check_denied("d\\d if=/dev/zero of=/dev/sda"));
+    }
+
+    #[test]
+    fn deny_catches_quote_splicing_obfuscation() {
+        let tool = BashTool::new(false, services());
+        // Empty-quote splicing: `r''m` / `r""m` execute as `rm`.
+        assert!(tool.check_denied("r''m -rf /tmp/x"));
+        assert!(tool.check_denied("r\"\"m -rf /tmp/x"));
+        assert!(tool.check_denied("\"r\"'m' -rf /tmp/x"));
+        // Quoted dd.
+        assert!(tool.check_denied("'d'd if=/dev/zero of=/dev/sda"));
+    }
+
+    #[test]
+    fn deny_catches_variable_splicing_obfuscation() {
+        let tool = BashTool::new(false, services());
+        // Empty/unset var splicing: `${EMPTY}rm` / `$EMPTY''rm` execute as `rm`.
+        // (Bare `$EMPTYrm` is a single var NAME in shell — not splicing — so
+        // it is not a real bypass and is intentionally not asserted here.)
+        assert!(tool.check_denied("${EMPTY}rm -rf /tmp/x"));
+        assert!(tool.check_denied("$EMPTY''rm -rf /tmp/x"));
+        // ${IFS} tricks: `rm${IFS}-rf` expands to `rm -rf`.
+        assert!(tool.check_denied("rm${IFS}-rf /tmp/x"));
+        // Command substitution producing an empty string.
+        assert!(tool.check_denied("$(true)rm -rf /tmp/x"));
+    }
+
+    #[test]
+    fn normal_commands_are_not_denied_after_normalization() {
+        let tool = BashTool::new(false, services());
+        // Everyday commands with quotes/vars/escapes must not be caught.
+        assert!(!tool.check_denied("git add . && git commit -m \"fix bug\""));
+        assert!(!tool.check_denied("echo 'it'\''s fine'"));
+        assert!(!tool.check_denied("echo \"$HOME/projects\" | head"));
+        assert!(!tool.check_denied("cargo fmt --all -- --check"));
+        assert!(!tool.check_denied("grep -rn 'rm' crates/ --include='*.rs'"));
+        assert!(!tool.check_denied("ls $(pwd)"));
+        // Contains `rm` but not the denied `rm -rf` phrase.
+        assert!(!tool.check_denied("rm -f build/tmp.log"));
     }
 
     #[tokio::test]
