@@ -23,7 +23,7 @@ exclude = ["crates/account-service"]
 resolver = "2"
 
 [workspace.package]
-version = "0.41.6"
+version = "0.42.1"
 edition = "2021"
 authors = ["anyCode Contributors"]
 license = "MIT"
