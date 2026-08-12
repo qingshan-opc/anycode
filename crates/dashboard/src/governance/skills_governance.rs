@@ -102,6 +102,13 @@ pub async fn set_project_skill(
     skill_id: &str,
     enabled: bool,
 ) -> Result<()> {
+    // 先校验存在性:否则 SQLite 外键违例会以 500 冒泡,而不是语义正确的 404。
+    if db.get_project(project_id).await?.is_none() {
+        anyhow::bail!("project not found: {project_id}");
+    }
+    if !db.skill_exists(skill_id).await? {
+        anyhow::bail!("skill not found: {skill_id}");
+    }
     db.link_project_skill(project_id, skill_id, enabled).await?;
     crate::audit::record_audit(
         db,
@@ -127,6 +134,10 @@ pub async fn set_skill_all_projects(
     skill_id: &str,
     enabled: bool,
 ) -> Result<u64> {
+    // 预检 skill 存在性:循环链接前 fail-fast,避免 FK 违例中止留下半完成状态。
+    if !db.skill_exists(skill_id).await? {
+        anyhow::bail!("skill not found: {skill_id}");
+    }
     let projects = db.list_projects().await?;
     let mut updated = 0u64;
     for p in &projects {

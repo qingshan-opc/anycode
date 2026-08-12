@@ -75,7 +75,7 @@ pub async fn upsert_notification_policy(
     .await?;
     get_notification_policy(db, &policy_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("policy missing"))
+        .ok_or_else(|| anyhow::anyhow!("notification policy not found"))
 }
 
 pub async fn delete_notification_policy(db: &DashboardDb, id: &str) -> Result<()> {
@@ -233,7 +233,7 @@ pub async fn upsert_connector(
         .await?
         .into_iter()
         .find(|c| c.id == conn_id)
-        .ok_or_else(|| anyhow::anyhow!("connector missing"))
+        .ok_or_else(|| anyhow::anyhow!("connector not found: {conn_id}"))
 }
 
 pub async fn delete_connector(db: &DashboardDb, id: &str) -> Result<()> {
@@ -284,7 +284,7 @@ pub async fn set_connector_enabled(
         .await?
         .into_iter()
         .find(|c| c.id == id)
-        .ok_or_else(|| anyhow::anyhow!("connector missing"))
+        .ok_or_else(|| anyhow::anyhow!("connector not found: {id}"))
 }
 
 fn row_to_notification(r: sqlx::sqlite::SqliteRow) -> NotificationPolicyRecord {

@@ -676,6 +676,11 @@ pub async fn set_project_skill(
     .await
     {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) if e.to_string().contains("not found") => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -697,6 +702,11 @@ pub async fn set_skill_all_projects(
     match crate::skills_governance::set_skill_all_projects(&state.db, &skill_id, body.enabled).await
     {
         Ok(count) => Json(json!({ "ok": true, "projects_updated": count })).into_response(),
+        Err(e) if e.to_string().contains("not found") => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),

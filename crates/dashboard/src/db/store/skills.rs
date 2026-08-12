@@ -43,6 +43,14 @@ impl DashboardDb {
         Ok(())
     }
 
+    pub async fn skill_exists(&self, skill_id: &str) -> Result<bool> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n > 0)
+    }
+
     pub async fn link_project_skill(
         &self,
         project_id: &str,
