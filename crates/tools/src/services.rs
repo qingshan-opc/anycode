@@ -909,6 +909,11 @@ impl ToolServices {
     }
 
     fn persist_to_path(&self, path: &Path) -> anyhow::Result<()> {
+        // Same process-wide lock as the free-function cron file helpers, so
+        // ToolServices writes and append/update/remove helpers serialize.
+        let _guard = ORCHESTRATION_FILE_LOCK
+            .lock()
+            .expect("orchestration file lock");
         let snap = self.collect_snapshot();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -1437,6 +1442,25 @@ pub fn read_cron_jobs_from_orchestration_file(path: &Path) -> anyhow::Result<Vec
     Ok(snap.crons)
 }
 
+/// Serializes read-modify-write cycles on the orchestration file within this
+/// process, so concurrent append/update/remove callers cannot lose each
+/// other's jobs. Cross-process writers (desktop dashboard + anycode-daemon)
+/// are protected from torn files by the tmp+rename write below; across
+/// processes last-writer-wins remains possible, as before.
+static ORCHESTRATION_FILE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Write `text` to `path` atomically: write a sibling tmp file, then rename.
+/// Same tmp+rename convention as [`ToolServices::persist_to_path`].
+fn write_orchestration_file_atomic(path: &Path, text: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, text)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 /// Append a cron job to `~/.anycode/tasks/orchestration.json` (or `path`), creating the file if needed.
 pub fn append_cron_job_to_orchestration_file(
     path: &Path,
@@ -1445,6 +1469,9 @@ pub fn append_cron_job_to_orchestration_file(
     opts: CronJobCreateOptions,
 ) -> anyhow::Result<CronJob> {
     use uuid::Uuid;
+    let _guard = ORCHESTRATION_FILE_LOCK
+        .lock()
+        .expect("orchestration file lock");
     let mut snap = if path.is_file() {
         let text = fs::read_to_string(path)?;
         serde_json::from_str::<OrchestrationSnapshotV1>(&text)
@@ -1483,7 +1510,7 @@ pub fn append_cron_job_to_orchestration_file(
     };
     snap.crons.push(job.clone());
     let text = serde_json::to_string_pretty(&snap)?;
-    fs::write(path, text)?;
+    write_orchestration_file_atomic(path, &text)?;
     Ok(job)
 }
 
@@ -1493,6 +1520,9 @@ pub fn update_cron_job_in_orchestration_file(
     id: &str,
     patch: CronJobPatch,
 ) -> anyhow::Result<Option<CronJob>> {
+    let _guard = ORCHESTRATION_FILE_LOCK
+        .lock()
+        .expect("orchestration file lock");
     if !path.is_file() {
         return Ok(None);
     }
@@ -1538,7 +1568,7 @@ pub fn update_cron_job_in_orchestration_file(
     }
     let updated = job.clone();
     let text = serde_json::to_string_pretty(&snap)?;
-    fs::write(path, text)?;
+    write_orchestration_file_atomic(path, &text)?;
     Ok(Some(updated))
 }
 
@@ -1547,6 +1577,9 @@ pub fn update_cron_job_in_orchestration_file(
 /// Uses lenient JSON Value parsing (same spirit as list) so extra orchestration
 /// fields do not block delete.
 pub fn remove_cron_job_from_orchestration_file(path: &Path, id: &str) -> anyhow::Result<bool> {
+    let _guard = ORCHESTRATION_FILE_LOCK
+        .lock()
+        .expect("orchestration file lock");
     if !path.is_file() {
         return Ok(false);
     }
@@ -1561,7 +1594,7 @@ pub fn remove_cron_job_from_orchestration_file(path: &Path, id: &str) -> anyhow:
     let removed = crons.len() < len;
     if removed {
         let text = serde_json::to_string_pretty(&root)?;
-        fs::write(path, text)?;
+        write_orchestration_file_atomic(path, &text)?;
     }
     Ok(removed)
 }
@@ -1663,6 +1696,60 @@ mod orchestration_persist_tests {
         assert_eq!(jobs[0].id, "j2");
         let missing = super::remove_cron_job_from_orchestration_file(&path, "missing").unwrap();
         assert!(!missing);
+    }
+
+    #[test]
+    fn concurrent_appends_never_lose_jobs_or_leave_torn_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().join("orchestration.json"));
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let path = Arc::clone(&path);
+            handles.push(std::thread::spawn(move || {
+                super::append_cron_job_to_orchestration_file(
+                    &path,
+                    "0 0 12 * * *".into(),
+                    format!("job-{i}"),
+                    CronJobCreateOptions::default(),
+                )
+                .unwrap()
+            }));
+        }
+        let mut ids: Vec<String> = handles.into_iter().map(|h| h.join().unwrap().id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 8, "each append must create a distinct job");
+
+        // The on-disk file must be complete valid JSON containing every job —
+        // no lost updates from the in-process lock, no torn file thanks to
+        // tmp+rename.
+        let text = fs::read_to_string(path.as_path()).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).expect("orchestration file must stay valid JSON");
+        let jobs = super::read_cron_jobs_from_orchestration_file(&path).unwrap();
+        assert_eq!(jobs.len(), 8, "no append may be lost: {parsed}");
+        for i in 0..8 {
+            assert!(
+                jobs.iter().any(|j| j.command == format!("job-{i}")),
+                "missing job-{i} after concurrent appends"
+            );
+        }
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "atomic write must not leave a tmp file behind"
+        );
+    }
+
+    #[test]
+    fn atomic_write_replaces_whole_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("orchestration.json");
+        super::write_orchestration_file_atomic(&path, r#"{"version":1,"crons":[]}"#).unwrap();
+        super::write_orchestration_file_atomic(&path, r#"{"version":1,"crons":[],"extra":"x"}"#)
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text, r#"{"version":1,"crons":[],"extra":"x"}"#);
+        assert!(!path.with_extension("json.tmp").exists());
     }
 
     #[test]

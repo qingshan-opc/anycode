@@ -74,7 +74,26 @@ pub async fn local_trusted_user(db: &DashboardDb) -> Result<AuthUser> {
         })
 }
 
-pub async fn login(db: &DashboardDb, email: &str, password: &str) -> Result<Option<AuthUser>> {
+/// Outcome of a username/password login attempt.
+#[derive(Debug)]
+pub enum LoginOutcome {
+    Success(AuthUser),
+    InvalidCredentials,
+    /// The account has no password configured, but the caller requires one
+    /// (dashboard bound to a non-loopback address). Refused fail-closed
+    /// instead of accepting any password (WEB-11).
+    PasswordNotConfigured,
+}
+
+/// `password_required` must be true when the dashboard is reachable beyond
+/// loopback (LAN bind). On a loopback-only bind the seeded local user
+/// legitimately has no password, so passwordless login stays allowed there.
+pub async fn login(
+    db: &DashboardDb,
+    email: &str,
+    password: &str,
+    password_required: bool,
+) -> Result<LoginOutcome> {
     let row = sqlx::query(
         r#"
         SELECT id, organization_id, email, display_name, role, password_hash
@@ -87,15 +106,26 @@ pub async fn login(db: &DashboardDb, email: &str, password: &str) -> Result<Opti
     .fetch_optional(db.pool())
     .await?;
     let Some(r) = row else {
-        return Ok(None);
+        return Ok(LoginOutcome::InvalidCredentials);
     };
     let hash: Option<String> = r.get("password_hash");
-    if let Some(h) = hash.filter(|s| !s.is_empty()) {
-        if !verify_password(password, &h) {
-            return Ok(None);
+    match hash.filter(|s| !s.trim().is_empty()) {
+        Some(h) => {
+            if !verify_password(password, &h) {
+                return Ok(LoginOutcome::InvalidCredentials);
+            }
+        }
+        None if password_required => {
+            // Fail-closed: an account without a configured password must not
+            // accept arbitrary credentials on a non-loopback bind.
+            return Ok(LoginOutcome::PasswordNotConfigured);
+        }
+        None => {
+            // Loopback-only local workbench: keep the historical passwordless
+            // login for the seeded local user.
         }
     }
-    Ok(Some(AuthUser {
+    Ok(LoginOutcome::Success(AuthUser {
         id: r.get("id"),
         email: r.get("email"),
         display_name: r.get("display_name"),
@@ -108,7 +138,9 @@ pub async fn login(db: &DashboardDb, email: &str, password: &str) -> Result<Opti
 fn verify_password(password: &str, hash: &str) -> bool {
     let hash = hash.trim();
     if hash.is_empty() {
-        return true;
+        // Fail-closed: an empty stored hash never matches. Callers that allow
+        // passwordless loopback login must bypass verification explicitly.
+        return false;
     }
 
     if let Some((salt, expected)) = parse_sha256_password_hash(hash) {
@@ -167,7 +199,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{hex_lower, verify_password};
+    use super::{hex_lower, login, verify_password, LoginOutcome};
+    use crate::db::DashboardDb;
     use sha2::{Digest, Sha256};
 
     fn sha256_password_hash(salt: &str, password: &str) -> String {
@@ -195,5 +228,62 @@ mod tests {
     fn rejects_malformed_sha256_hashes() {
         assert!(!verify_password("pw", "sha256$salt$not-hex"));
         assert!(!verify_password("pw", "sha256$$0123456789abcdef"));
+    }
+
+    #[test]
+    fn rejects_empty_hash_fail_closed() {
+        assert!(!verify_password("anything", ""));
+        assert!(!verify_password("", "   "));
+    }
+
+    async fn open_temp_db() -> (tempfile::TempDir, DashboardDb) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DashboardDb::open(dir.path().join("test.db")).await.unwrap();
+        (dir, db)
+    }
+
+    #[tokio::test]
+    async fn seeded_user_without_password_login_allowed_on_loopback_only() {
+        let (_dir, db) = open_temp_db().await;
+        // Loopback-only workbench: historical passwordless login still works.
+        let outcome = login(&db, "local@anycode", "any-password", false)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, LoginOutcome::Success(_)));
+        // LAN bind: same account must be refused and told to set a password.
+        let outcome = login(&db, "local@anycode", "any-password", true)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, LoginOutcome::PasswordNotConfigured));
+        let outcome = login(&db, "local@anycode", "", true).await.unwrap();
+        assert!(matches!(outcome, LoginOutcome::PasswordNotConfigured));
+    }
+
+    #[tokio::test]
+    async fn configured_password_enforced_on_lan() {
+        let (_dir, db) = open_temp_db().await;
+        let hash = sha256_password_hash("local", "s3cret");
+        sqlx::query("UPDATE users SET password_hash = ? WHERE email = 'local@anycode'")
+            .bind(&hash)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let wrong = login(&db, "local@anycode", "wrong", true).await.unwrap();
+        assert!(matches!(wrong, LoginOutcome::InvalidCredentials));
+        let right = login(&db, "local@anycode", "s3cret", true).await.unwrap();
+        assert!(matches!(right, LoginOutcome::Success(_)));
+        let unknown = login(&db, "nobody@anycode", "s3cret", true).await.unwrap();
+        assert!(matches!(unknown, LoginOutcome::InvalidCredentials));
+    }
+
+    #[tokio::test]
+    async fn blank_password_hash_treated_as_unconfigured() {
+        let (_dir, db) = open_temp_db().await;
+        sqlx::query("UPDATE users SET password_hash = '  ' WHERE email = 'local@anycode'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let outcome = login(&db, "local@anycode", "anything", true).await.unwrap();
+        assert!(matches!(outcome, LoginOutcome::PasswordNotConfigured));
     }
 }

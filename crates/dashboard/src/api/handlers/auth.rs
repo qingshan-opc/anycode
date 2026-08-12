@@ -34,8 +34,13 @@ pub async fn post_auth_login(
     State(state): State<AppState>,
     Json(body): Json<LoginBody>,
 ) -> impl IntoResponse {
-    match crate::auth_session::login(&state.db, &body.email, &body.password).await {
-        Ok(Some(user)) => {
+    // On a non-loopback (LAN) bind, accounts without a configured password
+    // must not accept arbitrary credentials (WEB-11 fail-closed).
+    let password_required = !crate::service_governance::is_loopback_host(&state.host);
+    match crate::auth_session::login(&state.db, &body.email, &body.password, password_required)
+        .await
+    {
+        Ok(crate::auth_session::LoginOutcome::Success(user)) => {
             let token = state.sessions.create(&user.id);
             let cookie = format!(
                 "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800",
@@ -53,7 +58,15 @@ pub async fn post_auth_login(
             }
             resp
         }
-        Ok(None) => (
+        Ok(crate::auth_session::LoginOutcome::PasswordNotConfigured) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "password not configured",
+                "hint": "This account has no password; set a local password before signing in over LAN"
+            })),
+        )
+            .into_response(),
+        Ok(crate::auth_session::LoginOutcome::InvalidCredentials) => (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "invalid credentials" })),
         )
