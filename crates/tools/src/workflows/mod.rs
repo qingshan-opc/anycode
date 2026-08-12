@@ -148,8 +148,8 @@ fn checkpoint_summary(base_dir: &Path, workflow_name: &str) -> Option<serde_json
     let cp: WorkflowCheckpoint = serde_json::from_str(&text).ok()?;
     let steps: Vec<serde_json::Value> = cp
         .steps
-        .iter()
-        .map(|(_, st)| {
+        .values()
+        .map(|st| {
             serde_json::json!({
                 "stepId": st.step_id,
                 "status": status_str(st.status),

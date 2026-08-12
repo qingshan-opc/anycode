@@ -13,9 +13,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 fn resolve_registry(services: &ToolServices) -> Result<MediaClientRegistry, CoreError> {
-    services
-        .media_registry()
-        .map_err(|e| CoreError::ConfigError(e))
+    services.media_registry().map_err(CoreError::ConfigError)
 }
 
 macro_rules! media_tool_boilerplate {

@@ -1193,10 +1193,9 @@ impl Tool for ScheduleWakeupTool {
                     .name
                     .as_deref()
                     .is_some_and(|n| n.starts_with(WAKEUP_JOB_NAME_PREFIX))
+                    && self.services.remove_cron(&job.id)
                 {
-                    if self.services.remove_cron(&job.id) {
-                        cancelled += 1;
-                    }
+                    cancelled += 1;
                 }
             }
             return Ok(ToolOutput {
@@ -1226,7 +1225,7 @@ impl Tool for ScheduleWakeupTool {
             });
         }
 
-        let was_clamped = delay < 60 || delay > 3600;
+        let was_clamped = !(60..=3600).contains(&delay);
         let clamped = delay.clamp(60, 3600);
 
         // 一次性 cron：当前本地时刻 + delay 秒（具体数字字段，星期用 * 避免 OR 语义）。

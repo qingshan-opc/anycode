@@ -58,7 +58,7 @@ pub fn search_chunks_file(
         let Ok(chunk) = serde_json::from_str::<ChunkLine>(line) else {
             continue;
         };
-        let score = crate::knowledge_scoring::score_knowledge_chunk(&q, &chunk.content);
+        let score = crate::knowledge_scoring::score_knowledge_chunk(q, &chunk.content);
         if score > 0.0 {
             hits.push(KnowledgeHit {
                 source_file: chunk.source_file,

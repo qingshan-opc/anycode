@@ -24,7 +24,8 @@ fastembed = { version = "5", optional = true }
 
 # Database
 # sled 已停维护（DATA-02）：默认构建不含 sled；仅一次性迁移路径在 `sled-migrate` feature 下编译。
-sled = { workspace = true, optional = true }
+# 版本直接钉在本 crate（workspace 已无其他 sled 消费者，根 key 已删）。
+sled = { version = "0.34", optional = true }
 sqlx = { workspace = true, optional = true }
 
 # File I/O

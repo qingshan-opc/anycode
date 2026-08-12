@@ -37,6 +37,16 @@ const CREATE_EMBEDDINGS: &str = "CREATE TABLE IF NOT EXISTS embeddings (
     PRIMARY KEY (mem_type, id)
 )";
 
+/// 通用带 payload 的向量表：供派生缓存类消费者（如 project knowledge 向量侧车）
+/// 在同一后端上存自定义字节。`vec` 为 `Vec<f32>` 的 JSON；payload 不透明。
+const CREATE_SCORED_ENTRIES: &str = "CREATE TABLE IF NOT EXISTS scored_entries (
+    ns TEXT NOT NULL,
+    id TEXT NOT NULL,
+    vec BLOB NOT NULL,
+    payload BLOB NOT NULL,
+    PRIMARY KEY (ns, id)
+)";
+
 fn core_err(e: impl std::fmt::Display) -> CoreError {
     CoreError::Other(anyhow::anyhow!(e.to_string()))
 }
@@ -81,6 +91,7 @@ fn lazy_pool(db_path: &std::path::Path) -> SqlitePool {
 async fn create_schema(pool: &SqlitePool) -> Result<(), MemoryError> {
     sqlx::query(CREATE_MEMORIES).execute(pool).await?;
     sqlx::query(CREATE_EMBEDDINGS).execute(pool).await?;
+    sqlx::query(CREATE_SCORED_ENTRIES).execute(pool).await?;
     Ok(())
 }
 
@@ -371,6 +382,86 @@ impl SqliteVectorBackend {
             .await?;
         Ok(())
     }
+
+    /// 通用带 payload 向量写入（`scored_entries` 表）：同 (ns, id) 覆盖，语义同 sled insert。
+    pub async fn scored_upsert(
+        &self,
+        ns: &str,
+        id: &str,
+        embedding: &[f32],
+        payload: &[u8],
+    ) -> Result<(), CoreError> {
+        self.ensure_init().await.map_err(core_err)?;
+        let vec = serde_json::to_vec(embedding)?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO scored_entries (ns, id, vec, payload) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(ns)
+        .bind(id)
+        .bind(vec)
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(core_err)?;
+        Ok(())
+    }
+
+    /// 余弦线性扫描：保留 `is_finite() && score > min_score`，按分降序后 `truncate(limit)`。
+    /// 返回 `(id, payload, score)`；坏 payload/vec 行跳过（与 sled 版 `let Ok(..) else continue` 一致）。
+    pub async fn scored_search(
+        &self,
+        ns: &str,
+        query_embedding: &[f32],
+        min_score: f32,
+        limit: usize,
+    ) -> Result<Vec<(String, Vec<u8>, f32)>, CoreError> {
+        self.ensure_init().await.map_err(core_err)?;
+        let rows =
+            sqlx::query("SELECT id, vec, payload FROM scored_entries WHERE ns = ?1 ORDER BY id")
+                .bind(ns)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(core_err)?;
+
+        let mut hits: Vec<(String, Vec<u8>, f32)> = Vec::new();
+        for row in rows {
+            let id: String = row.try_get(0).map_err(core_err)?;
+            let vec_bytes: Vec<u8> = row.try_get(1).map_err(core_err)?;
+            let payload: Vec<u8> = row.try_get(2).map_err(core_err)?;
+            let Ok(vec) = serde_json::from_slice::<Vec<f32>>(&vec_bytes) else {
+                continue;
+            };
+            let score = cosine(query_embedding, &vec);
+            if score.is_finite() && score > min_score {
+                hits.push((id, payload, score));
+            }
+        }
+        hits.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
+    /// 命名空间内条目数（语义同 `sled::Db::len`）。
+    pub async fn scored_count(&self, ns: &str) -> Result<usize, CoreError> {
+        self.ensure_init().await.map_err(core_err)?;
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scored_entries WHERE ns = ?1")
+            .bind(ns)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(core_err)?;
+        Ok(n.max(0) as usize)
+    }
+
+    /// 清空命名空间（rebuild 前调用，语义同 sled 侧车整库删除后重建）。
+    pub async fn scored_clear(&self, ns: &str) -> Result<(), CoreError> {
+        self.ensure_init().await.map_err(core_err)?;
+        sqlx::query("DELETE FROM scored_entries WHERE ns = ?1")
+            .bind(ns)
+            .execute(&self.pool)
+            .await
+            .map_err(core_err)?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -620,6 +711,53 @@ mod tests {
             .await
             .unwrap();
         assert!(!hits.contains(&"bad".to_string()));
+    }
+
+    #[tokio::test]
+    async fn scored_entries_roundtrip_and_threshold() {
+        let db = temp_db("scored");
+        let vec = SqliteVectorBackend::new(&db).unwrap();
+        vec.scored_upsert("kb", "c1", &[1.0, 0.0], b"meta-1")
+            .await
+            .unwrap();
+        vec.scored_upsert("kb", "c2", &[0.0, 1.0], b"meta-2")
+            .await
+            .unwrap();
+        vec.scored_upsert("other", "c3", &[1.0, 0.0], b"meta-3")
+            .await
+            .unwrap();
+        assert_eq!(vec.scored_count("kb").await.unwrap(), 2);
+
+        // 覆盖同 (ns, id)
+        vec.scored_upsert("kb", "c2", &[0.99, 0.01], b"meta-2b")
+            .await
+            .unwrap();
+        assert_eq!(vec.scored_count("kb").await.unwrap(), 2);
+
+        let hits = vec
+            .scored_search("kb", &[1.0, 0.0], 0.05, 10)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0, "c1", "完全同向排前");
+        assert_eq!(hits[0].1, b"meta-1");
+        assert_eq!(hits[1].1, b"meta-2b");
+
+        // min_score 阈值：正交向量 score=0 被过滤；ns 隔离
+        let none = vec.scored_search("kb", &[0.0, 1.0], 0.5, 10).await.unwrap();
+        assert!(none.is_empty());
+        let other = vec
+            .scored_search("other", &[1.0, 0.0], 0.05, 10)
+            .await
+            .unwrap();
+        assert_eq!(other.len(), 1);
+        // truncate(limit)
+        let one = vec.scored_search("kb", &[1.0, 0.0], 0.0, 1).await.unwrap();
+        assert_eq!(one.len(), 1);
+
+        vec.scored_clear("kb").await.unwrap();
+        assert_eq!(vec.scored_count("kb").await.unwrap(), 0);
+        assert_eq!(vec.scored_count("other").await.unwrap(), 1);
     }
 
     #[cfg(feature = "sled-migrate")]

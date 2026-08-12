@@ -5,11 +5,10 @@ edition.workspace = true
 
 [features]
 default = []
-# Local FastEmbed vectors for project knowledge (Sled sidecar under ~/.anycode/knowledge).
+# Local FastEmbed vectors for project knowledge (SQLite sidecar under ~/.anycode/knowledge; DATA-02 前为 Sled)。
 knowledge-embeddings = [
     "dep:anycode-memory",
     "anycode-memory/embedding-local",
-    "dep:sled",
 ]
 # 预留：按需关闭重依赖或接入原生 MCP/LSP
 tools-http = []
@@ -28,7 +27,6 @@ tools-browser = ["dep:anycode-browser"]
 anycode-core = { path = "../core" }
 anycode-browser = { path = "../browser", optional = true }
 anycode-memory = { path = "../memory", optional = true }
-sled = { workspace = true, optional = true }
 anycode-llm = { path = "../llm" }
 tokio = { workspace = true }
 async-trait = { workspace = true }

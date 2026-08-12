@@ -81,20 +81,17 @@ impl Tool for GlobTool {
         let path_arg = g.path.unwrap_or_else(|| ".".to_string());
         let mut root = resolve_read_path_fields(self.sandbox_mode, sandbox_in, wd, &path_arg)?;
 
-        if !root.exists() {
-            if self.sandbox_mode && sandbox_in {
-                if let Some(workdir) = wd {
-                    let fallback =
-                        resolve_read_path_fields(self.sandbox_mode, sandbox_in, wd, ".")?;
-                    if fallback.exists() {
-                        tracing::warn!(
-                            target: "anycode_tools",
-                            requested = %root.display(),
-                            workdir,
-                            "Glob search root missing; using task working directory"
-                        );
-                        root = fallback;
-                    }
+        if !root.exists() && self.sandbox_mode && sandbox_in {
+            if let Some(workdir) = wd {
+                let fallback = resolve_read_path_fields(self.sandbox_mode, sandbox_in, wd, ".")?;
+                if fallback.exists() {
+                    tracing::warn!(
+                        target: "anycode_tools",
+                        requested = %root.display(),
+                        workdir,
+                        "Glob search root missing; using task working directory"
+                    );
+                    root = fallback;
                 }
             }
         }
