@@ -13,7 +13,8 @@ cargo test --workspace
 cargo build --release -p anycode-channel-bridge   # anycode-daemon binary
 ./scripts/sync-desktop-dev.sh              # UI-only (~15s)
 ./scripts/sync-desktop-dev.sh --rust       # UI + Rust (release-local ~1–2min)
-# Shipping DMG: ./scripts/build-desktop-local.sh (LTO release)
+./scripts/build-desktop-local.sh        # 本地迭代 DMG(release-local 无 LTO,跳过公证;loopback 账号)
+./scripts/build-desktop-release.sh      # 发货 DMG(release + LTO,公证 + staple;anycode.work 账号)
 
 # Feature-specific testing
 cargo test -p anycode-tools --features tools-lsp

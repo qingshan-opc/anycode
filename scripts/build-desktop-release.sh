@@ -194,7 +194,11 @@ fi
 PARALLEL_START=$SECONDS
 echo "==> cargo build dashboard + parallel sidecar prep"
 echo "    features: $DASHBOARD_FEATURES"
-ANYCODE_BUILD_DASHBOARD_UI=1 cargo build --release -p anycode-dashboard --features "$DASHBOARD_FEATURES" &
+echo "    profile:  $TAURI_PROFILE (--lib: the dashboard binary is not bundled — warm the cache only)"
+# 预热必须与 tauri build 同一 profile,否则指纹不同、desktop 编译时整棵
+# 依赖树重编(本地路径还白跑一个 LTO 链接)。--lib 跳过无人使用的
+# dashboard 二进制链接——发货版这本身就是一个完整 LTO link。
+ANYCODE_BUILD_DASHBOARD_UI=1 cargo build --profile "$TAURI_PROFILE" -p anycode-dashboard --lib --features "$DASHBOARD_FEATURES" &
 CARGO_PID=$!
 APPLE_PID=""
 if [[ "$CROSS_WIN" -eq 0 ]]; then
@@ -356,7 +360,11 @@ if [[ "$(uname -s)" == "Darwin" && -d "${CEF_PATH:-$HOME/.local/share/cef}/Chrom
   fi
 fi
 
-if [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" && "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
+# 本地迭代 DMG(ANYCODE_DESKTOP_LOCAL_RELEASE=1)不需要 Apple 公证——
+# 那是 Apple 服务器往返,典型 2–10 分钟,本机性能无关;ad-hoc 签名即可本机运行。
+if [[ "${ANYCODE_DESKTOP_LOCAL_RELEASE:-}" == "1" ]]; then
+  echo "==> local DMG: skip deep-sign / notarize / updater tarball (ad-hoc signed)"
+elif [[ "$(uname -s)" == "Darwin" && -n "${APPLE_SIGNING_IDENTITY:-}" && "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
   APP_BUNDLE="$SIGN_APP_BUNDLE"
   REL_ENV="${ANYCODE_RELEASE_ENV:-$HOME/.anycode/release.env}"
   if [[ -f "$REL_ENV" ]]; then
