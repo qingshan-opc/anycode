@@ -82,7 +82,7 @@ pub fn load_or_create_master_key() -> Result<Vec<u8>> {
     let path = fallback_key_path()?;
     if path.exists() {
         let raw = std::fs::read_to_string(&path)?;
-        return Ok(B64.decode(raw.trim()).context("decode master key")?);
+        return B64.decode(raw.trim()).context("decode master key");
     }
     let key = rand_key();
     if let Some(parent) = path.parent() {

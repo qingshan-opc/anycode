@@ -1,8 +1,8 @@
-//! 归根通道：虚态缓冲 → 强化晋升 → 热层（Sled）→ 可选向量层。
+//! 归根通道：虚态缓冲 → 强化晋升 → 热层（sqlite 单文件，原 sled 已退役）→ 可选向量层。
 
 use crate::buffer_wal::BufferWal;
 use crate::retrieval::{KeywordRetrieval, MemoryRetrieval};
-use crate::{MemoryError, SledMemoryStore};
+use crate::{MemoryError, SqliteMemoryStore};
 use anycode_core::prelude::*;
 use anycode_core::{
     EmbeddingProvider, MemoryPipeline, MemoryPipelineSettings, PreSemanticFragment,
@@ -91,7 +91,7 @@ pub struct RootReturnMemoryPipeline {
     settings: MemoryPipelineSettings,
     buffer: Arc<RwLock<HashMap<String, PreSemanticFragment>>>,
     wal: Option<Arc<BufferWal>>,
-    hot: Arc<SledMemoryStore>,
+    hot: Arc<SqliteMemoryStore>,
     legacy_file: Option<Arc<crate::FileMemoryStore>>,
     vector: Arc<dyn VectorMemoryBackend>,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
@@ -99,15 +99,16 @@ pub struct RootReturnMemoryPipeline {
 
 impl RootReturnMemoryPipeline {
     /// 打开管线：可选从 WAL 重放虚态缓冲。
+    /// `hot_db_path`：热层 sqlite 单文件（原 sled 目录同目录下的 `*.hot.db`）。
     pub fn open(
         settings: MemoryPipelineSettings,
-        hot_sled_path: impl Into<std::path::PathBuf>,
+        hot_db_path: impl Into<std::path::PathBuf>,
         buffer_wal_path: Option<std::path::PathBuf>,
         legacy_file: Option<Arc<crate::FileMemoryStore>>,
         vector: Arc<dyn VectorMemoryBackend>,
         embedding: Option<Arc<dyn EmbeddingProvider>>,
     ) -> Result<Self, MemoryError> {
-        let hot_path = hot_sled_path.into();
+        let hot_path = hot_db_path.into();
         let (buffer, wal) = if settings.buffer_wal_enabled {
             if let Some(wal_path) = buffer_wal_path {
                 let initial = BufferWal::replay(&wal_path).unwrap_or_default();
@@ -125,7 +126,7 @@ impl RootReturnMemoryPipeline {
             settings,
             buffer,
             wal,
-            hot: Arc::new(SledMemoryStore::new(hot_path)?),
+            hot: Arc::new(SqliteMemoryStore::new(hot_path)?),
             legacy_file,
             vector,
             embedding,
@@ -350,8 +351,11 @@ impl MemoryPipeline for RootReturnMemoryPipeline {
                 Ok(qvec) => match self.vector.search(&qvec, mem_type, 32).await {
                     Ok(ids) => {
                         for id in ids {
-                            if let Ok(Some(m)) =
-                                self.hot.get_by_id(&id, &mem_type).map_err(core_from_mem)
+                            if let Ok(Some(m)) = self
+                                .hot
+                                .get_by_id(&id, &mem_type)
+                                .await
+                                .map_err(core_from_mem)
                             {
                                 from_vector.push(m);
                             }
@@ -431,6 +435,7 @@ impl MemoryPipeline for RootReturnMemoryPipeline {
         let Some(m) = self
             .hot
             .get_by_id(memory_id, &mem_type)
+            .await
             .map_err(core_from_mem)?
         else {
             return Err(CoreError::Other(anyhow::anyhow!("memory not in hot store")));
@@ -491,8 +496,12 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn temp_sled(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("anycode-pipeline-test-{}-{}", name, Uuid::new_v4()))
+    fn temp_hot_db(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "anycode-pipeline-test-{}-{}.hot.db",
+            name,
+            Uuid::new_v4()
+        ))
     }
 
     fn test_settings() -> MemoryPipelineSettings {
@@ -503,7 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn promote_on_recall_when_threshold_met() {
-        let sled = temp_sled("promote");
+        let sled = temp_hot_db("promote");
         let mut settings = test_settings();
         settings.promote_touch_threshold = 2;
         settings.reinforce_on_recall_match = true;
@@ -545,7 +554,7 @@ mod tests {
 
     #[tokio::test]
     async fn tick_decay_drops_stale_buffer() {
-        let sled = temp_sled("decay");
+        let sled = temp_hot_db("decay");
         let mut settings = test_settings();
         settings.buffer_ttl_secs = 0;
         settings.merge_legacy_file_recall = false;
@@ -579,7 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn promote_fragment_to_hot_explicit() {
-        let sled = temp_sled("pexplicit");
+        let sled = temp_hot_db("pexplicit");
         let mut settings = test_settings();
         settings.merge_legacy_file_recall = false;
         let pipe = RootReturnMemoryPipeline::open(
@@ -601,6 +610,7 @@ mod tests {
         let m = pipe
             .hot
             .get_by_id(&fid, &MemoryType::Project)
+            .await
             .unwrap()
             .unwrap();
         assert!(m.content.contains("explicit_body_xyz"));
@@ -609,7 +619,7 @@ mod tests {
     /// `buffer_wal_fsync_every_n` 很大时单条写入不会触发 periodic fsync；drop 刷盘后重启应重放缓冲。
     #[tokio::test]
     async fn wal_drop_flushes_so_reopen_replays_buffer() {
-        let base = temp_sled("wal-drop");
+        let base = temp_hot_db("wal-drop");
         let wal_path = std::path::PathBuf::from(format!("{}.buffer.wal", base.display()));
         let _ = std::fs::remove_file(&wal_path);
         let mut settings = test_settings();

@@ -85,7 +85,7 @@ pub fn load_pending_episodes(base: impl AsRef<Path>) -> std::io::Result<Vec<Epis
             out.push(rec);
         }
     }
-    out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    out.sort_by_key(|a| a.created_at);
     Ok(out)
 }
 

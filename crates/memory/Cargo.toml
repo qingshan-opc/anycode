@@ -23,6 +23,7 @@ sha2 = "0.10"
 fastembed = { version = "5", optional = true }
 
 # Database
+# sled 已停维护（DATA-02）：默认构建不含 sled；仅一次性迁移路径在 `sled-migrate` feature 下编译。
 sled = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 
@@ -34,9 +35,10 @@ ignore = "0.4"
 moka = { workspace = true, features = ["future"] }
 
 [features]
-default = ["sled"]
-sled = ["dep:sled"]
+default = ["sqlite"]
 sqlite = ["dep:sqlx"]
+# 旧 sled 热层 → sqlite 的一次性迁移；发布构建如需迁移存量数据，显式打开此 feature。
+sled-migrate = ["dep:sled", "sqlite"]
 # 本地 ONNX 嵌入（FastEmbed / MiniLM），需 `cargo build -p anycode-desktop --features embedding-local`。
 embedding-local = ["dep:fastembed"]
 # 预留：接入 LanceDB / 远端向量索引时启用，与 `EmbeddingProvider` + `VectorMemoryBackend` 实现联用。

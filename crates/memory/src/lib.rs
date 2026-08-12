@@ -15,6 +15,9 @@ pub mod pipeline;
 pub mod rating;
 pub mod retrieval;
 pub mod semantic;
+#[cfg(feature = "sqlite")]
+pub mod sqlite_store;
+#[cfg(feature = "sled-migrate")]
 pub mod vector_sled;
 
 pub use dream::{
@@ -49,12 +52,16 @@ pub use semantic::{
     build_distill_prompt, first_line, parse_distill_response, read_distilled_frontmatter,
     slugify_name, write_distilled_frontmatter, DistilledMemoryEntry,
 };
+#[cfg(feature = "sqlite")]
+pub use sqlite_store::{SqliteMemoryStore, SqliteVectorBackend};
+#[cfg(feature = "sled-migrate")]
 pub use vector_sled::SledVectorBackend;
 
 use crate::retrieval::{KeywordRetrieval, MemoryRetrieval};
 use anycode_core::prelude::*;
 use async_trait::async_trait;
 use moka::future::Cache;
+#[cfg(feature = "sled-migrate")]
 use sled::{Db, Tree};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,8 +75,13 @@ use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum MemoryError {
+    #[cfg(feature = "sled-migrate")]
     #[error("Database error: {0}")]
     DatabaseError(#[from] sled::Error),
+
+    #[cfg(feature = "sqlite")]
+    #[error("SQLite error: {0}")]
+    SqliteError(#[from] sqlx::Error),
 
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
@@ -88,12 +100,17 @@ pub enum MemoryError {
 
     #[error("Version conflict: {0}")]
     VersionConflict(String),
+
+    #[error("Migration error: {0}")]
+    Migration(String),
 }
 
+#[cfg(feature = "sled-migrate")]
 fn core_from_mem(e: MemoryError) -> CoreError {
     CoreError::Other(anyhow::anyhow!(e))
 }
 
+#[cfg(feature = "sled-migrate")]
 fn core_from_sled(e: sled::Error) -> CoreError {
     CoreError::Other(anyhow::anyhow!(e))
 }
@@ -364,14 +381,16 @@ impl FileMemoryStore {
 }
 
 // ============================================================================
-// Sled Memory Store (可选)
+// Sled Memory Store (仅 sled-migrate：一次性迁移读取旧数据用)
 // ============================================================================
 
+#[cfg(feature = "sled-migrate")]
 pub struct SledMemoryStore {
     db: Db,
     cache: Arc<Cache<String, Memory>>,
 }
 
+#[cfg(feature = "sled-migrate")]
 impl SledMemoryStore {
     /// 按键读取单条记忆（热层/Sled）。
     pub fn get_by_id(
@@ -406,6 +425,7 @@ impl SledMemoryStore {
     }
 }
 
+#[cfg(feature = "sled-migrate")]
 #[async_trait]
 impl MemoryStore for SledMemoryStore {
     async fn save(&self, memory: Memory) -> Result<(), CoreError> {
@@ -470,45 +490,52 @@ impl MemoryStore for SledMemoryStore {
 // ============================================================================
 // Hybrid Memory Store (最佳性能)
 // ============================================================================
+//
+// 热层原为 sled（DATA-02 已停维护），现为 sqlite 单文件 + Markdown 树双写，语义不变：
+// save/update/delete 双写，recall 只走热层。
 
+#[cfg(feature = "sqlite")]
 pub struct HybridMemoryStore {
-    sled: SledMemoryStore,
+    hot: crate::sqlite_store::SqliteMemoryStore,
     file: FileMemoryStore,
 }
 
+#[cfg(feature = "sqlite")]
 impl HybridMemoryStore {
+    /// `hot_db_path`：sqlite 单文件（如 `<memory 根同级目录>/<name>.hot.db`）。
     pub fn new(
-        sled_path: impl Into<PathBuf>,
+        hot_db_path: impl Into<PathBuf>,
         file_path: impl Into<PathBuf>,
     ) -> Result<Self, MemoryError> {
         Ok(Self {
-            sled: SledMemoryStore::new(sled_path)?,
+            hot: crate::sqlite_store::SqliteMemoryStore::new(hot_db_path)?,
             file: FileMemoryStore::new(file_path)?,
         })
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[async_trait]
 impl MemoryStore for HybridMemoryStore {
     async fn save(&self, memory: Memory) -> Result<(), CoreError> {
         // 同时保存到两个存储
-        self.sled.save(memory.clone()).await?;
+        self.hot.save(memory.clone()).await?;
         self.file.save(memory).await?;
         Ok(())
     }
 
     async fn recall(&self, query: &str, mem_type: MemoryType) -> Result<Vec<Memory>, CoreError> {
-        // 优先从 sled 读取（更快）
-        self.sled.recall(query, mem_type).await
+        // 优先从热层读取（更快）
+        self.hot.recall(query, mem_type).await
     }
 
     async fn update(&self, id: &str, memory: Memory) -> Result<(), CoreError> {
-        self.sled.update(id, memory.clone()).await?;
+        self.hot.update(id, memory.clone()).await?;
         self.file.update(id, memory).await
     }
 
     async fn delete(&self, id: &str) -> Result<(), CoreError> {
-        self.sled.delete(id).await?;
+        self.hot.delete(id).await?;
         self.file.delete(id).await
     }
 }

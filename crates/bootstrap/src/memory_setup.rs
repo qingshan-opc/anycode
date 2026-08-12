@@ -8,17 +8,17 @@ use anycode_core::{EmbeddingProvider, MemoryPipeline, VectorMemoryBackend};
 use anycode_memory::FastEmbedEmbeddingProvider;
 use anycode_memory::{
     FileMemoryStore, HybridMemoryStore, NoopVectorBackend, OpenAiCompatibleEmbeddingProvider,
-    RootReturnMemoryPipeline, SledVectorBackend,
+    RootReturnMemoryPipeline, SqliteVectorBackend,
 };
 use async_trait::async_trait;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// How this process attaches to configured memory (Sled is single-writer per machine).
+/// How this process attaches to configured memory (hot store is single-file sqlite; sled is retired).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryAttachMode {
-    /// Channel bridges: open hybrid/pipeline sled when configured.
+    /// Channel bridges: open hybrid/pipeline hot store when configured.
     Exclusive,
     /// Local REPL/run: same Markdown tree as Exclusive; use `file` when config is hybrid/pipeline.
     Shared,
@@ -77,6 +77,7 @@ impl MemoryStore for NoopMemoryStore {
     }
 }
 
+/// 旧 sled 热层目录（已停维护，仅供诊断/一次性迁移定位）。
 pub fn memory_sled_path_for_diagnostics(file_memory_root: &Path) -> PathBuf {
     sibling_sled_path(file_memory_root)
 }
@@ -90,33 +91,34 @@ fn sibling_sled_path(file_memory_root: &Path) -> PathBuf {
     parent.join(format!("{}.sled", name))
 }
 
-/// 热层 Sled 路径（归根通道 `pipeline` backend，与 `hybrid` 的 sibling sled 命名区分）。
-fn sibling_pipeline_sled_path(file_memory_root: &Path) -> PathBuf {
+/// 热层 sqlite 单文件（`hybrid` backend）：原 `<name>.sled` 目录 → 同目录下 `<name>.hot.db`。
+fn sibling_hot_db_path(file_memory_root: &Path) -> PathBuf {
     let name = file_memory_root
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("memory");
     let parent = file_memory_root.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{}.pipeline.sled", name))
+    parent.join(format!("{}.hot.db", name))
 }
 
-fn sibling_pipeline_buffer_wal_path(pipeline_hot_sled: &Path) -> PathBuf {
-    let s = pipeline_hot_sled.to_string_lossy();
-    if s.ends_with(".sled") {
-        PathBuf::from(format!("{}.buffer.wal", s.strip_suffix(".sled").unwrap()))
-    } else {
-        pipeline_hot_sled.with_extension("buffer.wal")
-    }
+/// 热层 sqlite 单文件（归根通道 `pipeline` backend）：原 `<name>.pipeline.sled` 目录 →
+/// 同目录下 `<name>.pipeline.hot.db`；向量侧车与热层共用该文件的两张表（原 `.pipeline.vec.sled`）。
+fn sibling_pipeline_hot_db_path(file_memory_root: &Path) -> PathBuf {
+    let name = file_memory_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("memory");
+    let parent = file_memory_root.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{}.pipeline.hot.db", name))
 }
 
-fn sibling_pipeline_vector_sled_path(pipeline_hot_sled: &Path) -> PathBuf {
-    let s = pipeline_hot_sled.to_string_lossy();
-    if s.ends_with(".pipeline.sled") {
-        PathBuf::from(s.replace(".pipeline.sled", ".pipeline.vec.sled"))
-    } else if s.ends_with(".sled") {
-        PathBuf::from(format!("{}.vec.sled", s.strip_suffix(".sled").unwrap()))
+fn sibling_pipeline_buffer_wal_path(pipeline_hot_db: &Path) -> PathBuf {
+    let s = pipeline_hot_db.to_string_lossy();
+    if let Some(base) = s.strip_suffix(".hot.db") {
+        // 与 sled 时代一致：`<name>.pipeline.buffer.wal`，存量 WAL 可继续重放。
+        PathBuf::from(format!("{base}.buffer.wal"))
     } else {
-        pipeline_hot_sled.with_extension("vec.sled")
+        pipeline_hot_db.with_extension("buffer.wal")
     }
 }
 
@@ -136,15 +138,15 @@ pub fn build_memory_layer(
             Ok((Arc::new(store), None))
         }
         "hybrid" => {
-            let sled_path = sibling_sled_path(&config.memory.path);
-            let store = HybridMemoryStore::new(sled_path, config.memory.path.clone())
+            let hot_db = sibling_hot_db_path(&config.memory.path);
+            let store = HybridMemoryStore::new(hot_db, config.memory.path.clone())
                 .map_err(|e| anyhow::anyhow!("hybrid memory store: {e}"))?;
             Ok((Arc::new(store), None))
         }
         "pipeline" => {
-            let sled_path = sibling_pipeline_sled_path(&config.memory.path);
+            let hot_db = sibling_pipeline_hot_db_path(&config.memory.path);
             let buffer_wal = if config.memory.pipeline.buffer_wal_enabled {
-                Some(sibling_pipeline_buffer_wal_path(&sled_path))
+                Some(sibling_pipeline_buffer_wal_path(&hot_db))
             } else {
                 None
             };
@@ -159,10 +161,10 @@ pub fn build_memory_layer(
                 Arc<dyn VectorMemoryBackend>,
                 Option<Arc<dyn EmbeddingProvider>>,
             ) = if config.memory.pipeline.embedding_enabled {
-                let vec_path = sibling_pipeline_vector_sled_path(&sled_path);
+                // 向量侧车与热层共用同一 hot.db（embeddings 表），原 .pipeline.vec.sled 由迁移吸收。
                 let v = Arc::new(
-                    SledVectorBackend::new(vec_path)
-                        .map_err(|e| anyhow::anyhow!("pipeline vector sled: {}", e))?,
+                    SqliteVectorBackend::new(hot_db.clone())
+                        .map_err(|e| anyhow::anyhow!("pipeline vector sqlite: {}", e))?,
                 ) as Arc<dyn VectorMemoryBackend>;
                 if config.memory.embedding_provider == "local" {
                     #[cfg(feature = "embedding-local")]
@@ -247,7 +249,7 @@ pub fn build_memory_layer(
             };
             let pipe = Arc::new(RootReturnMemoryPipeline::open(
                 config.memory.pipeline.clone(),
-                sled_path,
+                hot_db,
                 buffer_wal,
                 legacy,
                 vector,
