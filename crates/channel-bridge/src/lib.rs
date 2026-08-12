@@ -10,6 +10,7 @@ mod builtin_agents;
 pub mod cron_failure;
 pub mod daemon_runner;
 mod i18n;
+pub mod log_retention;
 pub mod scheduler;
 mod task_builders;
 pub mod tasks;

@@ -210,11 +210,33 @@ pub(crate) async fn run_builtin_scheduler(
 
     let mut last_fire: HashMap<String, DateTime<Utc>> = HashMap::new();
     let mut last_dream_day: Option<chrono::NaiveDate> = None;
+    let mut last_retention_day: Option<chrono::NaiveDate> = None;
 
     loop {
         let now = Utc::now();
         // Nightly local dream consolidation (03:00–03:59 UTC, once per day).
         let today = now.date_naive();
+        // Nightly task-log retention (same window):gzip 老化任务目录,
+        // 更老的整目录删除(P2.7,阈值经 ANYCODE_TASK_LOG_*_DAYS 可调)。
+        if now.hour() == 3 && last_retention_day != Some(today) {
+            last_retention_day = Some(today);
+            let report = crate::log_retention::sweep_task_logs(
+                disk.root_dir(),
+                std::time::SystemTime::now(),
+                crate::log_retention::compress_after_duration(),
+                crate::log_retention::delete_after_duration(),
+            );
+            if report.dirs_compressed > 0 || report.dirs_deleted > 0 {
+                info!(
+                    target: "anycode_scheduler",
+                    "task log retention: scanned={} compressed={} deleted={} reclaimed_bytes={}",
+                    report.dirs_scanned,
+                    report.dirs_compressed,
+                    report.dirs_deleted,
+                    report.bytes_reclaimed
+                );
+            }
+        }
         if now.hour() == 3 && last_dream_day != Some(today) {
             last_dream_day = Some(today);
             if let Some(home) = dirs::home_dir() {

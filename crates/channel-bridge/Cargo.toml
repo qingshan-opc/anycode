@@ -21,6 +21,7 @@ embedding-local = ["anycode-bootstrap/embedding-local"]
 knowledge-embeddings = ["anycode-bootstrap/knowledge-embeddings"]
 
 [dependencies]
+flate2 = "1.0"
 anyhow = { workspace = true }
 anycode-agent = { path = "../agent" }
 anycode-apple-media = { path = "../apple-media" }
