@@ -75,6 +75,27 @@ pub fn origin_allowed(origin: &str, embedded: bool) -> bool {
     false
 }
 
+/// Same-origin exemption: the dashboard serves its own Workbench UI, so pages
+/// it served must be able to mutate it on ANY configured port — the hardcoded
+/// allowlist cannot enumerate user-chosen ports (default 43180 was missing,
+/// 403-ing every mutation from the browser workbench). DNS-rebinding origins
+/// never match: the origin authority must equal the Host header exactly and
+/// its host must be loopback.
+fn origin_matches_host_header(origin: &str, host_header: &str) -> bool {
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = host_header.split(',').next().unwrap_or(host_header).trim();
+    if authority.is_empty() || host.is_empty() {
+        return false;
+    }
+    authority.eq_ignore_ascii_case(host) && origin_host(origin).is_some_and(is_loopback_host)
+}
+
 fn origin_host(origin: &str) -> Option<&str> {
     let rest = origin
         .strip_prefix("http://")
@@ -121,7 +142,12 @@ pub async fn mutate_origin_guard(
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
     {
-        if !origin_allowed(origin, state.embedded_desktop) {
+        let same_origin = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|host| origin_matches_host_header(origin, host));
+        if !origin_allowed(origin, state.embedded_desktop) && !same_origin {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "origin not allowed" })),
@@ -313,5 +339,36 @@ mod tests {
         assert!(host_header_loopback("localhost"));
         assert!(!host_header_loopback("evil.example"));
         assert!(!host_header_loopback("evil.example:443"));
+    }
+
+    #[test]
+    fn same_origin_loopback_matches_on_any_port() {
+        // 默认工作台端口 43180:自服务的页面必须能改自己。
+        assert!(origin_matches_host_header(
+            "http://127.0.0.1:43180",
+            "127.0.0.1:43180"
+        ));
+        assert!(origin_matches_host_header(
+            "http://localhost:43180",
+            "localhost:43180"
+        ));
+        // 端口不同 = 跨源,不放行(本机其它端口可能挂着恶意页面)。
+        assert!(!origin_matches_host_header(
+            "http://127.0.0.1:9999",
+            "127.0.0.1:43180"
+        ));
+        // DNS rebinding:origin 非 loopback 一律不放行。
+        assert!(!origin_matches_host_header(
+            "http://evil.example:43180",
+            "127.0.0.1:43180"
+        ));
+        assert!(!origin_matches_host_header(
+            "http://127.0.0.1:43180",
+            "evil.example"
+        ));
+        assert!(!origin_matches_host_header(
+            "ftp://127.0.0.1:43180",
+            "127.0.0.1:43180"
+        ));
     }
 }
