@@ -3,7 +3,6 @@ import { useT } from "@/i18n/context";
 export type SettingsSection =
   | "prefs"
   | "data"
-  | "service"
   | "model"
   | "agents"
   | "skills"
@@ -17,7 +16,6 @@ export type SettingsSection =
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "prefs",
   "data",
-  "service",
   "model",
   "agents",
   "skills",

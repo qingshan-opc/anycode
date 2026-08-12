@@ -96,7 +96,6 @@ export const setupRoute = createRoute({
     const valid = [
       "prefs",
       "data",
-      "service",
       "model",
       "agents",
       "skills",
@@ -423,7 +422,6 @@ export const settingsRoute = createRoute({
     const valid = [
       "prefs",
       "data",
-      "service",
       "model",
       "agents",
       "skills",

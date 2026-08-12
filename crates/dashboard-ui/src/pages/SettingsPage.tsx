@@ -18,14 +18,12 @@ import { SettingsOpsSection } from "@/pages/settings/SettingsOpsSection";
 import { SettingsPreferencesSection } from "@/pages/settings/SettingsPreferencesSection";
 import { SettingsOverviewBanner } from "@/pages/settings/SettingsOverviewBanner";
 import { SettingsSecuritySection } from "@/pages/settings/SettingsSecuritySection";
-import { SettingsServiceSection } from "@/pages/settings/SettingsServiceSection";
 import { SettingsSkillsSection } from "@/pages/settings/SettingsSkillsSection";
 import { SettingsPluginsSection } from "@/pages/settings/SettingsPluginsSection";
 
 const VALID_SECTIONS = new Set<SettingsSection>([
   "prefs",
   "data",
-  "service",
   "model",
   "agents",
   "skills",
@@ -124,7 +122,6 @@ function SettingsPageInner({
           <div className="dw-settings-content-body space-y-6">
             {section === "prefs" && <SettingsPreferencesSection />}
             {section === "data" && <SettingsDataSection />}
-            {section === "service" && <SettingsServiceSection />}
             {section === "model" && <SettingsModelSection />}
             {section === "agents" && <SettingsAgentsSection />}
             {section === "skills" && <SettingsSkillsSection />}

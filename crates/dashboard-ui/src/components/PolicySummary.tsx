@@ -13,10 +13,6 @@ export function PolicySummaryPanel({ policy }: { policy: PolicySummary | undefin
       <dl className="grid grid-cols-[minmax(5rem,auto)_1fr] gap-x-4 gap-y-2 text-sm m-0 mb-4">
         <dt className="text-secondary font-medium m-0">{t("settings.mode")}</dt>
         <dd className="m-0">{policy.mode}</dd>
-        <dt className="text-secondary font-medium m-0">{t("settings.binding")}</dt>
-        <dd className="m-0">
-          <code className="font-code">{policy.host_binding}</code>
-        </dd>
         <dt className="text-secondary font-medium m-0">{t("settings.remoteAccess")}</dt>
         <dd className="m-0">
           {policy.remote_access_allowed ? t("settings.allowed") : t("settings.forbidden")}
