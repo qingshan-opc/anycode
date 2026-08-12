@@ -14,6 +14,15 @@
 use std::path::PathBuf;
 use tracing::info;
 
+/// `PATH` 的 read-modify-write 不是原子的:启动路径与 provisioning 完成回调
+/// 可能并发进入 `prepend_runtime_paths`,串行化以避免丢段/交错(CORE-08)。
+static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 后台 provisioning 的 JoinHandle 留存槽:不丢 handle(可查询状态),
+/// 并借此抑制重复 spawn(CORE-08)。
+static PROVISION_HANDLE: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> =
+    std::sync::Mutex::new(None);
+
 /// Root directory for managed runtimes (override: `ANYCODE_RUNTIMES_DIR`).
 #[must_use]
 pub fn runtimes_root() -> Option<PathBuf> {
@@ -48,6 +57,7 @@ pub fn prepend_runtime_paths() {
     if bins.is_empty() {
         return;
     }
+    let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let new_segments: Vec<PathBuf> = bins.clone();
     let current = std::env::var("PATH").unwrap_or_default();
     let current_segments: Vec<PathBuf> = std::env::split_paths(&current).collect();
@@ -114,7 +124,17 @@ pub fn spawn_runtime_provision() {
         );
         return;
     };
-    tokio::spawn(async move {
+    let mut slot = PROVISION_HANDLE.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.as_ref().is_some_and(|h| !h.is_finished()) {
+        info!(
+            target: "anycode_bootstrap",
+            "runtime provisioning already in flight; skipping duplicate spawn"
+        );
+        return;
+    }
+    // handle 存入 PROVISION_HANDLE 而非丢弃:状态可查(provisioning_in_progress),
+    // runtime 关闭前也不会被静默 drop 掉诊断途径。
+    let handle = tokio::spawn(async move {
         let status = tokio::process::Command::new("bash")
             .arg(&script)
             .stdout(std::process::Stdio::null())
@@ -138,6 +158,16 @@ pub fn spawn_runtime_provision() {
             ),
         }
     });
+    *slot = Some(handle);
+}
+
+/// 是否有一次后台 provisioning 仍在执行(诊断 / RuntimeStatus 用)。
+#[must_use]
+pub fn provisioning_in_progress() -> bool {
+    PROVISION_HANDLE
+        .lock()
+        .map(|slot| slot.as_ref().is_some_and(|h| !h.is_finished()))
+        .unwrap_or(false)
 }
 
 /// Status snapshot for diagnostics / Workbench API.
@@ -147,6 +177,8 @@ pub struct RuntimeStatus {
     pub node: Option<String>,
     pub managed_python: bool,
     pub managed_node: bool,
+    /// 后台 provisioning 是否仍在执行(首次启动缺解释器时为 true)。
+    pub provisioning: bool,
 }
 
 fn which_version(cmd: &str, arg: &str) -> Option<String> {
@@ -166,6 +198,7 @@ pub fn detect_runtime_status() -> RuntimeStatus {
         node: which_version("node", "--version"),
         managed_python: managed_python_present(),
         managed_node: managed_node_present(),
+        provisioning: provisioning_in_progress(),
     }
 }
 
@@ -192,5 +225,57 @@ mod tests {
         std::env::set_var("ANYCODE_PROVISION_RUNTIMES", script.display().to_string());
         assert_eq!(resolve_provision_script().unwrap(), script);
         std::env::remove_var("ANYCODE_PROVISION_RUNTIMES");
+    }
+
+    #[test]
+    fn prepend_runtime_paths_is_idempotent_under_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("python/bin")).unwrap();
+        std::env::set_var("ANYCODE_RUNTIMES_DIR", dir.path().display().to_string());
+        let before = std::env::var("PATH").unwrap_or_default();
+        prepend_runtime_paths();
+        prepend_runtime_paths();
+        let after = std::env::var("PATH").unwrap_or_default();
+        let seg = dir.path().join("python/bin").display().to_string();
+        assert_eq!(
+            after.matches(&seg).count(),
+            1,
+            "managed bin 目录只应被前置一次: {after}"
+        );
+        std::env::set_var("PATH", before);
+        std::env::remove_var("ANYCODE_RUNTIMES_DIR");
+    }
+
+    #[tokio::test]
+    async fn duplicate_provision_spawn_is_suppressed() {
+        assert!(!provisioning_in_progress());
+        let dir = tempfile::tempdir().unwrap();
+        // 脚本 sleep:第一次 spawn 后 handle 未完成,第二次调用必须被抑制。
+        let script = dir.path().join("provision-runtimes.sh");
+        std::fs::write(&script, "#!/usr/bin/env bash\nsleep 5\n").unwrap();
+        std::env::set_var("ANYCODE_PROVISION_RUNTIMES", script.display().to_string());
+        // 强制走 provisioning 分支:runtimes 根指向空目录(managed 缺失)。
+        std::env::set_var("ANYCODE_RUNTIMES_DIR", dir.path().display().to_string());
+        spawn_runtime_provision();
+        {
+            let slot = PROVISION_HANDLE.lock().unwrap();
+            assert!(slot.as_ref().is_some_and(|h| !h.is_finished()));
+        }
+        spawn_runtime_provision();
+        {
+            let slot = PROVISION_HANDLE.lock().unwrap();
+            assert!(
+                slot.as_ref().is_some_and(|h| !h.is_finished()),
+                "重复 spawn 不应替换仍在执行的 handle"
+            );
+        }
+        assert!(provisioning_in_progress());
+        // 中止后台 sleep,避免测试进程等 5s。
+        let handle = PROVISION_HANDLE.lock().unwrap().take();
+        if let Some(h) = handle {
+            h.abort();
+        }
+        std::env::remove_var("ANYCODE_PROVISION_RUNTIMES");
+        std::env::remove_var("ANYCODE_RUNTIMES_DIR");
     }
 }
