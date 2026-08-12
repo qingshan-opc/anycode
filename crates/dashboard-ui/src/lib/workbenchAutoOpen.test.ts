@@ -54,42 +54,61 @@ describe("BrowserAutoOpenTracker", () => {
     ).toBe(true);
   });
 
-  it("opens for a browser call already present when the stream starts live", () => {
-    // Hydration happens while live (e.g. user opens an already-running session):
-    // any unseen Browser call in the current live blocks must open the panel so
-    // the embedded CEF creates a page before Agent tools attach.
+  it("does not re-open for calls already present at hydration (mid-stream re-entry)", () => {
+    // 用户在流仍 live 时关掉浏览器面板、再点回会话:hydration 时已在
+    // blocks 里的 Browser 调用必须静默索引,不得重新弹面板;只有
+    // hydration 之后到达的新调用才打开(CEF attach 契约仍成立)。
     const tracker = new BrowserAutoOpenTracker();
-    expect(tracker.ingest([browserToolCall("b1")], true)).toBe(true);
+    expect(tracker.ingest([browserToolCall("b1")], true)).toBe(false);
+    expect(tracker.ingest([browserToolCall("b1")], true)).toBe(false);
+    expect(
+      tracker.ingest([browserToolCall("b1"), browserToolCall("b2")], true),
+    ).toBe(true);
+  });
+
+  it("indexes history pagination silently after hydration", () => {
+    const tracker = new BrowserAutoOpenTracker();
+    expect(tracker.ingest([textBlock("t1")], false)).toBe(false);
+    // 翻页补进来的更早历史(含 Browser 调用)不得触发打开。
+    expect(tracker.ingest([textBlock("t1"), browserToolCall("old1")], false)).toBe(false);
   });
 
   it("reset re-arms hydration for a new session", () => {
     const tracker = new BrowserAutoOpenTracker();
-    expect(tracker.ingest([browserToolCall("b1")], true)).toBe(true);
+    expect(tracker.ingest([browserToolCall("b1")], true)).toBe(false);
+    expect(tracker.ingest([browserToolCall("b1"), browserToolCall("b2")], true)).toBe(true);
     tracker.reset();
     expect(tracker.ingest([browserToolCall("b1")], false)).toBe(false);
   });
 });
 
 describe("NavigateMirrorTracker", () => {
-  it("returns each navigate URL exactly once", () => {
+  it("hydrates silently, then returns each new navigate URL exactly once", () => {
     const tracker = new NavigateMirrorTracker();
-    const blocks = [mcpNavigate("m1", "https://example.com")];
-    expect(tracker.ingest(blocks)).toBe("https://example.com");
-    expect(tracker.ingest(blocks)).toBeNull();
+    // 首次 ingest(进入会话/重置后)只索引,返回 null——不得为进入前
+    // 已存在的 URL 重新导航/重开面板。
+    expect(tracker.ingest([mcpNavigate("m1", "https://example.com")])).toBeNull();
+    expect(tracker.ingest([mcpNavigate("m1", "https://example.com")])).toBeNull();
+    // hydration 之后出现的新 URL 正常镜像,且只镜像一次。
+    const next = [mcpNavigate("m1", "https://example.com"), mcpNavigate("m2", "https://a.dev")];
+    expect(tracker.ingest(next)).toBe("https://a.dev");
+    expect(tracker.ingest(next)).toBeNull();
   });
 
   it("ignores about:blank and non-navigate blocks", () => {
     const tracker = new NavigateMirrorTracker();
-    expect(tracker.ingest([mcpNavigate("m1", "about:blank")])).toBeNull();
     expect(tracker.ingest([textBlock("t1")])).toBeNull();
+    expect(tracker.ingest([mcpNavigate("m1", "about:blank")])).toBeNull();
+    expect(tracker.ingest([textBlock("t2")])).toBeNull();
   });
 
-  it("reset clears dedupe for a new session", () => {
+  it("reset re-arms hydration for a new session", () => {
     const tracker = new NavigateMirrorTracker();
     const blocks = [mcpNavigate("m1", "https://example.com")];
-    expect(tracker.ingest(blocks)).toBe("https://example.com");
+    expect(tracker.ingest(blocks)).toBeNull();
     tracker.reset();
-    expect(tracker.ingest(blocks)).toBe("https://example.com");
+    // 重置后再次静默索引;同一 URL 在新会话里也不应立即镜像。
+    expect(tracker.ingest(blocks)).toBeNull();
   });
 });
 

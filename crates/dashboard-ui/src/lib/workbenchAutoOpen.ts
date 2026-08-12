@@ -11,10 +11,11 @@ import {
  * Tracks Browser tool blocks for one conversation session and decides when the
  * Browser workbench panel must auto-open.
  *
- * Timing contract (CEF attach chain): a *live* Browser tool call must always
- * open the panel so the embedded CEF creates a page that Agent Browser* tools
- * attach to. History replay (stream not live) is indexed silently and never
- * opens the panel.
+ * Timing contract (CEF attach chain): a *live* Browser tool call that arrives
+ * after hydration opens the panel so the embedded CEF creates a page that
+ * Agent Browser* tools attach to. Everything already present at hydration is
+ * indexed silently — re-entering a session mid-stream must never re-open a
+ * panel the user closed; history replay is likewise silent.
  */
 export class BrowserAutoOpenTracker {
   private hydrated = false;
@@ -32,14 +33,19 @@ export class BrowserAutoOpenTracker {
   ingest(blocks: TranscriptBlock[], streamLive: boolean): boolean {
     if (!this.hydrated) {
       this.hydrated = true;
-      if (!streamLive) {
-        // History replay / stream not live → silently index, never auto-open.
-        this.seen = collectBrowserToolCallKeys(blocks);
-        return false;
+      // Always index existing blocks silently — including when the stream is
+      // already live (session re-entry). Only calls arriving *after* this
+      // point count as new; otherwise every session click during a live
+      // stream would re-open the panel the user just closed.
+      this.seen = collectBrowserToolCallKeys(blocks);
+      return false;
+    }
+    if (!streamLive) {
+      // History replay / pagination: index silently, never auto-open.
+      for (const key of collectBrowserToolCallKeys(blocks)) {
+        this.seen.add(key);
       }
-      // Live stream just started: index nothing, so the very first live
-      // Browser call below still opens the panel.
-      this.seen = new Set();
+      return false;
     }
     for (const call of blocks) {
       if (call.block_type !== "tool_call" || !isBrowserToolBlock(call)) continue;
@@ -58,17 +64,37 @@ export class BrowserAutoOpenTracker {
  * stays isolated).
  */
 export class NavigateMirrorTracker {
+  private hydrated = false;
   private seen = new Set<string>();
 
   reset(): void {
+    this.hydrated = false;
     this.seen = new Set();
   }
 
   /**
    * Returns the first not-yet-mirrored navigate URL in `blocks`, or null.
    * Deduped by URL — tool_call + tool_result must not navigate twice.
+   * The first ingest after a reset only indexes: re-entering a session
+   * mid-stream must not re-navigate (and re-open the panel) for URLs the
+   * agent visited before the user came back.
    */
   ingest(blocks: TranscriptBlock[]): string | null {
+    const collect = (): Set<string> => {
+      const urls = new Set<string>();
+      for (const block of blocks) {
+        if (!shouldMirrorNavigateToWorkbench(block)) continue;
+        const url = extractBrowserNavigateUrl(block);
+        if (!url || url === "about:blank") continue;
+        urls.add(url);
+      }
+      return urls;
+    };
+    if (!this.hydrated) {
+      this.hydrated = true;
+      this.seen = collect();
+      return null;
+    }
     for (const block of blocks) {
       if (!shouldMirrorNavigateToWorkbench(block)) continue;
       const url = extractBrowserNavigateUrl(block);
