@@ -10,7 +10,7 @@
 //!   默认关闭；未来支持的端点可经 [`OpenAiResponsesClient::with_chaining`] 打开，
 //!   链失效（hash 失配 / 服务端驱逐）自动回退全量请求。
 
-use crate::http_client::build_api_http_client;
+use crate::http_client::{build_api_http_client, build_streaming_api_http_client};
 use crate::providers::zai::{
     is_quota_exhausted, is_retryable_status, openai_compatible_reasoning_effort,
     openai_compatible_thinking_body, provider_label_from_config, retry_delay_ms,
@@ -38,6 +38,8 @@ pub const DEEPSEEK_RESPONSES_DEFAULT_MODEL: &str = "deepseek-v4-flash";
 /// OpenAI Responses API 客户端。
 pub struct OpenAiResponsesClient {
     client: Client,
+    /// 流式专用：无总超时，仅 connect + 读空闲超时（见 `crate::http_client`）。
+    stream_client: Client,
     api_key: String,
     base_url: String,
     model: String,
@@ -49,6 +51,7 @@ impl OpenAiResponsesClient {
     pub fn new(api_key: String, model: Option<String>) -> Self {
         Self {
             client: build_api_http_client(),
+            stream_client: build_streaming_api_http_client(),
             api_key,
             base_url: DEEPSEEK_RESPONSES_URL.to_string(),
             model: model.unwrap_or_else(|| DEEPSEEK_RESPONSES_DEFAULT_MODEL.to_string()),
@@ -202,6 +205,10 @@ async fn send_with_retries(
                         snippet
                     }
                 );
+                if let Some(hint) = crate::providers::zai::billing_failure_hint(status, &error_text)
+                {
+                    last_err = format!("{last_err} · {hint}");
+                }
                 if is_quota_exhausted(&error_text) {
                     error!("{provider_label} quota exhausted — failing fast without retries");
                     break;
@@ -430,7 +437,7 @@ impl LLMClient for OpenAiResponsesClient {
             .unwrap_or(self.api_key.as_str());
         let auth_key = sanitize_header_token(auth_key, &provider_label)?;
 
-        let client = self.client.clone();
+        let client = self.stream_client.clone();
         let (tx, rx) = mpsc::channel(128);
 
         tokio::spawn(async move {

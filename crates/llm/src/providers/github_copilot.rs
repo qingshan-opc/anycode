@@ -5,7 +5,7 @@ use super::anthropic::{
 };
 use super::anthropic_stream::AnthropicSseStreamState;
 use crate::copilot_token::resolve_copilot_api_token;
-use crate::http_client::build_api_http_client;
+use crate::http_client::{build_api_http_client, build_streaming_api_http_client};
 use crate::sse_data_lines::{SseDataLine, SseLineBuffer};
 use anycode_core::prelude::*;
 use async_trait::async_trait;
@@ -19,6 +19,8 @@ const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
 
 pub struct GithubCopilotClient {
     client: Client,
+    /// 流式专用：无总超时，仅 connect + 读空闲超时（见 `crate::http_client`）。
+    stream_client: Client,
     github_token: String,
 }
 
@@ -29,6 +31,7 @@ impl GithubCopilotClient {
         }
         Ok(Self {
             client: build_api_http_client(),
+            stream_client: build_streaming_api_http_client(),
             github_token,
         })
     }
@@ -152,7 +155,7 @@ impl LLMClient for GithubCopilotClient {
         };
 
         let (tx, rx) = mpsc::channel(100);
-        let client = self.client.clone();
+        let client = self.stream_client.clone();
 
         tokio::spawn(async move {
             let response = match client

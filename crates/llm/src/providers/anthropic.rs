@@ -1,5 +1,5 @@
 use super::anthropic_stream::AnthropicSseStreamState;
-use crate::http_client::build_api_http_client;
+use crate::http_client::{build_api_http_client, build_streaming_api_http_client};
 use crate::http_retry::{
     evaluate_http_retry, evaluate_network_retry, retry_after_header_ms, retry_exhausted_error,
     sleep_retry_delay,
@@ -18,6 +18,8 @@ use uuid::Uuid;
 
 pub struct AnthropicClient {
     client: Client,
+    /// 流式专用：无总超时，仅 connect + 读空闲超时（见 `crate::http_client`）。
+    stream_client: Client,
     api_key: String,
     base_url: String,
 }
@@ -31,6 +33,7 @@ impl AnthropicClient {
         Ok(Self {
             // 裸 `Client::new()` 无超时：stalled 连接会把一轮对话无限挂起，统一走共享构建器。
             client: build_api_http_client(),
+            stream_client: build_streaming_api_http_client(),
             api_key,
             base_url: "https://api.anthropic.com/v1/messages".to_string(),
         })
@@ -160,7 +163,7 @@ impl LLMClient for AnthropicClient {
 
         let (tx, rx) = mpsc::channel(100);
 
-        let client = self.client.clone();
+        let client = self.stream_client.clone();
         let api_key = config
             .api_key
             .as_ref()
