@@ -205,10 +205,6 @@ async fn send_with_retries(
                         snippet
                     }
                 );
-                if let Some(hint) = crate::providers::zai::billing_failure_hint(status, &error_text)
-                {
-                    last_err = format!("{last_err} · {hint}");
-                }
                 if is_quota_exhausted(&error_text) {
                     error!("{provider_label} quota exhausted — failing fast without retries");
                     break;
