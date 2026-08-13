@@ -16,6 +16,11 @@ static PUMP_STARTED: AtomicBool = AtomicBool::new(false);
 /// 因此按此间隔强制 pump，避免 9333 端口饿死导致 attach 超时。
 const IDLE_PUMP_INTERVAL_MS: u64 = 16;
 
+/// 无存活 tab 时的空闲 pump 间隔。CDP attach 只在有浏览器实例后才发生，零 tab
+/// 时高频 pump 没有受益方，却持续把 CEF 内部生命周期代码（已观察到在其内部
+/// 查表空指针崩溃）放在暴露面上——降到 10fps 砍掉约 84% 的无谓 pump。
+const NO_TAB_IDLE_PUMP_INTERVAL_MS: u64 = 100;
+
 fn pump_deadlines() -> &'static (Mutex<Option<Instant>>, Condvar) {
     static CELL: OnceLock<(Mutex<Option<Instant>>, Condvar)> = OnceLock::new();
     CELL.get_or_init(|| (Mutex::new(None), Condvar::new()))
@@ -29,6 +34,8 @@ pub struct CefEmbedStatus {
     pub title: Option<String>,
     pub tabs: Vec<TabInfo>,
     pub active_tab_id: Option<i32>,
+    /// True when the crash guard disabled the embed for this run.
+    pub crash_guard_disabled: bool,
 }
 
 fn framework_dir() -> PathBuf {
@@ -90,10 +97,117 @@ fn cef_embed_env_enabled() -> bool {
     )
 }
 
+// ---------- CEF crash guard ----------
+// CEF runs in-process: a segfault inside it kills the whole app (DiagnosticReports
+// shows the same Chromium-internal null deref inside cef_do_message_loop_work
+// across releases — not patchable from our side). To stop a crash loop from
+// bricking the workbench, count consecutive unclean exits that happened while
+// CEF was active; once the count reaches GUARD_TRIP_THRESHOLD the embed is
+// disabled for one run (the browser panel falls back to JPEG screencast). A
+// clean exit resets the counter, so the guard self-heals on the next launch.
+static CRASH_GUARD_TRIPPED: AtomicBool = AtomicBool::new(false);
+const GUARD_TRIP_THRESHOLD: u32 = 2;
+
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct CefGuardState {
+    count: u32,
+    active: bool,
+}
+
+fn guard_path() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".anycode/cef-guard.json")
+}
+
+fn read_guard(path: &std::path::Path) -> CefGuardState {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_guard(path: &std::path::Path, state: CefGuardState) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(&state) {
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
+/// Evaluate the guard once at startup. `active` in the marker means the previous
+/// run died without its clean-exit handler running while CEF was initialized.
+fn evaluate_crash_guard_at(path: &std::path::Path) -> bool {
+    let prev = read_guard(path);
+    let count = if prev.active {
+        prev.count.saturating_add(1)
+    } else {
+        prev.count
+    };
+    let tripped = count >= GUARD_TRIP_THRESHOLD;
+    write_guard(
+        path,
+        CefGuardState {
+            count,
+            active: false,
+        },
+    );
+    tripped
+}
+
+/// Called once at app startup; trips the process-wide kill-switch when the
+/// previous runs kept dying with CEF active.
+pub fn evaluate_crash_guard() {
+    let tripped = evaluate_crash_guard_at(&guard_path());
+    if tripped {
+        CRASH_GUARD_TRIPPED.store(true, Ordering::SeqCst);
+        eprintln!(
+            "anycode-desktop: CEF crash guard tripped ({GUARD_TRIP_THRESHOLD} consecutive unclean \
+             exits with CEF active) — embed disabled for this run, browser panel uses JPEG fallback"
+        );
+        let _ = std::fs::write(
+            PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                .join(".anycode/cef-status.txt"),
+            format!("crash-guard tripped threshold={GUARD_TRIP_THRESHOLD}\n"),
+        );
+    }
+}
+
+/// After CEF init succeeded: this run is CEF-active until the clean-exit handler.
+fn mark_cef_active_at(path: &std::path::Path) {
+    let mut state = read_guard(path);
+    state.active = true;
+    write_guard(path, state);
+}
+
+/// Clean-exit handler: reset the counter so the next launch re-enables CEF.
+fn mark_clean_exit_at(path: &std::path::Path) {
+    write_guard(path, CefGuardState::default());
+}
+
+/// Called from the app Exit/ExitRequested handler (after shutdown_cef).
+pub fn mark_clean_exit() {
+    mark_clean_exit_at(&guard_path());
+}
+
+pub fn crash_guard_tripped() -> bool {
+    CRASH_GUARD_TRIPPED.load(Ordering::SeqCst)
+}
+
 fn ensure_cef() -> Result<(), String> {
     if !cef_embed_env_enabled() {
-        let _ = std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+        std::env::remove_var("ANYCODE_CEF_CDP_PORT");
         return Err("CEF embed disabled via ANYCODE_CEF_EMBED=0".into());
+    }
+    if crash_guard_tripped() {
+        std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+        return Err(
+            "CEF embed auto-disabled by crash guard (previous runs crashed inside CEF); \
+             JPEG fallback active — restart the app to retry native preview"
+                .into(),
+        );
     }
     // Prefer Frameworks/Chromium Embedded Framework.framework parent as CEF_PATH for loader.
     let fw = framework_dir();
@@ -130,6 +244,7 @@ fn ensure_cef() -> Result<(), String> {
     }
     match anycode_browser_cef::ensure_initialized(&helper, &cef_root) {
         Ok(()) => {
+            mark_cef_active_at(&guard_path());
             eprintln!(
                 "anycode-desktop: CEF ready helper={} cef_root={} port={}",
                 helper.display(),
@@ -156,7 +271,7 @@ fn ensure_cef() -> Result<(), String> {
                 format!("err {e}\n"),
             );
             // Kill-switch: do not leave a half-published CDP port for attach.
-            let _ = std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+            std::env::remove_var("ANYCODE_CEF_CDP_PORT");
             Err(e)
         }
     }
@@ -199,9 +314,16 @@ fn start_message_pump<R: Runtime>(app: &AppHandle<R>) {
                             // 空闲兜底：CEF 在 external message pump 模式下只通过
                             // OnScheduleMessagePumpWork 请求 pump，若它从不调度（例如
                             // 没有活动渲染/输入），CDP 服务器会一直饿死导致 attach 超时。
-                            // 因此无 deadline 时也按空闲间隔 pump 一次。
+                            // 因此无 deadline 时也按空闲间隔 pump 一次。零 tab 时降频——
+                            // 没有浏览器就没有 CDP 客户端，而每次 pump 都会执行 CEF 内部
+                            // UI 线程任务（其生命周期代码曾崩溃，见 cef-guard 注释）。
+                            let idle_ms = if anycode_browser_cef::has_tabs() {
+                                IDLE_PUMP_INTERVAL_MS
+                            } else {
+                                NO_TAB_IDLE_PUMP_INTERVAL_MS
+                            };
                             guard = cv
-                                .wait_timeout(guard, Duration::from_millis(IDLE_PUMP_INTERVAL_MS))
+                                .wait_timeout(guard, Duration::from_millis(idle_ms))
                                 .map(|(g, _)| g)
                                 .unwrap_or_else(|e| e.into_inner().0);
                             *guard = None;
@@ -233,7 +355,7 @@ fn start_message_pump<R: Runtime>(app: &AppHandle<R>) {
 
 fn publish_cdp_port() {
     if !cef_embed_env_enabled() {
-        let _ = std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+        std::env::remove_var("ANYCODE_CEF_CDP_PORT");
         return;
     }
     let port = anycode_browser_cef::remote_debugging_port();
@@ -264,6 +386,7 @@ fn status_snapshot() -> CefEmbedStatus {
         title: anycode_browser_cef::title(),
         tabs,
         active_tab_id,
+        crash_guard_disabled: crash_guard_tripped(),
     }
 }
 
@@ -289,7 +412,7 @@ where
 
 pub fn clear_stale_cdp_port_if_disabled() {
     if !cef_embed_env_enabled() {
-        let _ = std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+        std::env::remove_var("ANYCODE_CEF_CDP_PORT");
     }
 }
 
@@ -308,7 +431,7 @@ pub fn cef_browser_status(_app: AppHandle) -> Result<CefEmbedStatus, String> {
     // Do not CefInitialize here — init happens in cef_browser_show once the
     // AppKit run loop is settled and the panel has a host rect.
     if !cef_embed_env_enabled() {
-        let _ = std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+        std::env::remove_var("ANYCODE_CEF_CDP_PORT");
         return Ok(CefEmbedStatus {
             ready: false,
             remote_debugging_port: 0,
@@ -316,6 +439,19 @@ pub fn cef_browser_status(_app: AppHandle) -> Result<CefEmbedStatus, String> {
             title: None,
             tabs: Vec::new(),
             active_tab_id: None,
+            crash_guard_disabled: false,
+        });
+    }
+    if crash_guard_tripped() {
+        std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+        return Ok(CefEmbedStatus {
+            ready: false,
+            remote_debugging_port: 0,
+            url: None,
+            title: None,
+            tabs: Vec::new(),
+            active_tab_id: None,
+            crash_guard_disabled: true,
         });
     }
     let tabs = anycode_browser_cef::list_tabs();
@@ -327,6 +463,7 @@ pub fn cef_browser_status(_app: AppHandle) -> Result<CefEmbedStatus, String> {
         title: anycode_browser_cef::title(),
         tabs,
         active_tab_id,
+        crash_guard_disabled: false,
     })
 }
 
@@ -427,6 +564,64 @@ pub fn cef_browser_close_tab(app: AppHandle, id: i32) -> Result<CefEmbedStatus, 
         Ok(s) => Some(s.tabs.len()),
         Err(_) => None,
     };
-    eprintln!("anycode-desktop: cef_browser_close_tab id={id} -> tabs={tab_count:?} err={}", r.is_err());
+    eprintln!(
+        "anycode-desktop: cef_browser_close_tab id={id} -> tabs={tab_count:?} err={}",
+        r.is_err()
+    );
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crash_guard_trips_after_threshold_unclean_active_exits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cef-guard.json");
+
+        // Clean runs never trip and never accumulate.
+        assert!(!evaluate_crash_guard_at(&path));
+        mark_clean_exit_at(&path);
+        assert!(!evaluate_crash_guard_at(&path));
+        assert_eq!(read_guard(&path).count, 0);
+
+        // First unclean exit with CEF active: counted, not yet tripped.
+        mark_cef_active_at(&path);
+        assert!(!evaluate_crash_guard_at(&path));
+        assert_eq!(read_guard(&path).count, 1);
+
+        // Second consecutive unclean active exit: trips.
+        mark_cef_active_at(&path);
+        assert!(evaluate_crash_guard_at(&path));
+        assert_eq!(read_guard(&path).count, GUARD_TRIP_THRESHOLD);
+
+        // A clean exit resets the counter so CEF is retried next launch.
+        mark_clean_exit_at(&path);
+        assert!(!evaluate_crash_guard_at(&path));
+        assert_eq!(read_guard(&path).count, 0);
+    }
+
+    #[test]
+    fn crash_guard_clean_exit_breaks_the_streak() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cef-guard.json");
+
+        // Unclean active exit, then a clean one: count must not accumulate.
+        mark_cef_active_at(&path);
+        assert!(!evaluate_crash_guard_at(&path));
+        mark_clean_exit_at(&path);
+        mark_cef_active_at(&path);
+        assert!(!evaluate_crash_guard_at(&path));
+        assert_eq!(read_guard(&path).count, 1);
+    }
+
+    #[test]
+    fn crash_guard_tolerates_corrupt_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cef-guard.json");
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(!evaluate_crash_guard_at(&path));
+        assert_eq!(read_guard(&path).count, 0);
+    }
 }

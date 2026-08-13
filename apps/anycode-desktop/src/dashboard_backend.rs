@@ -180,9 +180,8 @@ pub fn start_in_process(app: AppHandle) {
         }
     }
     tauri::async_runtime::spawn(async move {
-        let server_task = tauri::async_runtime::spawn(async move {
-            run_with_shutdown(config, paths, rx).await
-        });
+        let server_task =
+            tauri::async_runtime::spawn(async move { run_with_shutdown(config, paths, rx).await });
         if let Ok(port) = bound_port_rx.await {
             DESKTOP_API_PORT.store(port, Ordering::SeqCst);
             eprintln!(
@@ -319,9 +318,7 @@ fn http_get_body(host: &str, port: u16, path: &str) -> Option<String> {
     let mut stream = TcpStream::connect((host, port)).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
-    );
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).ok()?;
     let mut raw = String::new();
     stream.read_to_string(&mut raw).ok()?;

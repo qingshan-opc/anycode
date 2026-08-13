@@ -2422,7 +2422,7 @@ fn local_runtime(
             memory_store: Arc::new(DummyMemoryStore),
             default_model_config: ModelConfig {
                 provider: LLMProvider::OpenAI,
-                model: "minicpm5-1b".into(),
+                model: "qwen3-1b".into(),
                 base_url: Some("http://127.0.0.1:47100/v1/chat/completions".into()),
                 ..Default::default()
             },
@@ -2858,5 +2858,140 @@ async fn completion_guard_repairs_then_passes_web_landing() {
     assert!(
         log.contains("[repair_requested]") || log.contains("[gate_plan_created]"),
         "expected gate/repair trace markers, got:\n{log}"
+    );
+}
+
+/// P0.2+P0.4 端到端:family 误判为 General 的代码任务,凭写文件痕迹兜底跑
+/// CrossFileCoding 门禁——坏 .py 被 py_compile 拦下注入返修,修复后放行。
+#[tokio::test]
+async fn completion_guard_fallback_catches_broken_python_write() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().to_path_buf();
+    let disk = DiskTaskOutput::new(workspace.join("disk-out"));
+
+    let mk = |text: &str, tool_calls: Vec<ToolCall>| LLMResponse {
+        message: msg_text(MessageRole::Assistant, text),
+        tool_calls,
+        usage: Usage {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
+        },
+    };
+    let write_bad = mk(
+        "writing script",
+        vec![ToolCall {
+            id: "tooluse_1".into(),
+            name: "FileWrite".into(),
+            input: serde_json::json!({"file_path": "tool.py", "content": "def broken(:\n"}),
+        }],
+    );
+    let claim_done = mk("脚本写好了", vec![]);
+    let write_good = mk(
+        "fixing",
+        vec![ToolCall {
+            id: "tooluse_2".into(),
+            name: "FileWrite".into(),
+            input: serde_json::json!({"file_path": "tool.py", "content": "x = 1\n"}),
+        }],
+    );
+    let claim_done_2 = mk("脚本写好了", vec![]);
+
+    let llm = Arc::new(MockLLM::new(vec![
+        write_bad,
+        claim_done,
+        write_good,
+        claim_done_2,
+    ]));
+    let mut tools: HashMap<ToolName, Box<dyn Tool>> = HashMap::new();
+    tools.insert(
+        "FileWrite".into(),
+        Box::new(WorkspaceHtmlWriteTool {
+            root: workspace.clone(),
+        }),
+    );
+
+    let runtime = AgentRuntime::new(
+        RuntimeCoreDeps {
+            llm_client: llm,
+            tools,
+            memory_store: Arc::new(DummyMemoryStore),
+            default_model_config: ModelConfig {
+                provider: LLMProvider::Custom("mock".into()),
+                model: "mock".into(),
+                base_url: None,
+                temperature: None,
+                max_tokens: None,
+                api_key: None,
+                ..Default::default()
+            },
+            model_overrides: HashMap::new(),
+            failover_chain: vec![],
+            disk_output: Some(disk.clone()),
+            security: Arc::new(SecurityLayer::new(PermissionMode::BypassPermissions)),
+            sandbox_mode: false,
+            prompt_config: RuntimePromptConfig::default(),
+        },
+        RuntimeMemoryOptions {
+            memory_pipeline: None,
+            memory_pipeline_settings: None,
+            memory_project_autosave_enabled: false,
+            session_notifications: None,
+            automem: None,
+            automem_base_path: None,
+        },
+        RuntimeToolPolicy {
+            tool_name_deny: vec![],
+            claude_gating: AgentClaudeToolGating::default(),
+            expose_skill_on_explore_plan: false,
+        },
+    );
+
+    let task = Task {
+        id: Uuid::new_v4(),
+        agent_type: AgentType::new("general-purpose"),
+        // 不含任何 family 关键词 → infer_family 判 General,门禁只能靠兜底触发。
+        prompt: "帮我写个小工具脚本放在 tool.py".into(),
+        context: TaskContext {
+            session_id: Uuid::new_v4(),
+            working_directory: workspace.display().to_string(),
+            environment: HashMap::new(),
+            user_id: None,
+            system_prompt_append: None,
+            context_injections: vec![],
+            nested_model_override: None,
+            nested_worktree_path: None,
+            nested_worktree_repo_root: None,
+            nested_cancel: None,
+            channel_progress_tx: None,
+            live_trace_tx: None,
+            tool_deny_names: vec![],
+            tool_deny_prefixes: vec![],
+            user_vision_images: vec![],
+            budget: TaskBudget::default(),
+            loop_limits: AgentLoopLimits {
+                max_agent_turns: 8,
+                max_tool_calls: 8,
+            },
+            chat_turn: None,
+        },
+        created_at: chrono::Utc::now(),
+    };
+
+    let result = runtime.execute_task(task.clone()).await.unwrap();
+    match result {
+        TaskResult::Success { .. } => {}
+        other => panic!("expected success after fallback-gate repair, got {other:?}"),
+    }
+    let log = disk.tail(task.id, 64 * 1024).unwrap();
+    assert!(
+        log.contains("[repair_requested]"),
+        "expected fallback gate repair marker, got:\n{log}"
+    );
+    // 修复后的 .py 必须真实落盘。
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("tool.py")).unwrap(),
+        "x = 1\n"
     );
 }

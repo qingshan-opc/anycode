@@ -19,6 +19,7 @@ import {
   shouldOpenControlCenterForLocation,
 } from "@/lib/controlCenterPaths";
 import { CloudLoginPage } from "@/pages/CloudLoginPage";
+import { DiagramSharePage } from "@/pages/DiagramSharePage";
 import { SetupPage } from "@/pages/SetupPage";
 import {
   AgentsPage,
@@ -444,10 +445,22 @@ export const settingsRoute = createRoute({
   ),
 });
 
+/** P1.8: standalone full-address diagram page — no workbench chrome, no auth
+ * gate, so LAN colleagues can open a shared link directly. */
+export const diagramShareRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/diagram/$diagramId",
+  component: function DiagramShareRouteComponent() {
+    const { diagramId } = diagramShareRoute.useParams();
+    return <DiagramSharePage diagramId={diagramId} />;
+  },
+});
+
 export const routeTree = rootRoute.addChildren([
   cloudLoginRoute,
   loginRedirectRoute,
   setupRoute,
+  diagramShareRoute,
   shellRoute.addChildren([
     indexRoute,
     overviewRoute,

@@ -32,6 +32,8 @@ export interface TokenUsageStats {
   output_tokens: number;
   total_tokens: number;
   estimated_cost_cny: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   generated_at: string;
 }
 
@@ -43,6 +45,8 @@ export interface ModelUsageRow {
   output_tokens: number;
   total_tokens: number;
   estimated_cost_cny: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface ProjectUsageRow {
@@ -54,6 +58,8 @@ export interface ProjectUsageRow {
   output_tokens: number;
   total_tokens: number;
   estimated_cost_cny: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface TokenTimelinePoint {
@@ -63,6 +69,8 @@ export interface TokenTimelinePoint {
   output_tokens: number;
   total_tokens: number;
   estimated_cost_cny: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface TokenUsageDetail {

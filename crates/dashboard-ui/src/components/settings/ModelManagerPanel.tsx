@@ -5,7 +5,6 @@ import { api } from "@/api/client";
 import { CapabilityActiveMatrix } from "@/components/settings/CapabilityActiveMatrix";
 import { ConfiguredModelsList } from "@/components/settings/ConfiguredModelsList";
 import { LocalPresetsPanel } from "@/components/settings/LocalPresetsPanel";
-import { LocalRuntimePanel } from "@/components/settings/LocalRuntimePanel";
 import { ModelCatalogBrowser } from "@/components/settings/ModelCatalogBrowser";
 import { ModelEditorDrawer } from "@/components/settings/ModelEditorDrawer";
 import { ModelSettingsPanel } from "@/components/settings/ModelSettingsPanel";
@@ -273,7 +272,6 @@ export function ModelManagerPanel() {
               aria-labelledby="model-tab-library"
               className="dw-model-tab-panel-wrap dw-model-tab-panel-wrap--stack"
             >
-              <LocalRuntimePanel />
               <LocalPresetsPanel catalog={catalog.data} existingIds={existingPresetIds} />
               <ModelCatalogBrowser
                 catalog={catalog.data}

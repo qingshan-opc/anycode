@@ -91,6 +91,75 @@ pub fn write_config_root(cfg: &Value) -> Result<PathBuf> {
     Ok(path)
 }
 
+// ---- P1.6: settings table mirror (dual-read window) ----
+//
+// The file stays the SSOT this window; the `settings` table mirrors top-level
+// keys so dashboard consumers can read config through SQLite. P2.6 flips read
+// priority and drops file writes. The original file is auto-backed up to
+// `config.json.bak` before the first SQLite write so a migration bug can never
+// lock the user out of their config.
+
+/// Copy `config.json` to `config.json.bak` once (idempotent, no-op when the
+/// backup already exists or the config file is absent).
+pub fn backup_config_once(path: &std::path::Path) -> Result<Option<PathBuf>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bak = path.with_extension("json.bak");
+    if bak.exists() {
+        return Ok(None);
+    }
+    std::fs::copy(path, &bak)?;
+    Ok(Some(bak))
+}
+
+/// Mirror the current config file into the `settings` table, backing the file
+/// up first. Best-effort at call sites (log and continue on error).
+pub async fn sync_settings_mirror(db: &crate::db::DashboardDb) -> Result<usize> {
+    sync_settings_mirror_at(db, None).await
+}
+
+/// Path-injectable variant (tests; production passes `None`).
+pub async fn sync_settings_mirror_at(
+    db: &crate::db::DashboardDb,
+    path: Option<&std::path::Path>,
+) -> Result<usize> {
+    let (path, cfg) = read_config_value(path)?;
+    if let Some(bak) = backup_config_once(&path)? {
+        tracing::info!(path = %bak.display(), "config.json backed up before first settings mirror write");
+    }
+    db.settings_sync_config(&cfg).await
+}
+
+/// Sync the mirror from an already-read config value (post-write refresh; the
+/// one-time backup already ran on startup/first mirror write).
+pub async fn settings_sync_only(db: &crate::db::DashboardDb, cfg: &Value) -> Result<usize> {
+    db.settings_sync_config(cfg).await
+}
+
+/// Dual-read: serve the SQLite mirror when populated; otherwise read the file
+/// and backfill the mirror (P0.6 playbook). The file remains authoritative —
+/// the mirror only serves reads where a file read would be redundant.
+pub async fn read_config_dual(db: &crate::db::DashboardDb) -> Result<Value> {
+    read_config_dual_at(db, None).await
+}
+
+/// Path-injectable variant (tests; production passes `None`).
+pub async fn read_config_dual_at(
+    db: &crate::db::DashboardDb,
+    path: Option<&std::path::Path>,
+) -> Result<Value> {
+    let mirrored = db.settings_all().await.unwrap_or(Value::Null);
+    if mirrored.as_object().is_some_and(|o| !o.is_empty()) {
+        return Ok(mirrored);
+    }
+    let (_, cfg) = read_config_value(path)?;
+    if cfg.as_object().is_some_and(|o| !o.is_empty()) {
+        let _ = sync_settings_mirror_at(db, path).await; // best-effort backfill
+    }
+    Ok(cfg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +179,51 @@ mod tests {
             Some("anthropic")
         );
         assert!(cfg.get("llm").is_none());
+    }
+
+    #[test]
+    fn backup_config_once_copies_then_noops() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.json");
+        std::fs::write(&cfg_path, "{\"provider\":\"deepseek\"}").unwrap();
+        let bak = backup_config_once(&cfg_path).unwrap().unwrap();
+        assert!(bak.ends_with("config.json.bak"));
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            "{\"provider\":\"deepseek\"}"
+        );
+        // Second call does not overwrite (config changed since).
+        std::fs::write(&cfg_path, "{\"provider\":\"zai\"}").unwrap();
+        assert!(backup_config_once(&cfg_path).unwrap().is_none());
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            "{\"provider\":\"deepseek\"}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_config_dual_backfills_from_file_then_serves_mirror() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.json");
+        std::fs::write(
+            &cfg_path,
+            "{\"provider\":\"deepseek\",\"model\":\"deepseek-v4-flash\"}",
+        )
+        .unwrap();
+        let db = crate::db::DashboardDb::open(dir.path().join("t.db"))
+            .await
+            .unwrap();
+        // Mirror empty → file read + backfill (also creates config.json.bak).
+        let cfg = read_config_dual_at(&db, Some(&cfg_path)).await.unwrap();
+        assert_eq!(cfg["provider"], "deepseek");
+        assert!(dir.path().join("config.json.bak").is_file());
+        assert_eq!(
+            db.settings_all().await.unwrap()["model"],
+            "deepseek-v4-flash"
+        );
+        // File removed → mirror still serves.
+        std::fs::remove_file(&cfg_path).unwrap();
+        let cfg = read_config_dual_at(&db, Some(&cfg_path)).await.unwrap();
+        assert_eq!(cfg["provider"], "deepseek");
     }
 }

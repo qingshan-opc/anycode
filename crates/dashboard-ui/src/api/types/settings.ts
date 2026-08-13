@@ -221,6 +221,12 @@ export interface ConfiguredModel {
   enabled: boolean;
   tags?: string[] | null;
   source?: string | null;
+  /** Lifecycle tier from the backend registry: current | legacy | deprecated | removed. */
+  tier?: string;
+  tier_note?: string | null;
+  tier_replacement?: string | null;
+  /** Member of the curated default suite (pinned first in pickers). */
+  curated?: boolean;
 }
 
 export interface EndpointOverrides {

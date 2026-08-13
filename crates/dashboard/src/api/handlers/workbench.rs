@@ -685,3 +685,171 @@ pub async fn post_project_git_push(
             .into_response(),
     }
 }
+
+pub async fn get_project_git_branches(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let root = match project_root_path(&state, &project_id).await {
+        Ok(r) => r,
+        Err(resp) => {
+            return (resp.0, Json(json!({ "error": resp.1 }))).into_response();
+        }
+    };
+    match crate::workbench::git_branches(StdPath::new(&root)) {
+        Ok(branches) => Json(json!({ "branches": branches })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GitCheckoutBody {
+    pub branch: String,
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Map a checkout refusal to JSON: dirty tree → 409 with the conflicting file
+/// list (UI offers a force retry), anything else → 400.
+fn git_checkout_error_response(e: crate::workbench::GitCheckoutError) -> axum::response::Response {
+    match e {
+        crate::workbench::GitCheckoutError::DirtyTree { files } => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "dirty_tree", "files": files })),
+        )
+            .into_response(),
+        crate::workbench::GitCheckoutError::Failed { message } => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+        }
+    }
+}
+
+pub async fn post_project_git_checkout(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Json(body): Json<GitCheckoutBody>,
+) -> impl IntoResponse {
+    let root = match project_root_path(&state, &project_id).await {
+        Ok(r) => r,
+        Err(resp) => {
+            return (resp.0, Json(json!({ "error": resp.1 }))).into_response();
+        }
+    };
+    let branch = body.branch.trim();
+    if branch.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing branch" })),
+        )
+            .into_response();
+    }
+    match crate::workbench::git_checkout(StdPath::new(&root), branch, body.force) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => git_checkout_error_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GitCreateBranchBody {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub checkout: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub async fn post_project_git_branch(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Json(body): Json<GitCreateBranchBody>,
+) -> impl IntoResponse {
+    let root = match project_root_path(&state, &project_id).await {
+        Ok(r) => r,
+        Err(resp) => {
+            return (resp.0, Json(json!({ "error": resp.1 }))).into_response();
+        }
+    };
+    let name = body.name.trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing branch name" })),
+        )
+            .into_response();
+    }
+    match crate::workbench::git_create_branch(StdPath::new(&root), name, body.checkout) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => git_checkout_error_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GitLogQuery {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+pub async fn get_project_git_log(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Query(query): Query<GitLogQuery>,
+) -> impl IntoResponse {
+    let root = match project_root_path(&state, &project_id).await {
+        Ok(r) => r,
+        Err(resp) => {
+            return (resp.0, Json(json!({ "error": resp.1 }))).into_response();
+        }
+    };
+    match crate::workbench::git_log(
+        StdPath::new(&root),
+        query.limit.unwrap_or(30),
+        query.offset.unwrap_or(0),
+    ) {
+        Ok(commits) => Json(json!({ "commits": commits })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GitCommitDiffQuery {
+    pub hash: Option<String>,
+}
+
+pub async fn get_project_git_commit_diff(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Query(query): Query<GitCommitDiffQuery>,
+) -> impl IntoResponse {
+    let root = match project_root_path(&state, &project_id).await {
+        Ok(r) => r,
+        Err(resp) => {
+            return (resp.0, Json(json!({ "error": resp.1 }))).into_response();
+        }
+    };
+    let hash = query.hash.as_deref().unwrap_or("").trim();
+    if hash.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing hash" })),
+        )
+            .into_response();
+    }
+    match crate::workbench::git_commit_diff(StdPath::new(&root), hash) {
+        Ok(diff) => Json(json!({ "diff": diff })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}

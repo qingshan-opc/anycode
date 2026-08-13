@@ -61,7 +61,7 @@ pub async fn enqueue_chat_message(
         .flatten();
     if model
         .as_deref()
-        .is_some_and(|value| !matches!(value, "auto" | "agnes-chat"))
+        .is_some_and(|value| !matches!(value, "auto" | "deepseek-v4-flash" | "deepseek-v4-pro"))
     {
         return Ok(());
     }
@@ -107,7 +107,7 @@ pub async fn pending_batch(db: &DashboardDb) -> Result<Vec<AuditQueueItem>> {
                q.content, q.occurred_at, q.attempts
         FROM compliance_audit_queue q
         JOIN sessions s ON s.id = q.session_id
-        WHERE q.attempts < ? AND s.model IN ('auto', 'agnes-chat')
+        WHERE q.attempts < ? AND s.model IN ('auto', 'deepseek-v4-flash', 'deepseek-v4-pro')
         ORDER BY q.created_at ASC
         LIMIT ?
         "#,

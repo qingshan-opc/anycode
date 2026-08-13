@@ -43,6 +43,8 @@ export const cloudA2aClient = {
     project_id?: string;
     session_id?: string;
     target_project_id?: string;
+    include_skills?: boolean;
+    include_mcp?: boolean;
   }) => post<{ handoff: CloudHandoffTask }>("/api/cloud/a2a/handoff/request", body),
 
   listCloudIncoming: () =>

@@ -16,6 +16,8 @@ struct Request: Decodable {
     let service: String?
     let account: String?
     let secret: String?
+    let maxFrames: Int?
+    let maxDimension: Int?
 
     enum CodingKeys: String, CodingKey {
         case op
@@ -33,6 +35,8 @@ struct Request: Decodable {
         case service
         case account
         case secret
+        case maxFrames = "max_frames"
+        case maxDimension = "max_dimension"
     }
 }
 
@@ -56,17 +60,32 @@ struct CapabilitiesResponse: Encodable {
     }
 }
 
+struct VideoInfo: Encodable {
+    let frames: [String]
+    let duration: Double
+    let audioPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case frames, duration
+        case audioPath = "audio_path"
+    }
+}
+
 struct Response: Encodable {
     let ok: Bool
     let text: String?
     let error: String?
     let dataBase64: String?
     let capabilities: CapabilitiesResponse?
+    // `var` so the memberwise init keeps a defaulted `video` parameter
+    // (`let` with an initial value is omitted from it).
+    var video: VideoInfo? = nil
 
     enum CodingKeys: String, CodingKey {
         case ok, text, error
         case dataBase64 = "data_base64"
         case capabilities
+        case video
     }
 }
 
@@ -151,6 +170,29 @@ case "tts":
             error: nil,
             dataBase64: data.base64EncodedString(),
             capabilities: nil
+        ))
+    } catch {
+        writeResponse(Response(ok: false, text: nil, error: error.localizedDescription, dataBase64: nil, capabilities: nil))
+    }
+case "video_frames":
+    guard let input = req.inputPath, let output = req.outputPath else {
+        writeResponse(Response(ok: false, text: nil, error: "input_path and output_path required", dataBase64: nil, capabilities: nil))
+        exit(1)
+    }
+    do {
+        let result = try extractVideoFrames(
+            videoPath: input,
+            outputDir: output,
+            maxFrames: req.maxFrames ?? 16,
+            maxDimension: req.maxDimension ?? 768
+        )
+        writeResponse(Response(
+            ok: true,
+            text: nil,
+            error: nil,
+            dataBase64: nil,
+            capabilities: nil,
+            video: VideoInfo(frames: result.frames, duration: result.duration, audioPath: result.audioPath)
         ))
     } catch {
         writeResponse(Response(ok: false, text: nil, error: error.localizedDescription, dataBase64: nil, capabilities: nil))

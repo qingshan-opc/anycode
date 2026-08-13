@@ -63,9 +63,13 @@ impl BrowserService {
         if let Some((info, actor)) = existing {
             if actor.ping().await {
                 if let Some(vp) = viewport {
-                    let _ = actor
-                        .set_viewport(vp.width, vp.height, vp.device_scale_factor)
-                        .await;
+                    // Best-effort with a short bound: session create must never
+                    // wait the full command timeout for a viewport refresh.
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        actor.set_viewport(vp.width, vp.height, vp.device_scale_factor),
+                    )
+                    .await;
                 }
                 return Ok(info);
             }
@@ -103,9 +107,11 @@ impl BrowserService {
                 drop(guard);
                 actor.shutdown().await;
                 if let Some(vp) = viewport {
-                    let _ = existing_actor
-                        .set_viewport(vp.width, vp.height, vp.device_scale_factor)
-                        .await;
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        existing_actor.set_viewport(vp.width, vp.height, vp.device_scale_factor),
+                    )
+                    .await;
                 }
                 return Ok(kept);
             }

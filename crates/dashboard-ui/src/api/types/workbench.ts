@@ -107,6 +107,20 @@ export interface GitFileDiff {
   deletions: number;
 }
 
+export interface GitBranchInfo {
+  name: string;
+  current: boolean;
+  remote: boolean;
+}
+
+export interface GitLogEntry {
+  hash: string;
+  short_hash: string;
+  author: string;
+  date: string;
+  subject: string;
+}
+
 export type PlanStatus =
   | "pending"
   | "in_progress"
@@ -127,6 +141,8 @@ export interface PlanNode {
 }
 
 export interface PlanTree {
+  /** Guidance prose at the top of the Markdown plan document. */
+  prose?: string;
   roots: PlanNode[];
 }
 

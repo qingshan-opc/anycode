@@ -121,9 +121,11 @@ export const projectsClient = {
       kind?: "run" | "goal";
       goal?: string;
       agent?: string;
+      agent_ephemeral?: boolean;
       skills?: string[];
       vision_images?: { mime_type: string; data_base64: string }[];
       text_files?: { filename: string; content: string }[];
+      video_ref?: string;
       lang?: string;
       recycle_session?: boolean;
       composer_mode?: string;
@@ -138,9 +140,11 @@ export const projectsClient = {
     body: {
       prompt: string;
       agent?: string;
+      agent_ephemeral?: boolean;
       skills?: string[];
       vision_images?: { mime_type: string; data_base64: string }[];
       text_files?: { filename: string; content: string }[];
+      video_ref?: string;
       lang?: string;
       enqueue?: boolean;
       composer_mode?: string;

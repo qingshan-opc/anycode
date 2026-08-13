@@ -29,9 +29,9 @@ mod host;
 
 #[cfg(all(target_os = "macos", feature = "host"))]
 pub use host::{
-    close_tab, current_url, do_message_loop_work, ensure_initialized, hide, list_tabs, navigate,
-    new_tab, remote_debugging_port, resize, select_tab, set_schedule_pump_callback, show_in_parent,
-    shutdown_cef, title,
+    close_tab, current_url, do_message_loop_work, ensure_initialized, has_tabs, hide, list_tabs,
+    navigate, new_tab, remote_debugging_port, resize, select_tab, set_schedule_pump_callback,
+    show_in_parent, shutdown_cef, title,
 };
 
 #[cfg(not(all(target_os = "macos", feature = "host")))]
@@ -69,6 +69,9 @@ mod stub {
     }
     pub fn list_tabs() -> Vec<super::TabInfo> {
         Vec::new()
+    }
+    pub fn has_tabs() -> bool {
+        false
     }
     pub fn current_url() -> Option<String> {
         None

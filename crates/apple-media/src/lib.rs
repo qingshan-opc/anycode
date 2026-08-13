@@ -32,6 +32,23 @@ struct HelperResponse {
     error: Option<String>,
     data_base64: Option<String>,
     capabilities: Option<AppleMediaCapabilities>,
+    #[serde(default)]
+    video: Option<HelperVideoInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HelperVideoInfo {
+    pub frames: Vec<String>,
+    pub duration: f64,
+    pub audio_path: Option<String>,
+}
+
+/// Result of AVFoundation video frame extraction (macOS helper).
+#[derive(Debug, Clone)]
+pub struct VideoFrameExtraction {
+    pub frames: Vec<PathBuf>,
+    pub duration_secs: f64,
+    pub audio_path: Option<PathBuf>,
 }
 
 /// Resolve the Apple media helper binary on macOS.
@@ -240,6 +257,50 @@ pub fn ocr_image_bytes(
     _languages: Option<&[String]>,
 ) -> Option<String> {
     None
+}
+
+/// Uniformly sample video frames + export the audio track via AVFoundation.
+/// Frames land in `output_dir` as JPEG (q70, short side ≤ `max_dimension`).
+#[cfg(target_os = "macos")]
+pub fn extract_video_frames(
+    extra_paths: &[PathBuf],
+    video_path: &Path,
+    output_dir: &Path,
+    max_frames: u32,
+    max_dimension: u32,
+) -> Result<VideoFrameExtraction, String> {
+    let helper = resolve_apple_media_helper(extra_paths).ok_or("apple media helper not found")?;
+    let resp = run_helper(
+        &helper,
+        serde_json::json!({
+            "op": "video_frames",
+            "input_path": video_path.display().to_string(),
+            "output_path": output_dir.display().to_string(),
+            "max_frames": max_frames,
+            "max_dimension": max_dimension,
+        }),
+    )?;
+    if !resp.ok {
+        return Err(resp.error.unwrap_or_else(|| "video_frames failed".into()));
+    }
+    let info = resp.video.ok_or("helper returned no video info")?;
+    Ok(VideoFrameExtraction {
+        frames: info.frames.iter().map(PathBuf::from).collect(),
+        duration_secs: info.duration,
+        audio_path: info.audio_path.map(PathBuf::from),
+    })
+}
+
+/// Non-macOS stub — callers fall back to ffmpeg on PATH.
+#[cfg(not(target_os = "macos"))]
+pub fn extract_video_frames(
+    _extra_paths: &[PathBuf],
+    _video_path: &Path,
+    _output_dir: &Path,
+    _max_frames: u32,
+    _max_dimension: u32,
+) -> Result<VideoFrameExtraction, String> {
+    Err("apple media helper unavailable on this platform".into())
 }
 
 #[cfg(target_os = "macos")]

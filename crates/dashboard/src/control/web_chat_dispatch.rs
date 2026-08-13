@@ -25,7 +25,7 @@ pub async fn dispatch_web_chat_prompt(
     agent_type: Option<&str>,
     prompt: &str,
     prompt_for_chat: &str,
-    vision_images: Option<&[crate::control::vision_payload::VisionImagePayload]>,
+    vision_images: Option<&[crate::control::media_payload::VisionImagePayload]>,
     text_files: Option<&[crate::control::text_upload::TextFilePayload]>,
     reply_lang: Option<&str>,
     recycled: bool,
@@ -41,7 +41,7 @@ pub async fn dispatch_web_chat_prompt(
             // OCR may spawn Apple Vision helper (seconds) — keep Tokio workers free.
             let imgs_owned = imgs.to_vec();
             let delivery = match tokio::task::spawn_blocking(move || {
-                crate::control::vision_payload::resolve_vision_delivery(&imgs_owned)
+                crate::control::media_payload::resolve_vision_delivery(&imgs_owned)
             })
             .await
             {
@@ -54,12 +54,10 @@ pub async fn dispatch_web_chat_prompt(
                 }
             };
             match delivery {
-                Ok(crate::control::vision_payload::VisionDelivery::Native) => {}
-                Ok(crate::control::vision_payload::VisionDelivery::OcrText(ocr)) => {
-                    prompt_for_chat = crate::control::vision_payload::append_ocr_to_prompt(
-                        &prompt_for_chat,
-                        &ocr,
-                    );
+                Ok(crate::control::media_payload::VisionDelivery::Native) => {}
+                Ok(crate::control::media_payload::VisionDelivery::OcrText(ocr)) => {
+                    prompt_for_chat =
+                        crate::control::media_payload::append_ocr_to_prompt(&prompt_for_chat, &ocr);
                     // Text-only brain: do not forward raw images to the chat model.
                     model_vision_images = None;
                 }

@@ -88,7 +88,11 @@ impl MediaClientRegistry {
             ModelCapability::Embedding => self.embedding.as_ref(),
             ModelCapability::ImageGen => self.image.as_ref(),
             ModelCapability::VideoGen => self.video.as_ref(),
-            ModelCapability::Chat | ModelCapability::Vision | ModelCapability::Rerank => None,
+            ModelCapability::Chat
+            | ModelCapability::Vision
+            | ModelCapability::Video
+            | ModelCapability::AudioInput
+            | ModelCapability::Rerank => None,
         }
     }
 }

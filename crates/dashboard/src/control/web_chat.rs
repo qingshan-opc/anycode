@@ -29,7 +29,7 @@ impl WebChatHub {
         _agent: Option<&str>,
         _dashboard_url: &str,
         _prompt: &str,
-        _vision_images: Option<&[crate::control::vision_payload::VisionImagePayload]>,
+        _vision_images: Option<&[crate::control::media_payload::VisionImagePayload]>,
         _text_files: Option<&[crate::control::text_upload::TextFilePayload]>,
         _reply_lang: Option<&str>,
     ) -> Result<WebChatSendResult> {

@@ -46,6 +46,22 @@ export function ServiceUsageSection() {
           {t("service.usage.periodExhausted").replace("{end}", entitlements.billingPeriod.end)}
         </div>
       )}
+      {entitlements.quota.creditBalanceFen <= 0 && (
+        <div className="dw-alert-error text-sm" role="alert">
+          {t("service.usage.creditExhausted")}
+        </div>
+      )}
+
+      <SectionCard title={t("service.usage.creditBalance")}>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="text-2xl font-semibold tabular-nums m-0">
+            {formatMoney(entitlements.quota.creditBalanceFen / 100)}
+          </span>
+          <p className="text-xs text-secondary m-0">
+            {t("service.usage.creditBalanceHint")}
+          </p>
+        </div>
+      </SectionCard>
 
       <SectionCard title={t("service.usage.quotaOverview")}>
         <div className="space-y-4">

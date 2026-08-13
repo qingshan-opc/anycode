@@ -13,8 +13,8 @@ mod cef_embed;
 mod dashboard_backend;
 
 use dashboard_backend::{
-    apply_dashboard_env, dashboard_http_ready, desktop_api_base, DashboardServerState,
-    start_in_process,
+    apply_dashboard_env, dashboard_http_ready, desktop_api_base, start_in_process,
+    DashboardServerState,
 };
 
 use std::time::{Duration, Instant};
@@ -56,9 +56,9 @@ fn navigate_workbench(app: &tauri::AppHandle, w: &tauri::WebviewWindow) -> bool 
     // provisional navigation never commits — the splash stays forever while
     // the server does receive the request. UI-process `navigate()` does not
     // hit that stall.
-    let r = tauri::Url::parse(&url).map_err(|e| e.to_string()).and_then(|u| {
-        w.navigate(u).map_err(|e| e.to_string())
-    });
+    let r = tauri::Url::parse(&url)
+        .map_err(|e| e.to_string())
+        .and_then(|u| w.navigate(u).map_err(|e| e.to_string()));
     eprintln!(
         "anycode-desktop: navigate_workbench url={} navigate={:?}",
         url.replace(bootstrap.as_deref().unwrap_or(""), "<token>"),
@@ -66,7 +66,6 @@ fn navigate_workbench(app: &tauri::AppHandle, w: &tauri::WebviewWindow) -> bool 
     );
     r.is_ok()
 }
-
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
@@ -113,9 +112,7 @@ fn open_external_url(url: String) -> Result<(), String> {
 fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     app.run_on_main_thread(move || {
-        let picked = rfd::FileDialog::new()
-            .set_title("选择目录")
-            .pick_folder();
+        let picked = rfd::FileDialog::new().set_title("选择目录").pick_folder();
         let _ = tx.send(picked.map(|p| p.display().to_string()));
     })
     .map_err(|e| e.to_string())?;
@@ -250,19 +247,15 @@ fn show_workbench(app: &tauri::AppHandle, ready: bool) {
                 ) {
                     Ok(s) => {
                         let _ = std::fs::write(
-                            std::path::PathBuf::from(
-                                std::env::var("HOME").unwrap_or_default(),
-                            )
-                            .join(".anycode/cef-smoke.txt"),
+                            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                                .join(".anycode/cef-smoke.txt"),
                             format!("ok port={} url={:?}\n", s.remote_debugging_port, s.url),
                         );
                     }
                     Err(e) => {
                         let _ = std::fs::write(
-                            std::path::PathBuf::from(
-                                std::env::var("HOME").unwrap_or_default(),
-                            )
-                            .join(".anycode/cef-smoke.txt"),
+                            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                                .join(".anycode/cef-smoke.txt"),
                             format!("err {e}\n"),
                         );
                     }
@@ -296,9 +289,8 @@ fn handle_anycode_deep_link(app: &tauri::AppHandle, url: &Url) {
                     if let Some(w) = app_for_ui.get_webview_window("main") {
                         let _ = w.show();
                         let _ = w.set_focus();
-                        let _ = w.eval(
-                            "window.dispatchEvent(new CustomEvent('anycode-cloud-linked'));",
-                        );
+                        let _ = w
+                            .eval("window.dispatchEvent(new CustomEvent('anycode-cloud-linked'));");
                     }
                 });
             }
@@ -335,6 +327,9 @@ fn main() {
     // If CEF was explicitly disabled, drop a leftover CDP port so screencast
     // can run. Default path keeps CEF and publishes the port on show.
     cef_embed::clear_stale_cdp_port_if_disabled();
+    // Crash guard: trips the CEF kill-switch for this run when previous runs
+    // kept dying with CEF active (in-process CEF segfaults take the app down).
+    cef_embed::evaluate_crash_guard();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -410,7 +405,12 @@ fn main() {
                     state.stop();
                 }
                 #[cfg(target_os = "macos")]
-                anycode_browser_cef::shutdown_cef();
+                {
+                    anycode_browser_cef::shutdown_cef();
+                    // Clean exit: reset the crash-guard counter (re-enables CEF
+                    // next launch even if this run had it force-disabled).
+                    cef_embed::mark_clean_exit();
+                }
             }
         });
 }

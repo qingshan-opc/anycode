@@ -91,6 +91,44 @@ pub(crate) fn reply_language_section() -> Option<String> {
     Some(body.trim().to_string())
 }
 
+/// P1.5 prefix-stability gate (`ANYCODE_PROMPT_PREFIX_STABLE=1`): volatile
+/// content (date, reply language) moves to a trailing dynamic block so the
+/// static system prefix is byte-identical across turns, sessions, languages,
+/// and day boundaries — the server-side prefix cache (DeepSeek 极致性价比)
+/// then hits on everything before it. Default off until A/B quality passes.
+#[must_use]
+pub(crate) fn prefix_stable_mode() -> bool {
+    std::env::var("ANYCODE_PROMPT_PREFIX_STABLE")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+/// Marker line separating static environment facts from the volatile date.
+const ENV_DATE_LINE_MARKER: &str = "\n- Local date:";
+
+/// The date string rendered into the environment/dynamic sections — one
+/// helper so both halves of a compose always agree.
+#[must_use]
+pub(crate) fn current_prompt_date() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+/// Trailing dynamic block for prefix-stable mode: everything that can change
+/// between requests (local date) or between sessions (reply language), placed
+/// after `<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->` so a change here only
+/// re-sends the tail.
+#[must_use]
+pub(crate) fn dynamic_tail_sections() -> Vec<String> {
+    let mut out = vec![format!(
+        "# Session Context\n\n- Local date: {}",
+        current_prompt_date()
+    )];
+    if let Some(lang) = reply_language_section() {
+        out.push(lang);
+    }
+    out
+}
+
 /// Per-turn ephemeral reminder for the active locale, if any.
 #[must_use]
 pub(crate) fn ephemeral_reminder_text() -> Option<String> {
@@ -106,7 +144,7 @@ pub(crate) fn default_stack_sections(
     tools: &[String],
     include_browser: bool,
 ) -> Vec<String> {
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let date = current_prompt_date();
     let os = std::env::consts::OS.to_string();
     let tools_joined = tools.join(", ");
     let include_media = tools
@@ -125,12 +163,25 @@ pub(crate) fn default_stack_sections(
     let mut loop_vars = HashMap::new();
     loop_vars.insert("tools", tools_joined);
 
+    let stable = prefix_stable_mode();
     let mut parts = Vec::new();
-    if let Some(lang) = reply_language_section() {
-        parts.push(lang);
+    if !stable {
+        if let Some(lang) = reply_language_section() {
+            parts.push(lang);
+        }
     }
     parts.push(core("tone").trim().to_string());
-    parts.push(fill_template(core("environment"), &env_vars));
+    let env_filled = fill_template(core("environment"), &env_vars);
+    if stable {
+        // Static zone: cwd + OS only. The volatile date line rides the
+        // trailing dynamic block (see `dynamic_tail_sections`).
+        let (static_env, _) = env_filled
+            .split_once(ENV_DATE_LINE_MARKER)
+            .unwrap_or((env_filled.as_str(), ""));
+        parts.push(static_env.trim_end().to_string());
+    } else {
+        parts.push(env_filled);
+    }
     parts.push(fill_template(core("agent_loop"), &loop_vars));
     parts.push(core("user_clarification").trim().to_string());
     if include_media {

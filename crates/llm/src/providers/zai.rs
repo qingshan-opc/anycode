@@ -19,15 +19,41 @@ pub(crate) fn is_retryable_status(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
-/// A 429 whose body signals quota exhaustion (not transient throttling) can
-/// never succeed inside the retry window — fail fast instead of burning the
-/// whole retry budget (10 × 180 s ≈ 30 min of dead waiting).
+/// A 429 whose body signals quota/subscription exhaustion (not transient
+/// throttling) can never succeed inside the retry window — fail fast instead
+/// of burning the whole retry budget (10 × 180 s ≈ 30 min of dead waiting).
 pub(crate) fn is_quota_exhausted(error_body: &str) -> bool {
     let lower = error_body.to_ascii_lowercase();
     lower.contains("insufficient_quota")
         || lower.contains("quota has been exhausted")
         || lower.contains("quota_exceeded")
         || lower.contains("exceeded your current quota")
+        || lower.contains("subscription_not_found")
+        || lower.contains("subscription request not allowed")
+}
+
+/// Billing/subscription failures (HTTP 402, or hubs that wrap
+/// subscription/quota errors in other statuses) mean the provider account —
+/// not anyCode — needs action. Attach an actionable hint so the surfaced
+/// error tells the user what to do instead of dumping a raw retry failure.
+pub(crate) fn billing_failure_hint(
+    status: reqwest::StatusCode,
+    error_body: &str,
+) -> Option<&'static str> {
+    let lower = error_body.to_ascii_lowercase();
+    let billing_body = is_quota_exhausted(error_body)
+        || lower.contains("insufficient balance")
+        || lower.contains("balance not enough")
+        || lower.contains("payment required");
+    if status == reqwest::StatusCode::PAYMENT_REQUIRED || billing_body {
+        Some(
+            "billing/subscription problem at the provider: the account has no active \
+             subscription or quota for this model — renew or top up at the provider \
+             console, or switch models in Settings",
+        )
+    } else {
+        None
+    }
 }
 
 pub(crate) fn retry_delay_ms(attempt: u32) -> u64 {
@@ -69,13 +95,17 @@ async fn post_stream_with_retries(
                     .and_then(|s| s.parse::<u64>().ok())
                     .map(|secs| secs.saturating_mul(1000));
                 let error_text = resp.text().await.unwrap_or_default();
-                last_err = Some(format!(
+                let mut detail = format!(
                     "{} stream API error: status={} url={} body={}",
                     provider_label,
                     status.as_u16(),
                     url,
                     &error_text[..error_text.len().min(500)]
-                ));
+                );
+                if let Some(hint) = billing_failure_hint(status, &error_text) {
+                    detail = format!("{detail} · {hint}");
+                }
+                last_err = Some(detail);
                 if is_quota_exhausted(&error_text) {
                     error!("{provider_label} stream quota exhausted — failing fast");
                     break;
@@ -91,8 +121,8 @@ async fn post_stream_with_retries(
                 let mut msg = e.to_string();
                 if e.is_timeout() {
                     msg = format!(
-                        "{msg} · API_TIMEOUT_MS={}ms, try increasing it",
-                        configured_api_timeout_ms()
+                        "{msg} · API_STREAM_IDLE_TIMEOUT_MS={}ms (相邻 chunk 间隔上限), try increasing it",
+                        configured_stream_idle_timeout_ms()
                     );
                 }
                 last_err = Some(msg);
@@ -130,8 +160,11 @@ pub fn zai_default_chat_url_for_plan(plan: &str) -> &'static str {
     }
 }
 
-/// 超时配置统一由 `crate::http_client` 提供（`API_TIMEOUT_MS` 可调）。
-use crate::http_client::{build_api_http_client, configured_api_timeout_ms};
+/// 超时配置统一由 `crate::http_client` 提供（非流式 `API_TIMEOUT_MS`、流式 `API_STREAM_IDLE_TIMEOUT_MS` 可调）。
+use crate::http_client::{
+    build_api_http_client, build_streaming_api_http_client, configured_api_timeout_ms,
+    configured_stream_idle_timeout_ms,
+};
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 10;
 
 /// 向导 / CLI 展示用的模型目录（单一事实来源）
@@ -319,6 +352,8 @@ impl ZaiModel {
 /// z.ai Client（OpenAI 兼容 chat/completions 格式）
 pub struct ZaiClient {
     client: Client,
+    /// 流式专用：无总超时，仅 connect + 读空闲超时（见 `crate::http_client`）。
+    stream_client: Client,
     api_key: String,
     base_url: String,
     model: String,
@@ -331,6 +366,7 @@ impl ZaiClient {
         let model = model.unwrap_or_else(|| "glm-5".to_string());
         Self {
             client: build_api_http_client(),
+            stream_client: build_streaming_api_http_client(),
             api_key,
             base_url: ZAI_DEFAULT_CODING_ENDPOINT.to_string(),
             model,
@@ -1151,7 +1187,7 @@ impl LLMClient for ZaiClient {
                         snippet.truncate(MAX_ERR);
                         snippet.push_str("...<truncated>");
                     }
-                    last_err = Some(format!(
+                    let mut detail = format!(
                         "{} API error: status={} url={} body={}",
                         provider_label,
                         status.as_u16(),
@@ -1161,7 +1197,11 @@ impl LLMClient for ZaiClient {
                         } else {
                             &snippet
                         }
-                    ));
+                    );
+                    if let Some(hint) = billing_failure_hint(status, &error_text) {
+                        detail = format!("{detail} · {hint}");
+                    }
+                    last_err = Some(detail);
 
                     if is_quota_exhausted(&error_text) {
                         error!("{provider_label} quota exhausted — failing fast without retries");
@@ -1218,7 +1258,7 @@ impl LLMClient for ZaiClient {
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(CoreError::LLMError(format!(
+            let mut detail = format!(
                 "{} API error (no retry): status={} url={} body={}",
                 provider_label,
                 status.as_u16(),
@@ -1228,7 +1268,11 @@ impl LLMClient for ZaiClient {
                 } else {
                     &error_text
                 }
-            )));
+            );
+            if let Some(hint) = billing_failure_hint(status, &error_text) {
+                detail = format!("{detail} · {hint}");
+            }
+            return Err(CoreError::LLMError(detail));
         }
 
         let zai_response: ZaiResponse = response
@@ -1295,7 +1339,7 @@ impl LLMClient for ZaiClient {
             .unwrap_or(self.api_key.as_str());
         let auth_key = sanitize_header_token(auth_key, &provider_label)?;
 
-        let client = self.client.clone();
+        let client = self.stream_client.clone();
         let (tx, rx) = mpsc::channel(128);
         let stream_tools = tools.clone();
 
@@ -1415,6 +1459,38 @@ impl LLMClient for ZaiClient {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn billing_failure_hint_flags_402_and_subscription_bodies() {
+        // 402 regardless of body content.
+        assert!(billing_failure_hint(reqwest::StatusCode::PAYMENT_REQUIRED, "").is_some());
+        // Subscription/quota bodies even when wrapped in another status.
+        let agnes = r#"{"error":{"message":"subscription request not allowed: subscription_not_found","type":"AgnesAI_error"}}"#;
+        assert!(billing_failure_hint(reqwest::StatusCode::BAD_REQUEST, agnes).is_some());
+        assert!(billing_failure_hint(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"message":"insufficient_quota"}}"#
+        )
+        .is_some());
+        // Ordinary transient errors get no billing hint.
+        assert!(billing_failure_hint(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "upstream timeout"
+        )
+        .is_none());
+        assert!(
+            billing_failure_hint(reqwest::StatusCode::TOO_MANY_REQUESTS, "slow down").is_none()
+        );
+    }
+
+    #[test]
+    fn quota_exhausted_covers_subscription_failures_for_fail_fast() {
+        assert!(is_quota_exhausted(
+            "subscription request not allowed: subscription_not_found"
+        ));
+        assert!(is_quota_exhausted("insufficient_quota"));
+        assert!(!is_quota_exhausted("rate limit reached, retry soon"));
+    }
 
     #[test]
     fn openai_messages_include_tool_calls_from_metadata() {
@@ -1561,7 +1637,7 @@ mod tests {
         ];
         let config = ModelConfig {
             provider: LLMProvider::OpenAI,
-            model: "minicpm5-1b".into(),
+            model: "qwen3-1b".into(),
             base_url: Some("http://127.0.0.1:47100/v1/chat/completions".into()),
             ..Default::default()
         };

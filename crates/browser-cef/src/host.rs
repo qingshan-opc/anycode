@@ -882,6 +882,11 @@ pub fn list_tabs() -> Vec<TabInfo> {
         .unwrap_or_default()
 }
 
+/// Cheap liveness probe for the pump scheduler (no Vec allocation).
+pub fn has_tabs() -> bool {
+    state().lock().map(|g| !g.tabs.is_empty()).unwrap_or(false)
+}
+
 pub fn current_url() -> Option<String> {
     state()
         .lock()

@@ -237,6 +237,10 @@ async fn lan_handoff_upload(
                 "project_id": result.project_id,
                 "root_path": result.root_path,
                 "sessions_imported": result.sessions_imported,
+                "skills_installed": result.skills_installed,
+                "skills_skipped": result.skills_skipped,
+                "mcp_imported": result.mcp_imported,
+                "mcp_skipped": result.mcp_skipped,
             }))
             .into_response()
         }

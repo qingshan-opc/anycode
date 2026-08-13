@@ -37,6 +37,29 @@ pub async fn get_models_registry() -> impl IntoResponse {
             let model = item.get("model").and_then(|v| v.as_str()).unwrap_or("");
             !is_mock_llm_profile(provider, model)
         })
+        .map(|mut item| {
+            // Decorate with lifecycle tier so pickers can hide outdated models
+            // and badge the ones already in use (roadmap P0.3).
+            let provider = item
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let model = item
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(rule) = anycode_llm::rule_for_model(&provider, &model) {
+                item["tier"] = json!(rule.tier.as_str());
+                item["tier_note"] = json!(rule.note);
+                item["tier_replacement"] = json!(rule.replacement);
+            } else {
+                item["tier"] = json!("current");
+            }
+            item["curated"] = json!(anycode_llm::is_curated_model(&provider, &model));
+            item
+        })
         .collect();
     Json(json!({
         "config_present": view.config_present,

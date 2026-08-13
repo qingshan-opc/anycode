@@ -468,6 +468,7 @@ impl AgentRuntime {
                     expected_artifacts: &expected_artifacts,
                     artifacts: &artifacts,
                     assistant_text: &turn_plain,
+                    task_prompt: &task.prompt,
                     live_trace_tx: &task.context.live_trace_tx,
                     verification: &verification_shared,
                     progress_seq: 0,

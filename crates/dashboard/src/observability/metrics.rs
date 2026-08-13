@@ -396,6 +396,8 @@ async fn usage_detail(
     let input_tokens: i64 = by_model.iter().map(|r| r.input_tokens).sum();
     let output_tokens: i64 = by_model.iter().map(|r| r.output_tokens).sum();
     let estimated_cost_cny: f64 = by_model.iter().map(|r| r.estimated_cost_cny).sum();
+    let cache_read_tokens: i64 = by_model.iter().map(|r| r.cache_read_tokens).sum();
+    let cache_creation_tokens: i64 = by_model.iter().map(|r| r.cache_creation_tokens).sum();
     Ok(TokenUsageDetail {
         usage: TokenUsageStats {
             days,
@@ -404,6 +406,8 @@ async fn usage_detail(
             output_tokens,
             total_tokens: input_tokens + output_tokens,
             estimated_cost_cny,
+            cache_read_tokens,
+            cache_creation_tokens,
             generated_at: chrono::Utc::now().to_rfc3339(),
         },
         by_model,
@@ -430,7 +434,9 @@ async fn usage_by_model(
           {resolved_model} AS model,
           COUNT(*) AS llm_calls,
           COALESCE(SUM(CAST(json_extract(e.payload_json, '$.input_tokens') AS INTEGER)), 0) AS input_tokens,
-          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_read_tokens') AS INTEGER)), 0) AS cache_read_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_creation_tokens') AS INTEGER)), 0) AS cache_creation_tokens
         FROM project_events e
         LEFT JOIN sessions s ON s.id = e.session_id
         WHERE {event_filter}
@@ -456,6 +462,7 @@ async fn usage_by_model(
             let model: String = r.get("model");
             let input_tokens: i64 = r.get("input_tokens");
             let output_tokens: i64 = r.get("output_tokens");
+            let cache_read_tokens: i64 = r.get("cache_read_tokens");
             ModelUsageRow {
                 provider: infer_provider(&model).into(),
                 model: model.clone(),
@@ -463,7 +470,14 @@ async fn usage_by_model(
                 input_tokens,
                 output_tokens,
                 total_tokens: input_tokens + output_tokens,
-                estimated_cost_cny: estimate_model_cost_cny(&model, input_tokens, output_tokens),
+                estimated_cost_cny: estimate_model_cost_with_cache_cny(
+                    &model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                ),
+                cache_read_tokens,
+                cache_creation_tokens: r.get("cache_creation_tokens"),
             }
         })
         .collect())
@@ -488,7 +502,9 @@ async fn usage_by_project(
           COALESCE(p.root_path, '') AS root_path,
           COUNT(*) AS llm_calls,
           COALESCE(SUM(CAST(json_extract(e.payload_json, '$.input_tokens') AS INTEGER)), 0) AS input_tokens,
-          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_read_tokens') AS INTEGER)), 0) AS cache_read_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_creation_tokens') AS INTEGER)), 0) AS cache_creation_tokens
         FROM project_events e
         LEFT JOIN projects p ON p.id = e.project_id
         LEFT JOIN sessions s ON s.id = e.session_id
@@ -511,6 +527,7 @@ async fn usage_by_project(
         .map(|r| {
             let input_tokens: i64 = r.get("input_tokens");
             let output_tokens: i64 = r.get("output_tokens");
+            let cache_read_tokens: i64 = r.get("cache_read_tokens");
             let model = "unknown";
             ProjectUsageRow {
                 project_id: r.get("project_id"),
@@ -520,7 +537,14 @@ async fn usage_by_project(
                 input_tokens,
                 output_tokens,
                 total_tokens: input_tokens + output_tokens,
-                estimated_cost_cny: estimate_model_cost_cny(model, input_tokens, output_tokens),
+                estimated_cost_cny: estimate_model_cost_with_cache_cny(
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                ),
+                cache_read_tokens,
+                cache_creation_tokens: r.get("cache_creation_tokens"),
             }
         })
         .collect())
@@ -543,7 +567,9 @@ async fn usage_by_day(
           date(e.occurred_at) AS d,
           COUNT(*) AS llm_calls,
           COALESCE(SUM(CAST(json_extract(e.payload_json, '$.input_tokens') AS INTEGER)), 0) AS input_tokens,
-          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_read_tokens') AS INTEGER)), 0) AS cache_read_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_creation_tokens') AS INTEGER)), 0) AS cache_creation_tokens
         FROM project_events e
         LEFT JOIN sessions s ON s.id = e.session_id
         WHERE {event_filter}
@@ -564,6 +590,7 @@ async fn usage_by_day(
     for r in rows {
         let input_tokens: i64 = r.get("input_tokens");
         let output_tokens: i64 = r.get("output_tokens");
+        let cache_read_tokens: i64 = r.get("cache_read_tokens");
         let date: String = r.get("d");
         by_date.insert(
             date.clone(),
@@ -573,7 +600,14 @@ async fn usage_by_day(
                 input_tokens,
                 output_tokens,
                 total_tokens: input_tokens + output_tokens,
-                estimated_cost_cny: estimate_model_cost_cny("unknown", input_tokens, output_tokens),
+                estimated_cost_cny: estimate_model_cost_with_cache_cny(
+                    "unknown",
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                ),
+                cache_read_tokens,
+                cache_creation_tokens: r.get("cache_creation_tokens"),
             },
         );
     }
@@ -587,6 +621,8 @@ async fn usage_by_day(
                 output_tokens: 0,
                 total_tokens: 0,
                 estimated_cost_cny: 0.0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             })
         })
         .collect())
@@ -698,6 +734,33 @@ fn estimate_model_cost_cny(model: &str, input_tokens: i64, output_tokens: i64) -
         + (output_tokens as f64 / 1_000_000.0) * output_rate
 }
 
+/// Fraction of the list input price charged for a cache-hit token (DeepSeek
+/// context-cache style discount; override with `ANYCODE_DASHBOARD_CACHE_HIT_RATIO`).
+fn cache_hit_price_ratio() -> f64 {
+    std::env::var("ANYCODE_DASHBOARD_CACHE_HIT_RATIO")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|r| (0.0..=1.0).contains(r))
+        .unwrap_or(0.1)
+}
+
+/// Effective cost when the provider reports cache hits: hit tokens are billed at
+/// the discounted ratio, the remaining input at list price. `cache_read_tokens`
+/// is a subset of `input_tokens` on OpenAI-compatible usage schemas.
+fn estimate_model_cost_with_cache_cny(
+    model: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+) -> f64 {
+    let (input_rate, output_rate) = model_token_rates_cny(model);
+    let cached = cache_read_tokens.clamp(0, input_tokens);
+    let uncached = input_tokens - cached;
+    (uncached as f64 / 1_000_000.0) * input_rate
+        + (cached as f64 / 1_000_000.0) * input_rate * cache_hit_price_ratio()
+        + (output_tokens as f64 / 1_000_000.0) * output_rate
+}
+
 fn baseline_session_hours() -> f64 {
     std::env::var("ANYCODE_DASHBOARD_BASELINE_SESSION_MINUTES")
         .ok()
@@ -742,6 +805,8 @@ pub async fn session_token_usage_detail(
     let input_tokens: i64 = by_model.iter().map(|r| r.input_tokens).sum();
     let output_tokens: i64 = by_model.iter().map(|r| r.output_tokens).sum();
     let estimated_cost_cny: f64 = by_model.iter().map(|r| r.estimated_cost_cny).sum();
+    let cache_read_tokens: i64 = by_model.iter().map(|r| r.cache_read_tokens).sum();
+    let cache_creation_tokens: i64 = by_model.iter().map(|r| r.cache_creation_tokens).sum();
     Ok(TokenUsageDetail {
         usage: TokenUsageStats {
             days: 0,
@@ -750,6 +815,8 @@ pub async fn session_token_usage_detail(
             output_tokens,
             total_tokens: input_tokens + output_tokens,
             estimated_cost_cny,
+            cache_read_tokens,
+            cache_creation_tokens,
             generated_at: chrono::Utc::now().to_rfc3339(),
         },
         by_model,
@@ -773,7 +840,9 @@ async fn usage_by_model_session(
           {resolved_model} AS model,
           COUNT(*) AS llm_calls,
           COALESCE(SUM(CAST(json_extract(e.payload_json, '$.input_tokens') AS INTEGER)), 0) AS input_tokens,
-          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_read_tokens') AS INTEGER)), 0) AS cache_read_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_creation_tokens') AS INTEGER)), 0) AS cache_creation_tokens
         FROM project_events e
         LEFT JOIN sessions s ON s.id = e.session_id
         WHERE {event_filter}
@@ -795,6 +864,7 @@ async fn usage_by_model_session(
             let model: String = r.get("model");
             let input_tokens: i64 = r.get("input_tokens");
             let output_tokens: i64 = r.get("output_tokens");
+            let cache_read_tokens: i64 = r.get("cache_read_tokens");
             ModelUsageRow {
                 provider: infer_provider(&model).into(),
                 model: model.clone(),
@@ -802,7 +872,14 @@ async fn usage_by_model_session(
                 input_tokens,
                 output_tokens,
                 total_tokens: input_tokens + output_tokens,
-                estimated_cost_cny: estimate_model_cost_cny(&model, input_tokens, output_tokens),
+                estimated_cost_cny: estimate_model_cost_with_cache_cny(
+                    &model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                ),
+                cache_read_tokens,
+                cache_creation_tokens: r.get("cache_creation_tokens"),
             }
         })
         .collect())
@@ -822,7 +899,9 @@ async fn usage_by_day_session(
           date(e.occurred_at) AS d,
           COUNT(*) AS llm_calls,
           COALESCE(SUM(CAST(json_extract(e.payload_json, '$.input_tokens') AS INTEGER)), 0) AS input_tokens,
-          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_read_tokens') AS INTEGER)), 0) AS cache_read_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.cache_creation_tokens') AS INTEGER)), 0) AS cache_creation_tokens
         FROM project_events e
         LEFT JOIN sessions s ON s.id = e.session_id
         WHERE {event_filter}
@@ -840,13 +919,21 @@ async fn usage_by_day_session(
         .map(|r| {
             let input_tokens: i64 = r.get("input_tokens");
             let output_tokens: i64 = r.get("output_tokens");
+            let cache_read_tokens: i64 = r.get("cache_read_tokens");
             TokenTimelinePoint {
                 date: r.get("d"),
                 llm_calls: r.get("llm_calls"),
                 input_tokens,
                 output_tokens,
                 total_tokens: input_tokens + output_tokens,
-                estimated_cost_cny: estimate_model_cost_cny("unknown", input_tokens, output_tokens),
+                estimated_cost_cny: estimate_model_cost_with_cache_cny(
+                    "unknown",
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                ),
+                cache_read_tokens,
+                cache_creation_tokens: r.get("cache_creation_tokens"),
             }
         })
         .collect())
@@ -1005,6 +1092,114 @@ mod tests {
     fn model_cost_sonnet() {
         let cost = estimate_model_cost_cny("claude-sonnet-4", 1_000_000, 1_000_000);
         assert!((cost - 129.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn deepseek_cache_hit_discounts_effective_cost() {
+        // DeepSeek list rates: 1.944 / 7.92 CNY per M. 800k of the 1M input
+        // tokens are cache hits billed at the 0.1 ratio default.
+        let cost = estimate_model_cost_with_cache_cny("deepseek-v4-flash", 1_000_000, 0, 800_000);
+        let expected = 0.2 * 1.944 + 0.8 * 1.944 * 0.1;
+        assert!(
+            (cost - expected).abs() < 0.001,
+            "cost={cost} expected={expected}"
+        );
+        // No cache → identical to the plain estimate.
+        let plain = estimate_model_cost_cny("deepseek-v4-flash", 1_000_000, 1_000_000);
+        let with_zero =
+            estimate_model_cost_with_cache_cny("deepseek-v4-flash", 1_000_000, 1_000_000, 0);
+        assert!((plain - with_zero).abs() < 0.0001);
+        // Cache claims exceeding input are clamped, never negative.
+        let clamped = estimate_model_cost_with_cache_cny("deepseek-v4-flash", 100, 0, 500);
+        assert!(clamped >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn usage_by_agent_groups_payload_agent_type_and_marks_nested() {
+        let dir = tempdir().unwrap();
+        let db = DashboardDb::open(dir.path().join("ba.db")).await.unwrap();
+        let project = db
+            .upsert_project(UpsertProjectRequest {
+                root_path: "/tmp/ba".into(),
+                name: Some("BA".into()),
+                description: None,
+                create_root: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let session = db
+            .create_session(CreateSessionRequest {
+                project_id: project.id.clone(),
+                kind: "run".into(),
+                task_id: Some("parent-task".into()),
+                title: "t".into(),
+                prompt_preview: None,
+                agent_type: Some("general-purpose".into()),
+                model: None,
+                metadata_json: None,
+            })
+            .await
+            .unwrap();
+        let insert_usage = |task_id: &str, payload: serde_json::Value| {
+            let db = db.clone();
+            let pid = project.id.clone();
+            let sid = session.id.clone();
+            let tid = task_id.to_string();
+            async move {
+                db.insert_event(crate::schema::InsertEventRequest {
+                    project_id: pid,
+                    session_id: Some(sid),
+                    task_id: Some(tid),
+                    agent_id: None,
+                    event_type: "llm_usage".into(),
+                    severity: Some("info".into()),
+                    title: "u".into(),
+                    body: None,
+                    payload: Some(payload),
+                })
+                .await
+                .unwrap();
+            }
+        };
+        // 父任务 usage：无 payload.agent_type → session.agent_type 兜底
+        insert_usage(
+            "parent-task",
+            serde_json::json!({"turn": "1", "input_tokens": 1000, "output_tokens": 200}),
+        )
+        .await;
+        // 嵌套子代理 usage：payload.agent_type=explore + nested 标记
+        insert_usage(
+            "nested-task",
+            serde_json::json!({"turn": "1", "input_tokens": 500, "output_tokens": 100, "agent_type": "explore", "nested": true}),
+        )
+        .await;
+        insert_usage(
+            "nested-task",
+            serde_json::json!({"turn": "2", "input_tokens": 300, "output_tokens": 50, "agent_type": "explore", "nested": true}),
+        )
+        .await;
+
+        let detail = global_token_usage_detail(&db, 7).await.unwrap();
+        let explore = detail
+            .by_agent
+            .iter()
+            .find(|r| r.agent_type == "explore")
+            .expect("explore row");
+        assert_eq!(explore.llm_calls, 2);
+        assert_eq!(explore.input_tokens, 800);
+        assert_eq!(explore.output_tokens, 150);
+        assert_eq!(explore.nested_input_tokens, 800);
+        assert_eq!(explore.nested_output_tokens, 150);
+        let parent = detail
+            .by_agent
+            .iter()
+            .find(|r| r.agent_type == "general-purpose")
+            .expect("parent row via session fallback");
+        assert_eq!(parent.llm_calls, 1);
+        assert_eq!(parent.nested_input_tokens, 0);
+        // 总计含嵌套（token 指标不再缺失子代理消耗）
+        assert_eq!(detail.usage.input_tokens, 1800);
     }
 
     #[tokio::test]

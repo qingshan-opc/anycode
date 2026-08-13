@@ -107,6 +107,7 @@ export function PlanTreePanel({ sessionId, isRunning = false, onBuildStarted }: 
   }
 
   const roots = query.data?.tree?.roots ?? [];
+  const prose = query.data?.tree?.prose?.trim() ?? "";
   const updatedAt = query.data?.updated_at ?? null;
   const awaitingBuild =
     query.data?.tree && planAwaitingBuild(query.data.tree, updatedAt, sessionId);
@@ -150,6 +151,13 @@ export function PlanTreePanel({ sessionId, isRunning = false, onBuildStarted }: 
         </div>
       ) : null}
       <div className="py-1 min-h-0 flex-1 overflow-y-auto">
+        {prose ? (
+          <div className="mx-2 mt-1 mb-2 rounded-lg border border-outline-variant/40 bg-surface-container-low px-3 py-2">
+            <p className="text-xs text-on-surface m-0 whitespace-pre-wrap leading-relaxed">
+              {prose}
+            </p>
+          </div>
+        ) : null}
         {roots.map((node) => (
           <PlanNodeRow key={node.id} node={node} depth={0} />
         ))}

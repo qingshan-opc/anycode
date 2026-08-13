@@ -1,9 +1,9 @@
 ---
 name: anycode-ppt
 description: >-
-  anyCode editorial HTML slides — COPY fde-editorial templates (ladder/layer/agent-cycle/trio).
-  Delivers paginated 1920×1080 HTML deck + index.html viewer. No pptx export.
-  Use for ppt, slides, presentation, pitch deck, 幻灯片, 演示文稿, html ppt, anycode ppt.
+  anyCode editorial HTML slides — COPY fde-editorial templates into an HTML deck
+  + index viewer. No pptx export — required .pptx goes to
+  presentation-commercial-delivery. Use for ppt, slides, 幻灯片, 演示文稿.
 description_zh: >-
   anyCode HTML 幻灯片：从 templates/ 复制 FDE Editorial 样式，交付分页 HTML + 浏览器预览，不导出 pptx。
 name_zh: anyCode HTML 幻灯片

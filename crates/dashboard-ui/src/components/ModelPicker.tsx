@@ -220,6 +220,22 @@ export function ModelPicker({ disabled = false, compact = false }: Props) {
                     >
                       <div className="dw-model-picker__item-head">
                         <span className="dw-model-picker__item-label">{formatModelLabel(option, t)}</span>
+                        {option.tier === "deprecated" && (
+                          <span
+                            className="dw-model-picker__deprecated-badge"
+                            title={option.tierNote ?? undefined}
+                          >
+                            {t("modelPicker.deprecatedBadge")}
+                          </span>
+                        )}
+                        {option.tier === "removed" && (
+                          <span
+                            className="dw-model-picker__deprecated-badge"
+                            title={option.tierNote ?? undefined}
+                          >
+                            {t("modelPicker.removedBadge")}
+                          </span>
+                        )}
                         {option.isCloud && (
                           <span className="dw-model-picker__cloud-badge">{t("modelPicker.cloudBadge")}</span>
                         )}
@@ -228,6 +244,15 @@ export function ModelPicker({ disabled = false, compact = false }: Props) {
                       {option.subtitle !== option.label && (
                         <span className="dw-model-picker__item-tier">{option.subtitle}</span>
                       )}
+                      {(option.tier === "deprecated" || option.tier === "removed") &&
+                        option.tierReplacement && (
+                          <span className="dw-model-picker__item-tier text-warn">
+                            {t("modelPicker.tierReplacement").replace(
+                              "{model}",
+                              option.tierReplacement,
+                            )}
+                          </span>
+                        )}
                     </button>
                   );
                 })

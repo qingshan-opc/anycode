@@ -27,8 +27,27 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use uuid::Uuid;
+
+/// Liveness probes must answer fast: a wedged actor (CEF renderer crashed,
+/// DevTools server stalled, dead-but-open websocket) otherwise blocks
+/// `create_session` until the 30s HTTP client timeout, and the zombie never
+/// gets evicted. 3s is generous for a local CDP round trip.
+const PING_TIMEOUT: Duration = Duration::from_secs(3);
+/// Upper bound for any single CDP command. chromiumoxide's own navigation
+/// timeout is 30s, so 35s covers slow page loads while still failing before
+/// the caller gives up entirely.
+const CMD_TIMEOUT: Duration = Duration::from_secs(35);
+/// Eviction must not hang on a wedged actor whose command queue is full.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+/// CEF CDP attach (HTTP /json/version + websocket + first page wait). The
+/// page-wait loop alone is 6s; 12s bounds the whole attach when the DevTools
+/// server accepts TCP but never responds.
+const ATTACH_TIMEOUT: Duration = Duration::from_secs(12);
+/// Headless Chrome cold launch can be slow on first run.
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct SessionActorHandle {
@@ -136,15 +155,35 @@ impl SessionActorHandle {
         if let Some(port) = cef_cdp_port() {
             // Desktop CEF is showing the live preview — never fall back to an
             // invisible headless Chrome or Agent ops diverge from the panel.
-            return Self::spawn_attach_cdp(port, requested_viewport)
-                .await
-                .map_err(|e| {
-                    BrowserError::Other(anyhow::anyhow!(
-                        "CEF CDP attach failed on port {port}: {e}. Open the Browser panel and retry."
-                    ))
-                });
+            // Bounded: a wedged CEF DevTools server accepts TCP then never
+            // answers, and an unbounded attach surfaces as a 30s HTTP timeout.
+            return tokio::time::timeout(
+                ATTACH_TIMEOUT,
+                Self::spawn_attach_cdp(port, requested_viewport),
+            )
+            .await
+            .map_err(|_| {
+                BrowserError::Other(anyhow::anyhow!(
+                    "CEF CDP attach timed out after {}s on port {port} — the embedded browser \
+                     is not responding. Close and reopen the Browser panel (or restart the app) \
+                     and retry.",
+                    ATTACH_TIMEOUT.as_secs()
+                ))
+            })?
+            .map_err(|e| {
+                BrowserError::Other(anyhow::anyhow!(
+                    "CEF CDP attach failed on port {port}: {e}. Open the Browser panel and retry."
+                ))
+            });
         }
-        Self::spawn_headless(requested_viewport).await
+        tokio::time::timeout(LAUNCH_TIMEOUT, Self::spawn_headless(requested_viewport))
+            .await
+            .map_err(|_| {
+                BrowserError::Unavailable(format!(
+                    "headless Chrome launch timed out after {}s",
+                    LAUNCH_TIMEOUT.as_secs()
+                ))
+            })?
     }
 
     async fn spawn_attach_cdp(
@@ -335,13 +374,28 @@ impl SessionActorHandle {
         build: impl FnOnce(oneshot::Sender<BrowserResult<R>>) -> ActorCmd,
     ) -> BrowserResult<R> {
         let (tx, rx) = oneshot::channel();
-        self.inner
-            .cmd_tx
-            .send(build(tx))
+        // The enqueue is bounded too: 64 pending commands against a wedged
+        // session loop must not block the caller past the command timeout.
+        tokio::time::timeout(CMD_TIMEOUT, self.inner.cmd_tx.send(build(tx)))
             .await
+            .map_err(|_| {
+                BrowserError::Unavailable(format!(
+                    "browser session command queue stuck for {}s — the browser is wedged; \
+                     it will be evicted and respawned on the next call",
+                    CMD_TIMEOUT.as_secs()
+                ))
+            })?
             .map_err(|_| BrowserError::Unavailable("browser session closed".into()))?;
-        rx.await
-            .map_err(|_| BrowserError::Unavailable("browser session dropped".into()))?
+        match tokio::time::timeout(CMD_TIMEOUT, rx).await {
+            Ok(result) => {
+                result.map_err(|_| BrowserError::Unavailable("browser session dropped".into()))?
+            }
+            Err(_) => Err(BrowserError::Unavailable(format!(
+                "browser session command timed out after {}s — the browser is wedged; \
+                 it will be evicted and respawned on the next call",
+                CMD_TIMEOUT.as_secs()
+            ))),
+        }
     }
 
     pub async fn list_tabs(&self) -> BrowserResult<Vec<BrowserTabInfo>> {
@@ -486,7 +540,10 @@ impl SessionActorHandle {
     }
 
     pub async fn shutdown(&self) {
-        let _ = self.inner.cmd_tx.send(ActorCmd::Shutdown).await;
+        // Bounded: a wedged actor whose command queue filled up (panel polling
+        // into a dead CDP connection) would otherwise block eviction forever.
+        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.inner.cmd_tx.send(ActorCmd::Shutdown))
+            .await;
     }
 
     /// Cheap liveness probe through the CDP connection. Returns false when
@@ -494,12 +551,19 @@ impl SessionActorHandle {
     /// dropped, CEF browser process restarted), or no page targets remain —
     /// in all those cases every subsequent command fails instantly with
     /// "send failed because receiver is gone" and the caller should respawn.
+    /// Bounded: a wedged actor queues Ping behind a CDP call that never
+    /// returns, and an unbounded wait turns into the 30s HTTP timeout that
+    /// also blocks zombie eviction.
     pub async fn ping(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.inner.cmd_tx.send(ActorCmd::Ping(tx)).await.is_err() {
+        // try_send: a full queue already means "not healthy" — don't wait for it.
+        if self.inner.cmd_tx.try_send(ActorCmd::Ping(tx)).is_err() {
             return false;
         }
-        rx.await.unwrap_or(false)
+        tokio::time::timeout(PING_TIMEOUT, rx)
+            .await
+            .map(|r| r.unwrap_or(false))
+            .unwrap_or(false)
     }
 }
 

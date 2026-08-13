@@ -4,10 +4,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Direct Agnes OpenAI-compatible endpoint (fallback when cloud gateway is down).
-pub const AGNES_DIRECT_CHAT_URL: &str = "https://apihub.agnes-ai.com/v1/chat/completions";
-pub const AGNES_DIRECT_DEFAULT_MODEL: &str = "agnes-2.0-flash";
-
 /// Hosted cloud console (login, billing, models). Override via `ANYCODE_ACCOUNT_PORTAL_URL`.
 pub const DEFAULT_CLOUD_PORTAL: &str = "https://anycode.work";
 /// Account API base (same deployable as portal in production). Override via `ANYCODE_ACCOUNT_API_URL`.
@@ -190,11 +186,6 @@ fn gateway_chat_http_probe(chat_url: &str) -> bool {
     }
 }
 
-pub fn should_use_direct_agnes_for_cloud_gateway(chat_url: &str) -> bool {
-    let host_base = gateway_host_base(chat_url);
-    is_production_portal_host(&host_base) || !gateway_chat_url_reachable(chat_url)
-}
-
 pub fn gateway_chat_url_reachable(chat_url: &str) -> bool {
     let host_base = gateway_host_base(chat_url);
     if is_production_portal_host(&host_base) {
@@ -222,34 +213,7 @@ fn maybe_repair_session_gateway(host: &str) {
     let _ = write_cloud_session(&session);
 }
 
-/// When anyCode Cloud gateway is down, fall back to a direct Agnes API key from config.
-#[derive(Debug, Clone)]
-pub struct DirectAgnesFallback {
-    pub api_key: String,
-    pub model: String,
-    pub base_url: String,
-}
-
-pub fn map_cloud_model_to_direct_agnes(model: &str) -> String {
-    match model.trim() {
-        "agnes-chat" | "auto" | "agnes-code" | "agnes-reasoner" => {
-            AGNES_DIRECT_DEFAULT_MODEL.to_string()
-        }
-        other if !other.is_empty() => other.to_string(),
-        _ => AGNES_DIRECT_DEFAULT_MODEL.to_string(),
-    }
-}
-
-pub fn direct_agnes_fallback_for_cloud_model(model: &str) -> Option<DirectAgnesFallback> {
-    let api_key = read_provider_credential("agnes")?;
-    Some(DirectAgnesFallback {
-        api_key,
-        model: map_cloud_model_to_direct_agnes(model),
-        base_url: AGNES_DIRECT_CHAT_URL.to_string(),
-    })
-}
-
-/// Effective chat endpoint after anyCode Cloud gateway / direct-Agnes resolution.
+/// Effective chat endpoint after anyCode Cloud gateway resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCloudEndpoint {
     pub provider: String,
@@ -270,24 +234,6 @@ pub fn resolve_anycode_cloud_endpoint(
         .map(str::to_string)
         .unwrap_or_else(default_gateway_chat_url);
 
-    // Prefer direct Agnes when production portal / gateway is unreachable — even without
-    // a cloud login session (CI and offline machines still need a deterministic path).
-    if should_use_direct_agnes_for_cloud_gateway(&url) {
-        if let Some(fb) = direct_agnes_fallback_for_cloud_model(model) {
-            tracing::warn!(
-                cloud_model = %model,
-                direct_model = %fb.model,
-                "anycode_cloud gateway unreachable; using direct Agnes API"
-            );
-            return Ok(ResolvedCloudEndpoint {
-                provider: "custom".to_string(),
-                model: fb.model,
-                base_url: fb.base_url,
-                api_key: fb.api_key,
-            });
-        }
-    }
-
     let mut key = api_key.unwrap_or("").trim().to_string();
     if key.is_empty() {
         key = read_cloud_access_token().ok_or_else(|| {
@@ -295,9 +241,9 @@ pub fn resolve_anycode_cloud_endpoint(
         })?;
     }
 
-    if should_use_direct_agnes_for_cloud_gateway(&url) {
+    if !gateway_chat_url_reachable(&url) {
         return Err(format!(
-            "anyCode Cloud 网关不可达（{url}）。请启动本地 model-gateway（端口 43210），或在模型库改用「Agnes 2.0 Flash」直连。"
+            "anyCode Cloud 网关不可达（{url}）。请启动本地 model-gateway（端口 43210）后重试。"
         ));
     }
 
@@ -307,16 +253,6 @@ pub fn resolve_anycode_cloud_endpoint(
         base_url: url,
         api_key: key,
     })
-}
-
-fn read_provider_credential(provider: &str) -> Option<String> {
-    let (_, cfg) = crate::config_file::read_config_value(None).ok()?;
-    cfg.get("provider_credentials")
-        .and_then(|v| v.get(provider))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
 }
 
 pub fn default_gateway_chat_url() -> String {
@@ -444,38 +380,5 @@ mod tests {
         assert!(!gateway_chat_url_reachable(
             "https://anycode.work/v1/chat/completions"
         ));
-    }
-
-    #[test]
-    fn map_cloud_models_to_direct_agnes() {
-        assert_eq!(
-            map_cloud_model_to_direct_agnes("agnes-chat"),
-            "agnes-2.0-flash"
-        );
-        assert_eq!(
-            map_cloud_model_to_direct_agnes("agnes-reasoner"),
-            "agnes-2.0-flash"
-        );
-        assert_eq!(
-            map_cloud_model_to_direct_agnes("agnes-2.0-flash"),
-            "agnes-2.0-flash"
-        );
-    }
-
-    #[test]
-    fn resolve_endpoint_falls_back_to_agnes_for_production_portal() {
-        crate::config_file::set_config_value_override(serde_json::json!({
-            "provider_credentials": { "agnes": "test-agnes-key-for-ci" }
-        }));
-        let resolved = resolve_anycode_cloud_endpoint(
-            "auto",
-            Some("https://anycode.work/v1/chat/completions"),
-            None,
-        );
-        crate::config_file::clear_config_value_override();
-        let resolved = resolved.expect("agnes credential should enable fallback");
-        assert_eq!(resolved.base_url, AGNES_DIRECT_CHAT_URL);
-        assert_eq!(resolved.model, "agnes-2.0-flash");
-        assert_eq!(resolved.api_key, "test-agnes-key-for-ci");
     }
 }

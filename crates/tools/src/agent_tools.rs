@@ -7,8 +7,9 @@
 
 use crate::services::ToolServices;
 use crate::skills::{
-    load_skill_instructions, parse_skill_manifest_text, truncate_skill_output, SkillCatalog,
-    MAX_SKILL_OUTPUT_BYTES,
+    acceptance as skill_acceptance, extract_markdown_sections, extract_skill_body,
+    load_skill_instructions, parse_skill_manifest_file, parse_skill_manifest_text,
+    truncate_skill_output, SkillCatalog, MAX_SKILL_OUTPUT_BYTES,
 };
 use anycode_core::prelude::*;
 use anycode_core::DiskTaskOutput;
@@ -830,9 +831,28 @@ impl Tool for SkillTool {
         stdout = truncate_skill_output(stdout, MAX_SKILL_OUTPUT_BYTES);
         stderr = truncate_skill_output(stderr, MAX_SKILL_OUTPUT_BYTES);
         let exit_code = out.status.code();
-        let error = if ok {
-            None
-        } else {
+
+        // P0.4 skill contract: re-attach the SOP input/output/acceptance
+        // contract and run declarative acceptance checks. Weak chat models
+        // follow checklists, not vibes — failed checks become a tool error so
+        // the agent loop turns them into a repair turn.
+        let manifest = parse_skill_manifest_file(&root.join("SKILL.md"));
+        let sop_contract = std::fs::read_to_string(root.join("SKILL.md"))
+            .ok()
+            .and_then(|text| {
+                extract_markdown_sections(
+                    &extract_skill_body(&text),
+                    &["## Inputs", "## Output", "## Acceptance Checks"],
+                    4 * 1024,
+                )
+            });
+        let acceptance: Vec<skill_acceptance::AcceptanceOutcome> = manifest
+            .as_ref()
+            .map(|m| skill_acceptance::run_acceptance_checks(&m.acceptance, &cwd))
+            .unwrap_or_default();
+        let acceptance_failure = skill_acceptance::summarize_failures(&acceptance);
+
+        let error = if !ok {
             let stderr_line = stderr
                 .lines()
                 .map(str::trim)
@@ -855,12 +875,18 @@ impl Tool for SkillTool {
                 )
             };
             Some(msg)
+        } else {
+            acceptance_failure
+                .as_ref()
+                .map(|f| format!("skill acceptance checks failed: {f}"))
         };
         Ok(ToolOutput {
             result: serde_json::json!({
                 "stdout": stdout,
                 "stderr": stderr,
-                "code": exit_code
+                "code": exit_code,
+                "sop_contract": sop_contract,
+                "acceptance": acceptance,
             }),
             error,
             duration_ms: start.elapsed().as_millis() as u64,

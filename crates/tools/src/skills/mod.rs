@@ -1,8 +1,10 @@
 //! Skill discovery: `SKILL.md` frontmatter + multi-root scan (Agent Skills–style).
 
+pub mod acceptance;
 mod effective;
 pub mod install;
 pub mod router;
+pub mod scaffold;
 pub mod vet;
 pub use effective::SkillsGovernance;
 pub use install::{
@@ -64,6 +66,9 @@ pub struct SkillManifest {
     /// Empty = all platforms; otherwise e.g. darwin, linux.
     #[serde(default)]
     pub platforms: Vec<String>,
+    /// Declarative post-run acceptance checks (see `skills::acceptance`).
+    #[serde(default)]
+    pub acceptance: Vec<acceptance::SkillAcceptanceCheck>,
 }
 
 #[derive(Debug, Clone)]
@@ -350,10 +355,21 @@ impl SkillCatalog {
         } else {
             Box::new(self.skills.iter())
         };
-        let filtered: Vec<&SkillMeta> = iter.collect();
+        let mut filtered: Vec<&SkillMeta> = iter.collect();
         if filtered.is_empty() {
             return None;
         }
+        // Deterministic order (priority desc, id asc): better routing for weak
+        // models and a byte-stable prompt prefix for provider-side caching.
+        filtered.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.id.cmp(&b.id)));
+        let top_n = skill_prompt_top_n();
+        let overflow = if top_n > 0 && filtered.len() > top_n {
+            let n = filtered.len() - top_n;
+            filtered.truncate(top_n);
+            n
+        } else {
+            0
+        };
         let mut lines: Vec<String> = vec![
             "## Available skills".to_string(),
             String::new(),
@@ -399,6 +415,11 @@ impl SkillCatalog {
                     lines.push(format!("  - preview: {excerpt}"));
                 }
             }
+        }
+        if overflow > 0 {
+            lines.push(format!(
+                "- … {overflow} more skill(s) not listed — use **SkillSearch** to discover them"
+            ));
         }
         Some(lines.join("\n"))
     }
@@ -463,6 +484,42 @@ pub fn extract_skill_body(md: &str) -> String {
     body.trim().to_string()
 }
 
+/// Extract the given `## Heading` sections (verbatim, heading included) from a
+/// markdown body, joined with blank lines and capped at `max_bytes`. Used to
+/// attach a compact SOP contract to `Skill` tool results so weak chat models
+/// re-see the input/output/acceptance contract at execution time.
+#[must_use]
+pub fn extract_markdown_sections(
+    body: &str,
+    headings: &[&str],
+    max_bytes: usize,
+) -> Option<String> {
+    let mut out = String::new();
+    let mut capturing = false;
+    for line in body.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with('#') {
+            let was_capturing = capturing;
+            capturing = headings.contains(&trimmed);
+            if was_capturing && !capturing {
+                out.push('\n');
+            }
+        }
+        if capturing {
+            out.push_str(trimmed);
+            out.push('\n');
+            if out.len() >= max_bytes {
+                break;
+            }
+        }
+    }
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(truncate_skill_output(trimmed.to_string(), max_bytes))
+}
+
 fn skill_doc_excerpt(root: &Path) -> Option<String> {
     let body = load_skill_instructions(root)?;
     let line = body
@@ -519,6 +576,17 @@ pub fn truncate_skill_output(mut s: String, max: usize) -> String {
     let mut t = s.drain(..boundary).collect::<String>();
     t.push_str("\n… [truncated]");
     t
+}
+
+/// Max skills listed in the system-prompt catalog subsection. Weak/flash-tier
+/// models route better on a short priority-sorted list than a wall of entries;
+/// 0 = unlimited. Override with `ANYCODE_SKILL_PROMPT_TOP_N` (default 12).
+#[must_use]
+pub fn skill_prompt_top_n() -> usize {
+    std::env::var("ANYCODE_SKILL_PROMPT_TOP_N")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(12)
 }
 
 #[cfg(test)]

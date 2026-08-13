@@ -275,8 +275,8 @@ pub struct CloudSyncModelsResponse {
 }
 
 /// Hosted named models synced from account catalog (excluding synthetic `auto`).
-pub const ALLOWED_HOSTED_MODEL_IDS: &[&str] =
-    &["deepseek-v4-flash", "deepseek-v4-pro", "agnes-chat"];
+/// 云端托管只保留 DeepSeek V4 Flash / Pro。
+pub const ALLOWED_HOSTED_MODEL_IDS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
 
 pub fn is_allowed_hosted_catalog_model(model_id: &str) -> bool {
     ALLOWED_HOSTED_MODEL_IDS.contains(&model_id)
@@ -422,14 +422,9 @@ pub async fn post_cloud_sync_models() -> impl IntoResponse {
         .filter(|m| m.available && is_allowed_hosted_catalog_model(&m.id))
     {
         let reg_id = format!("cloud-{}", m.id);
-        let display = if m.id == "agnes-chat" {
-            "Agnes Chat".to_string()
-        } else {
-            m.display_name.clone()
-        };
         upsert_registry_item(
             &mut registry.items,
-            cloud_registry_item(&reg_id, &m.id, &display),
+            cloud_registry_item(&reg_id, &m.id, &m.display_name),
         );
         synced += 1;
     }
@@ -750,18 +745,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn allowed_catalog_only_agnes_chat() {
-        assert!(is_allowed_hosted_catalog_model("agnes-chat"));
+    fn allowed_catalog_only_deepseek_v4() {
+        assert!(is_allowed_hosted_catalog_model("deepseek-v4-flash"));
+        assert!(is_allowed_hosted_catalog_model("deepseek-v4-pro"));
+        assert!(!is_allowed_hosted_catalog_model("agnes-chat"));
         assert!(!is_allowed_hosted_catalog_model("agnes-code"));
         assert!(!is_allowed_hosted_catalog_model("agnes-reasoner"));
     }
 
     #[test]
     fn cloud_registry_item_tags_cloud_source() {
-        let item = cloud_registry_item("cloud-agnes-chat", "agnes-chat", "Agnes Chat");
+        let item = cloud_registry_item(
+            "cloud-deepseek-v4-flash",
+            "deepseek-v4-flash",
+            "DeepSeek V4 Flash",
+        );
         assert_eq!(item.source.as_deref(), Some("cloud"));
         assert_eq!(item.provider, "anycode_cloud");
-        assert_eq!(item.model, "agnes-chat");
+        assert_eq!(item.model, "deepseek-v4-flash");
     }
 
     #[test]

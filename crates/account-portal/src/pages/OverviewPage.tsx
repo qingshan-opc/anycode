@@ -16,6 +16,7 @@ export function OverviewPage() {
     periodEnd: string;
     tokensUsed: number;
     tokenLimit: number;
+    creditBalanceFen: number;
     apiKeyLimit: number;
     seatLimit: number;
   } | null>(null);
@@ -36,6 +37,7 @@ export function OverviewPage() {
         const ent = b.account.entitlements as {
           token_limit: number;
           tokens_used: number;
+          credit_balance_fen?: number;
           api_key_limit?: number;
           seat_limit?: number;
         };
@@ -47,6 +49,7 @@ export function OverviewPage() {
           periodEnd: sub.period_end ?? "—",
           tokensUsed: ent.tokens_used,
           tokenLimit: ent.token_limit,
+          creditBalanceFen: ent.credit_balance_fen ?? 0,
           apiKeyLimit: ent.api_key_limit ?? 1,
           seatLimit: ent.seat_limit ?? 1,
         });
@@ -122,8 +125,14 @@ export function OverviewPage() {
           <strong>{data.apiKeyLimit}</strong>
           <span className="muted">{t("overview.kpiApiHint")}</span>
         </Link>
-        <Link className="card overview-kpi-card nx-kpi nx-kpi--rose" to="/console/settings">
+        <Link className="card overview-kpi-card nx-kpi nx-kpi--cyan" to="/console/plans">
           <span className="nx-kpi__index">04</span>
+          <small className="muted">{t("overview.kpiCredit")}</small>
+          <strong>¥{(data.creditBalanceFen / 100).toFixed(2)}</strong>
+          <span className="muted">{t("overview.kpiCreditHint")}</span>
+        </Link>
+        <Link className="card overview-kpi-card nx-kpi nx-kpi--rose" to="/console/settings">
+          <span className="nx-kpi__index">05</span>
           <small className="muted">{t("overview.kpiStatus")}</small>
           <strong>{data.status}</strong>
           <span className="muted">{data.seatLimit} seats</span>

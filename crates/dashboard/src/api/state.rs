@@ -25,7 +25,6 @@ pub struct AppState {
     pub port: u16,
     pub started_at: String,
     pub pid: u32,
-    pub managed_local_llm: crate::managed_local_llm::ManagedLocalLlm,
     /// One-shot Desktop bootstrap token (process memory only). Consumed by
     /// `/api/auth/desktop-bootstrap` to mint a local `dw_session` cookie.
     pub desktop_bootstrap_token: Arc<Mutex<Option<String>>>,

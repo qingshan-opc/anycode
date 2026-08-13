@@ -83,11 +83,12 @@ pub use memory_pipeline::{
 pub use message::{Message, MessageContent, MessageRole};
 pub use model_profile::ModelRouteProfile;
 pub use plan_tree::{
-    apply_plan_patches, format_plan_tree_summary, format_plan_tree_terminal,
-    plan_tree_all_completed, plan_tree_current_focus, plan_tree_in_progress_leaf_count,
-    plan_tree_is_empty, plan_tree_next_pending, rollup_plan_statuses, validate_plan_tree,
-    PlanLimits, PlanNode, PlanNodeKind, PlanPatch, PlanStatus, PlanTree, PlanValidationError,
-    PLAN_TREE_CONTEXT_PREFIX, PLAN_TREE_MAX_DEPTH, PLAN_TREE_MAX_NODES,
+    apply_plan_patches, format_plan_doc, format_plan_tree_summary, format_plan_tree_terminal,
+    parse_plan_doc, plan_tree_all_completed, plan_tree_current_focus, plan_tree_from_storage,
+    plan_tree_in_progress_leaf_count, plan_tree_is_empty, plan_tree_next_pending,
+    plan_tree_to_storage, rollup_plan_statuses, validate_plan_tree, PlanLimits, PlanNode,
+    PlanNodeKind, PlanPatch, PlanStatus, PlanTree, PlanValidationError, PLAN_TREE_CONTEXT_PREFIX,
+    PLAN_TREE_MAX_DEPTH, PLAN_TREE_MAX_NODES,
 };
 pub use query_source::QuerySource;
 pub use reasoning::{
@@ -122,8 +123,8 @@ pub use tool_catalog::{
 };
 pub use traits::{Agent, LLMClient, MemoryStore, SubAgentExecutor, Tool};
 pub use verification::{
-    GatePlan, GatePolicy, GateRequirement, GateSeverity, VerificationOutcome, VerificationReport,
-    VerificationResult, VERIFICATION_SCHEMA_VERSION,
+    GatePlan, GatePolicy, GateRequirement, GateSeverity, RubricItem, VerificationOutcome,
+    VerificationReport, VerificationResult, VERIFICATION_SCHEMA_VERSION,
 };
 pub use vision::{
     attach_vision_images, vision_images_from_metadata, VisionImage,

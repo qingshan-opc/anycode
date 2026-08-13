@@ -1,15 +1,18 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useT } from "@/i18n/context";
+import { DiagramCardShell } from "@/components/chat/DiagramCardShell";
 
 type Props = {
   code: string;
+  sessionId?: string | null;
 };
 
-export function MermaidDiagram({ code }: Props) {
+export function MermaidDiagram({ code, sessionId = null }: Props) {
   const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const diagramId = useId().replace(/:/g, "");
   const [error, setError] = useState<string | null>(null);
+  const [rendered, setRendered] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -26,6 +29,7 @@ export function MermaidDiagram({ code }: Props) {
         if (!cancelled && containerRef.current) {
           containerRef.current.innerHTML = svg;
           setError(null);
+          setRendered(true);
         }
       } catch (err) {
         if (!cancelled) {
@@ -48,9 +52,14 @@ export function MermaidDiagram({ code }: Props) {
   }
 
   return (
-    <div className="dw-mermaid-card">
-      <p className="dw-mermaid-card__label">{t("conversations.mermaid.label")}</p>
+    <DiagramCardShell
+      kind="mermaid"
+      source={code}
+      label={t("conversations.mermaid.label")}
+      sessionId={sessionId}
+      rendered={rendered}
+    >
       <div ref={containerRef} className="dw-mermaid-card__canvas" />
-    </div>
+    </DiagramCardShell>
   );
 }

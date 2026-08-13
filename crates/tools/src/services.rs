@@ -472,13 +472,10 @@ impl ToolServices {
         names: Vec<String>,
         prefixes: Vec<String>,
     ) -> Option<(Vec<String>, Vec<String>)> {
-        std::mem::replace(
-            &mut *self
-                .parent_task_tool_deny
-                .lock()
-                .expect("parent_task_tool_deny"),
-            Some((names, prefixes)),
-        )
+        self.parent_task_tool_deny
+            .lock()
+            .expect("parent_task_tool_deny")
+            .replace((names, prefixes))
     }
 
     pub fn restore_parent_task_tool_deny(&self, previous: Option<(Vec<String>, Vec<String>)>) {
@@ -1294,9 +1291,7 @@ impl ToolServices {
 
     pub fn update_cron(&self, id: &str, patch: CronJobPatch) -> Option<CronJob> {
         let mut g = self.crons.lock().expect("crons mutex");
-        let Some(job) = g.iter_mut().find(|c| c.id == id) else {
-            return None;
-        };
+        let job = g.iter_mut().find(|c| c.id == id)?;
         if let Some(name) = patch.name.filter(|s| !s.trim().is_empty()) {
             job.name = Some(name);
         }
@@ -1830,6 +1825,7 @@ mod orchestration_persist_tests {
         s.replace_plan_tree(
             Some("sess_a"),
             PlanTree {
+                prose: String::new(),
                 roots: vec![PlanNode {
                     id: "root".into(),
                     title: "Plan A".into(),
@@ -1843,6 +1839,7 @@ mod orchestration_persist_tests {
         s.replace_plan_tree(
             Some("sess_b"),
             PlanTree {
+                prose: String::new(),
                 roots: vec![PlanNode {
                     id: "root".into(),
                     title: "Plan B".into(),

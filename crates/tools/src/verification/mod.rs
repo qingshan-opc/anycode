@@ -1,6 +1,8 @@
 //! Independent artifact validators used by CompletionGuard.
 
-mod office;
+pub mod code;
+pub mod office;
+pub mod project_gates;
 mod web;
 
 use anycode_core::{
@@ -11,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use code::{CodeStackTestsValidator, CodeStackVerifyValidator};
 pub use office::{
     DocxClassificationValidator, DocxCommercialValidator, DocxOpenValidator,
     DocxStructureValidator, PptxDensityValidator, PptxDisclaimerValidator, PptxEditableValidator,
@@ -72,6 +75,8 @@ impl ValidatorRegistry {
         reg.register(Arc::new(SlideHtmlValidateValidator));
         reg.register(Arc::new(ReportMdValidateValidator));
         reg.register(Arc::new(WorkbookValidateValidator));
+        reg.register(Arc::new(CodeStackVerifyValidator));
+        reg.register(Arc::new(CodeStackTestsValidator));
         reg
     }
 

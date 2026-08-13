@@ -1,9 +1,10 @@
 //! macOS native media bridge — re-export shared crate and LLM-specific helpers.
 
 pub use anycode_apple_media::{
-    convert_audio_to_wav, keychain_get, keychain_set, mime_to_ext, ocr_image_bytes,
-    post_notification, query_capabilities, read_pasteboard, synthesize_speech,
-    transcribe_audio_bytes, AppleMediaCapabilities, PasteboardItem, NO_EXTRA_PATHS,
+    convert_audio_to_wav, extract_video_frames, keychain_get, keychain_set, mime_to_ext,
+    ocr_image_bytes, post_notification, query_capabilities, read_pasteboard, synthesize_speech,
+    transcribe_audio_bytes, AppleMediaCapabilities, PasteboardItem, VideoFrameExtraction,
+    NO_EXTRA_PATHS,
 };
 
 use anycode_core::CoreError;

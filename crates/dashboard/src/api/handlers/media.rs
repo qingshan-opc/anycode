@@ -24,9 +24,8 @@ pub async fn get_media_status() -> impl IntoResponse {
     };
     let reg = MediaClientRegistry::from_config(&cfg);
     let apple_caps = apple_media::query_capabilities(apple_media::NO_EXTRA_PATHS);
-    let ocr_available = crate::control::vision_payload::ocr_fallback_available();
-    let chat_vision =
-        crate::control::vision_payload::active_chat_supports_vision().unwrap_or(false);
+    let ocr_available = crate::control::media_payload::ocr_fallback_available();
+    let chat_vision = crate::control::media_payload::active_chat_supports_vision().unwrap_or(false);
     let image_attach_ok = chat_vision || ocr_available;
     Json(json!({
         "stt_configured": reg.stt.is_some(),
@@ -57,16 +56,16 @@ pub struct OcrRequest {
 
 /// OCR images via Apple Vision helper — for text-only chat brains.
 pub async fn ocr_images(Json(body): Json<OcrRequest>) -> impl IntoResponse {
-    let payloads: Vec<crate::control::vision_payload::VisionImagePayload> = body
+    let payloads: Vec<crate::control::media_payload::VisionImagePayload> = body
         .images
         .into_iter()
-        .map(|img| crate::control::vision_payload::VisionImagePayload {
+        .map(|img| crate::control::media_payload::VisionImagePayload {
             mime_type: img.mime_type,
             data_base64: img.data_base64,
         })
         .collect();
     match tokio::task::spawn_blocking(move || {
-        crate::control::vision_payload::ocr_images_to_text(&payloads)
+        crate::control::media_payload::ocr_images_to_text(&payloads)
     })
     .await
     {
@@ -283,6 +282,121 @@ pub async fn transcribe_audio(mut multipart: Multipart) -> impl IntoResponse {
             })),
         )
             .into_response(),
+    }
+}
+
+const VIDEO_EXTS: &[&str] = &["mp4", "mov", "m4v", "webm"];
+
+/// Upload a video for chat understanding (P1.2): stream to disk under a fresh
+/// `video_ref`, then extract frames + transcript into a cached manifest.
+/// Extraction is synchronous so the composer can show a "preparing" state and
+/// send right after.
+pub async fn upload_video(mut multipart: Multipart) -> impl IntoResponse {
+    let video_ref = crate::control::video_frames::new_video_ref();
+    let mut source: Option<std::path::PathBuf> = None;
+
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let filename = field.file_name().unwrap_or("video.mp4").to_string();
+        let ext = filename
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !VIDEO_EXTS.contains(&ext.as_str()) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": "unsupported video type (mp4/mov/m4v/webm)"})),
+            )
+                .into_response();
+        }
+        let path = match crate::control::video_frames::video_source_path(&video_ref, &ext) {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"ok": false, "error": e.to_string()})),
+                )
+                    .into_response()
+            }
+        };
+        // NB: two failure modes were observed on the full dashboard runtime
+        // (loopback, small files): a `field.chunk()` streaming loop
+        // intermittently yielded zero bytes, and `tokio::fs::File::create` +
+        // `write_all` + drop left the file at 0 bytes for a short window
+        // AFTER write_all resolved Ok — tripping prepare_video's empty-file
+        // check. `field.bytes()` (same read path as transcribe_audio) plus a
+        // single std::fs::write inside spawn_blocking are both atomic w.r.t.
+        // the metadata read that follows. The buffer is handler-capped at
+        // MAX_VIDEO_BYTES below; this route is loopback-only.
+        let data = match field.bytes().await {
+            Ok(d) => d,
+            Err(e) => {
+                crate::control::video_frames::discard_video(&video_ref);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"ok": false, "error": format!("read upload: {e}")})),
+                )
+                    .into_response();
+            }
+        };
+        if data.len() as u64 > crate::control::media_payload::MAX_VIDEO_BYTES {
+            crate::control::video_frames::discard_video(&video_ref);
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({
+                    "ok": false,
+                    "error": format!("video too large (max {} MB)", crate::control::media_payload::MAX_VIDEO_BYTES / 1024 / 1024)
+                })),
+            )
+                .into_response();
+        }
+        let write_path = path.clone();
+        let write_result = tokio::task::spawn_blocking(move || std::fs::write(&write_path, &data))
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+            .and_then(|r| r);
+        if let Err(e) = write_result {
+            crate::control::video_frames::discard_video(&video_ref);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"ok": false, "error": format!("write upload: {e}")})),
+            )
+                .into_response();
+        }
+        source = Some(path);
+        break;
+    }
+
+    let Some(source) = source else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": "missing video file field"})),
+        )
+            .into_response();
+    };
+
+    match crate::control::video_frames::prepare_video(&video_ref, &source).await {
+        Ok(manifest) => Json(json!({
+            "ok": true,
+            "video_ref": video_ref,
+            "duration_secs": manifest.duration_secs,
+            "frame_count": manifest.frame_count,
+            "has_audio": manifest.has_audio,
+            "has_transcript": manifest.transcript.is_some(),
+            "extractor": manifest.extractor,
+        }))
+        .into_response(),
+        Err(e) => {
+            crate::control::video_frames::discard_video(&video_ref);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": e.to_string()})),
+            )
+                .into_response()
+        }
     }
 }
 

@@ -694,6 +694,7 @@ function ConversationTurnView({
               <SubagentGroupCard
                 item={item}
                 isLive={isLast && isRunning}
+                sessionId={sessionId}
                 selectedToolId={selectedToolId}
                 onSelectTool={onSelectTool}
               />
@@ -783,6 +784,7 @@ function ConversationTurnView({
                 block={block}
                 live={lineLive}
                 expanded={segmentExpanded}
+                sessionId={sessionId}
               />
             </MessageRow>
           );
@@ -818,6 +820,7 @@ function ConversationTurnView({
                   live={lineLive}
                   expanded
                   forceStatic
+                  sessionId={sessionId}
                 />
               </MessageRow>
             );
@@ -844,6 +847,7 @@ function ConversationTurnView({
                   forceStreamSmooth={isLast && isRunning}
                   hideTimestamp={hideBubbleTimestamps}
                   collapsed={!segmentExpanded && !isFinal}
+                  sessionId={sessionId}
                 />
               </div>
             </MessageRow>
@@ -916,11 +920,13 @@ function MessageRow({
 function SubagentGroupCard({
   item,
   isLive,
+  sessionId = null,
   selectedToolId,
   onSelectTool,
 }: {
   item: import("@/lib/transcriptGrouping").SubagentGroupItem;
   isLive: boolean;
+  sessionId?: string | null;
   selectedToolId?: string | null;
   onSelectTool?: (tool: TranscriptBlock) => void;
 }) {
@@ -989,6 +995,7 @@ function SubagentGroupCard({
                 key={block.id}
                 text={body}
                 live={running && isLive && Boolean(block.meta?.live)}
+                sessionId={sessionId}
               />
             );
           }
@@ -999,6 +1006,7 @@ function SubagentGroupCard({
               block={block}
               live={running && isLive && Boolean(block.meta?.live)}
               expanded={running}
+              sessionId={sessionId}
             />
           );
         })}
@@ -1023,6 +1031,7 @@ function TimelineProgressLine({
   live,
   expanded: expandedProp,
   forceStatic = false,
+  sessionId = null,
 }: {
   block: TranscriptBlock;
   live: boolean;
@@ -1030,6 +1039,7 @@ function TimelineProgressLine({
   expanded: boolean;
   /** Always inline text — no fold chevron (mid-turn / live status). */
   forceStatic?: boolean;
+  sessionId?: string | null;
 }) {
   const t = useT();
   const locale = useLocale();
@@ -1056,7 +1066,7 @@ function TimelineProgressLine({
     return (
       <div className={`agent-work-line agent-work-line--static ${live ? "agent-work-line--live" : ""}`}>
         {mdBody ? (
-          <TranscriptMarkdown text={mdBody} live={live} className="agent-work-line__text" />
+          <TranscriptMarkdown text={mdBody} live={live} className="agent-work-line__text" sessionId={sessionId} />
         ) : (
           <p className="agent-work-line__text m-0">{preview.replace(/\s+/g, " ")}</p>
         )}
@@ -1109,6 +1119,7 @@ function TimelineProgressLine({
           text={mdBody}
           live={live}
           className="agent-work-line__text"
+          sessionId={sessionId}
         />
       ) : null}
       {finding ? (
@@ -1216,6 +1227,7 @@ const ReplyBubble = memo(function ReplyBubble({
   forceStreamSmooth = false,
   hideTimestamp = false,
   collapsed = false,
+  sessionId = null,
 }: {
   block: TranscriptBlock;
   modelName?: string | null;
@@ -1224,6 +1236,7 @@ const ReplyBubble = memo(function ReplyBubble({
   hideTimestamp?: boolean;
   /** Mid-turn accordion: fold into one-line preview when superseded. */
   collapsed?: boolean;
+  sessionId?: string | null;
 }) {
   const t = useT();
   const locale = useLocale();
@@ -1294,7 +1307,7 @@ const ReplyBubble = memo(function ReplyBubble({
   if (isStatus) {
     return (
       <div className="agent-status-line">
-        <TranscriptMarkdown text={smoothedBody} live={streamActive} />
+        <TranscriptMarkdown text={smoothedBody} live={streamActive} sessionId={sessionId} />
         {showCursor && <span className="chat-stream-cursor" aria-hidden />}
       </div>
     );
@@ -1349,7 +1362,7 @@ const ReplyBubble = memo(function ReplyBubble({
         icon="smart_toy"
         headerActions={headerActions}
       >
-        <TranscriptMarkdown text={smoothedBody} live={streamActive && isAssistant} />
+        <TranscriptMarkdown text={smoothedBody} live={streamActive && isAssistant} sessionId={sessionId} />
         {showCursor && <span className="chat-stream-cursor" aria-hidden />}
         {!hideTimestamp && (
           <time className="block mt-2 text-[11px] text-secondary">
@@ -1399,7 +1412,7 @@ const ReplyBubble = memo(function ReplyBubble({
         <ErrorMessageBody text={block.body} />
       ) : (
         <>
-          <TranscriptMarkdown text={smoothedBody} live={streamActive && isAssistant} />
+          <TranscriptMarkdown text={smoothedBody} live={streamActive && isAssistant} sessionId={sessionId} />
           {showCursor && <span className="chat-stream-cursor" aria-hidden />}
         </>
       )}

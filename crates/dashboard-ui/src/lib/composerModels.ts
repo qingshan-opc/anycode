@@ -1,45 +1,12 @@
 import type { ConfiguredModel, ModelsRegistryView } from "@/api/types";
 
-/** Heuristic when registry capabilities omit vision (legacy / catalog gap). */
-export function modelLikelySupportsVision(modelId: string): boolean {
-  const mid = modelId.trim().toLowerCase();
-  if (!mid) return false;
-  if (
-    mid.includes("whisper") ||
-    mid.includes("embed") ||
-    mid.includes("dall-e") ||
-    mid.includes("tts") ||
-    mid.includes("speech")
-  ) {
-    return false;
-  }
-  return (
-    mid.includes("vision") ||
-    mid.includes("gemini") ||
-    mid.includes("gpt-4") ||
-    mid.includes("gpt-4o") ||
-    mid.includes("gpt-5") ||
-    mid.includes("claude-3") ||
-    mid.includes("claude-4") ||
-    mid.includes("claude-sonnet") ||
-    mid.includes("claude-opus") ||
-    mid.includes("claude-haiku") ||
-    mid.includes("qwen-vl") ||
-    mid.includes("qwen2-vl") ||
-    mid.includes("qwen3-vl") ||
-    mid.includes("deepseek-vl") ||
-    mid.includes("llava") ||
-    mid.includes("kimi") ||
-    mid.includes("moonshot") ||
-    mid.includes("glm-4v") ||
-    mid.includes("yi-vision") ||
-    mid.includes("-vl-") ||
-    mid.includes("vl-")
-  );
-}
-
+/**
+ * Registry is the sole authority on modality support (roadmap P1.1) — the old
+ * substring mirror of the Rust heuristic was removed; unknown models simply
+ * fall through to the backend's authoritative re-check on send.
+ */
 function itemSupportsVision(item: ConfiguredModel): boolean {
-  return item.capabilities.includes("vision") || modelLikelySupportsVision(item.model);
+  return item.capabilities.includes("vision");
 }
 
 /**
@@ -64,9 +31,6 @@ export function chatModelSupportsVision(registry?: ModelsRegistryView | null): b
   );
   if (globalCandidate) {
     return itemSupportsVision(globalCandidate);
-  }
-  if (registry.global?.model) {
-    return modelLikelySupportsVision(registry.global.model);
   }
   // No resolved chat model yet — allow UI attach; backend re-checks on send.
   return true;
@@ -102,6 +66,11 @@ export type ComposerModelOption = {
   subtitle: string;
   isCloud?: boolean;
   cloudModel?: string;
+  /** Lifecycle tier: current | legacy | deprecated | removed (absent = current). */
+  tier?: string;
+  tierNote?: string | null;
+  tierReplacement?: string | null;
+  curated?: boolean;
 };
 
 export const COMPOSER_MODEL_STORAGE_KEY = "anycode-composer-model";
@@ -112,11 +81,7 @@ export function modelLabel(item: ConfiguredModel): string {
 }
 
 export function modelSubtitle(item: ConfiguredModel): string {
-  const id = item.id?.trim();
   const providerModel = `${item.provider}/${item.model}`;
-  if (item.source === "managed_local_runtime" && id) {
-    return `${id} · ${providerModel}`;
-  }
   if (item.display_name?.trim()) {
     return providerModel;
   }
@@ -139,13 +104,21 @@ export function listChatModels(items: ConfiguredModel[]): ComposerModelOption[] 
       subtitle: modelSubtitle(item),
       isCloud: item.source === "cloud",
       cloudModel: item.model,
+      tier: item.tier,
+      tierNote: item.tier_note,
+      tierReplacement: item.tier_replacement,
+      curated: item.curated,
     }));
 
   return options.sort((a, b) => {
     const rank = (o: ComposerModelOption) => {
       if (o.isCloud && o.cloudModel === "auto") return 0;
       if (o.isCloud) return 1;
-      return 2;
+      // Outdated models sink below everything else; they stay selectable for
+      // users who already rely on them.
+      if (o.tier === "deprecated" || o.tier === "removed") return 4;
+      if (o.curated) return 2;
+      return 3;
     };
     const dr = rank(a) - rank(b);
     if (dr !== 0) return dr;

@@ -14,33 +14,6 @@ import type {
 import { get, post, del, patch } from "../http";
 import type { AuthUser } from "./shared";
 
-export interface LocalModelStatus {
-  id: string;
-  version: string;
-  display_name: string;
-  model_id: string;
-  file_name: string;
-  download_url: string;
-  sha256: string;
-  size_bytes: number;
-  architectures: string[];
-  context_tokens: number;
-  minimum_ram_bytes: number;
-  license: string;
-  capabilities: { chat: boolean; tools: boolean; vision: boolean };
-  runtime: string;
-  runtime_args: string[];
-  preview: boolean;
-  phase: string;
-  model_path?: string | null;
-  base_url?: string | null;
-  port?: number | null;
-  download_bytes: number;
-  download_total: number;
-  disk_free_bytes?: number | null;
-  ram_total_bytes?: number | null;
-  last_error?: string | null;
-}
 
 export const coreClient = {
   health: () => get<HealthResponse>("/api/health"),
@@ -187,46 +160,4 @@ export const coreClient = {
   cloudSyncModels: () =>
     post<{ ok: boolean; synced: number; error?: string }>("/api/cloud/sync-models", {}),
   cloudUnlink: () => post<{ ok: boolean; removed?: number }>("/api/cloud/unlink", {}),
-  localModels: () => get<{ models: LocalModelStatus[] }>("/api/local-models"),
-  localModelDownload: (id: string) =>
-    post<{ ok: boolean; error?: string }>(
-      `/api/local-models/${encodeURIComponent(id)}/download`,
-      {},
-    ),
-  localModelCancelDownload: (id: string) =>
-    post<{ ok: boolean }>(
-      `/api/local-models/${encodeURIComponent(id)}/download/cancel`,
-      {},
-    ),
-  localModelStart: (id: string) =>
-    post<{ ok: boolean; error?: string }>(
-      `/api/local-models/${encodeURIComponent(id)}/start`,
-      {},
-    ),
-  localModelStop: (id: string) =>
-    post<{ ok: boolean; error?: string }>(
-      `/api/local-models/${encodeURIComponent(id)}/stop`,
-      {},
-    ),
-  localModelDelete: (id: string) =>
-    del<{ ok: boolean; error?: string }>(`/api/local-models/${encodeURIComponent(id)}`),
-  managedLocalStatus: () =>
-    get<{
-      id: string;
-      phase: string;
-      model_path?: string | null;
-      base_url?: string | null;
-      port?: number | null;
-      download_bytes: number;
-      download_total: number;
-      context_tokens: number;
-      tool_calls_supported: boolean;
-      last_error?: string | null;
-    }>("/api/local-llm/status"),
-  managedLocalDownload: () => post<{ ok: boolean; error?: string }>("/api/local-llm/download", {}),
-  managedLocalCancelDownload: () =>
-    post<{ ok: boolean }>("/api/local-llm/download/cancel", {}),
-  managedLocalStart: () => post<{ ok: boolean; error?: string }>("/api/local-llm/start", {}),
-  managedLocalStop: () => post<{ ok: boolean; error?: string }>("/api/local-llm/stop", {}),
-  managedLocalDelete: () => del<{ ok: boolean; error?: string }>("/api/local-llm/model"),
 };

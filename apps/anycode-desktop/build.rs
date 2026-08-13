@@ -28,10 +28,7 @@ fn should_stage_ui(src: &Path, dst: &Path) -> bool {
     if !src.join("index.html").is_file() {
         return false;
     }
-    let fp_path = dst
-        .parent()
-        .unwrap_or(dst)
-        .join(".ui-stage-fingerprint");
+    let fp_path = dst.parent().unwrap_or(dst).join(".ui-stage-fingerprint");
     let Some(current) = dist_stamp(src) else {
         return true;
     };
@@ -46,10 +43,7 @@ fn should_stage_ui(src: &Path, dst: &Path) -> bool {
 }
 
 fn write_fingerprint(src: &Path, dst: &Path) {
-    let fp_path = dst
-        .parent()
-        .unwrap_or(dst)
-        .join(".ui-stage-fingerprint");
+    let fp_path = dst.parent().unwrap_or(dst).join(".ui-stage-fingerprint");
     if let Some(stamp) = dist_stamp(src) {
         let _ = fs::write(fp_path, stamp);
     }

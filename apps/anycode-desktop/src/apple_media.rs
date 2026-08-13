@@ -49,7 +49,10 @@ fn resolve_extra_paths(app: &AppHandle) -> Vec<PathBuf> {
     ];
     let mut paths = Vec::new();
     for rel in candidates {
-        if let Ok(p) = app.path().resolve(rel, tauri::path::BaseDirectory::Resource) {
+        if let Ok(p) = app
+            .path()
+            .resolve(rel, tauri::path::BaseDirectory::Resource)
+        {
             if p.is_file() {
                 paths.push(p);
             }
@@ -65,8 +68,9 @@ fn mime_to_ext(mime: &str) -> &str {
 #[tauri::command]
 pub async fn apple_media_capabilities(app: AppHandle) -> AppleMediaCapabilitiesView {
     let extra = resolve_extra_paths(&app);
-    query_capabilities(&extra).map(Into::into).unwrap_or_else(|| {
-        AppleMediaCapabilitiesView {
+    query_capabilities(&extra)
+        .map(Into::into)
+        .unwrap_or_else(|| AppleMediaCapabilitiesView {
             stt: false,
             ocr: false,
             tts: false,
@@ -77,8 +81,7 @@ pub async fn apple_media_capabilities(app: AppHandle) -> AppleMediaCapabilitiesV
             helper_path: extra.first().map(|p| p.display().to_string()),
             speech_authorized: None,
             microphone_authorized: None,
-        }
-    })
+        })
 }
 
 #[tauri::command]
@@ -133,9 +136,8 @@ pub async fn apple_media_synthesize(
     let extra = resolve_extra_paths(&app);
     let locale = locale.unwrap_or_else(|| "zh-CN".into());
     tauri::async_runtime::spawn_blocking(move || {
-        synthesize_speech(&extra, &text, voice.as_deref(), &locale).map(|bytes| {
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        })
+        synthesize_speech(&extra, &text, voice.as_deref(), &locale)
+            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
     })
     .await
     .map_err(|e| format!("tts task failed: {e}"))?
@@ -150,11 +152,7 @@ pub async fn apple_media_read_pasteboard(app: AppHandle) -> Result<Vec<Pasteboar
 }
 
 #[tauri::command]
-pub async fn apple_media_notify(
-    app: AppHandle,
-    title: String,
-    body: String,
-) -> Result<(), String> {
+pub async fn apple_media_notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
     let extra = resolve_extra_paths(&app);
     tauri::async_runtime::spawn_blocking(move || {
         anycode_apple_media::post_notification(&extra, &title, &body)

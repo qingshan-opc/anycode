@@ -5,8 +5,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 /// Hosted named models exposed to clients (excluding synthetic `auto`).
-pub const ALLOWED_HOSTED_MODEL_IDS: &[&str] =
-    &["deepseek-v4-flash", "deepseek-v4-pro", "agnes-chat"];
+/// 云端托管只保留 DeepSeek V4 Flash / Pro。
+pub const ALLOWED_HOSTED_MODEL_IDS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
 
 pub fn is_allowed_hosted_model(model_id: &str) -> bool {
     model_id == "auto" || ALLOWED_HOSTED_MODEL_IDS.contains(&model_id)
@@ -64,21 +64,16 @@ fn plan_allows_model(user_plan: &str, min_plan: &str) -> bool {
     rank(user_plan) >= rank(min_plan)
 }
 
-/// Resolve `auto` to DeepSeek Flash when plan-available (cost-first); else Agnes.
+/// Resolve `auto` to DeepSeek Flash when plan-available (cost-first); else Pro.
 pub async fn resolve_model_id(db: &AccountDb, plan_tier: &str, model_id: &str) -> Result<String> {
     if model_id == "auto" {
         let models = list_models(db, plan_tier).await?;
-        if let Some(flash) = models
-            .iter()
-            .find(|m| m.id == "deepseek-v4-flash" && m.available)
-        {
-            return Ok(flash.id.clone());
+        for preferred in ["deepseek-v4-flash", "deepseek-v4-pro"] {
+            if let Some(m) = models.iter().find(|m| m.id == preferred && m.available) {
+                return Ok(m.id.clone());
+            }
         }
-        let chat = models
-            .iter()
-            .find(|m| m.id == "agnes-chat" && m.available)
-            .ok_or_else(|| anyhow!("no hosted chat model available for plan"))?;
-        return Ok(chat.id.clone());
+        return Err(anyhow!("no hosted chat model available for plan"));
     }
     if !is_allowed_hosted_model(model_id) {
         return Err(anyhow!("model not supported: {model_id}"));
@@ -161,6 +156,7 @@ pub async fn record_usage(
 ) -> Result<()> {
     crate::quota::record_model_call(db, org_id).await?;
     let total = prompt_tokens + completion_tokens;
+    let cost_fen = usage_cost_fen(db, model_id, prompt_tokens, completion_tokens).await;
     let id = format!("use_{}", Uuid::new_v4());
     let mut tx = db.pool().begin().await?;
     sqlx::query(
@@ -180,15 +176,50 @@ pub async fn record_usage(
     .await?;
 
     sqlx::query(
-        "UPDATE entitlements SET tokens_used = tokens_used + ?, updated_at = NOW() WHERE organization_id = ?",
+        "UPDATE entitlements SET tokens_used = tokens_used + ?, credit_balance_fen = GREATEST(credit_balance_fen - ?, 0), updated_at = NOW() WHERE organization_id = ?",
     )
     .bind(total)
+    .bind(cost_fen)
     .bind(org_id)
     .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
     Ok(())
+}
+
+/// Cost of one call in 分 (fen): tokens × per-model CNY price (official × 2).
+/// Unknown/zero-priced models cost 0 — display-only rows never charge.
+async fn usage_cost_fen(
+    db: &AccountDb,
+    model_id: &str,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+) -> i64 {
+    let row = sqlx::query(
+        "SELECT CAST(COALESCE(price_per_1m_input_cny, 0) AS DOUBLE) AS pin, CAST(COALESCE(price_per_1m_output_cny, 0) AS DOUBLE) AS pout FROM cloud_models WHERE id = ? AND enabled = 1",
+    )
+    .bind(model_id)
+    .fetch_optional(db.pool())
+    .await;
+    let Ok(Some(row)) = row else {
+        return 0;
+    };
+    let pin: f64 = row.get("pin");
+    let pout: f64 = row.get("pout");
+    let cost_cny = (prompt_tokens as f64 * pin + completion_tokens as f64 * pout) / 1_000_000.0;
+    (cost_cny * 100.0).round().max(0.0) as i64
+}
+
+/// 额度余额（分）。额度制下这是托管调用的主要门槛；无过期时间。
+pub async fn credit_balance_fen(db: &AccountDb, org_id: &str) -> Result<i64> {
+    let balance: i64 = sqlx::query_scalar(
+        "SELECT credit_balance_fen FROM entitlements WHERE organization_id = ?",
+    )
+    .bind(org_id)
+    .fetch_one(db.pool())
+    .await?;
+    Ok(balance)
 }
 
 pub async fn check_quota(db: &AccountDb, org_id: &str, needed_tokens: i64) -> Result<bool> {
@@ -242,9 +273,9 @@ mod tests {
     #[test]
     fn allowed_hosted_models_contract() {
         assert!(is_allowed_hosted_model("auto"));
-        assert!(is_allowed_hosted_model("agnes-chat"));
         assert!(is_allowed_hosted_model("deepseek-v4-flash"));
         assert!(is_allowed_hosted_model("deepseek-v4-pro"));
+        assert!(!is_allowed_hosted_model("agnes-chat"));
         assert!(!is_allowed_hosted_model("agnes-code"));
         assert!(!is_allowed_hosted_model("agnes-reasoner"));
     }

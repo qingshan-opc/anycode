@@ -63,6 +63,10 @@ pub async fn plan_amount_fen(
     plan: &str,
     cycle: &str,
 ) -> Result<i32> {
+    if plan == crate::billing::CREDIT_TOPUP_PLAN {
+        // 充值面额固定 ¥50（额度入账 ¥100，见 activate_credit_topup）。
+        return Ok(crate::billing::CREDIT_TOPUP_PRICE_FEN);
+    }
     let from_env = match plan {
         "cloud_5h" => config.wechat_price_cloud_5h_fen,
         "pro" => config.wechat_price_pro_monthly_fen,
@@ -108,7 +112,9 @@ pub async fn create_native_order(
     }
     let amount_fen = plan_amount_fen(db, config, plan, billing_cycle).await?;
     let out_trade_no = Uuid::new_v4().simple().to_string();
-    let description = if plan == "cloud_5h" {
+    let description = if plan == crate::billing::CREDIT_TOPUP_PLAN {
+        "anycode 额度充值（充 ¥50 得 ¥100 额度，永久有效）".to_string()
+    } else if plan == "cloud_5h" {
         "anycode Cloud 5h 配额包（1000次/5小时）".to_string()
     } else {
         format!(

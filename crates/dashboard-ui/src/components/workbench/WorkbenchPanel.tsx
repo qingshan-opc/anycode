@@ -36,14 +36,15 @@ export function WorkbenchPanel({
         aria-hidden
       />
       <div
-        className="px-3 py-2.5 text-sm font-semibold text-secondary border-b border-outline-variant bg-surface-container-low shrink-0 flex items-center justify-between gap-2"
+        className="px-3 py-2.5 text-sm font-semibold text-secondary border-b border-outline-variant bg-surface-container-low shrink-0 grid grid-cols-[1fr_auto_1fr] items-center gap-2"
         data-tauri-drag-region
       >
-        <span className="inline-flex items-center gap-1.5">
-          <Icon name="view_sidebar" size={16} />
-          {t(workbenchPanelById(activeTab).titleKey)}
+        <span aria-hidden />
+        <span className="inline-flex items-center justify-center gap-1.5 min-w-0">
+          <Icon name={workbenchPanelById(activeTab).icon} size={16} />
+          <span className="truncate">{t(workbenchPanelById(activeTab).titleKey)}</span>
         </span>
-        <span className="inline-flex items-center gap-1 dw-no-drag" data-no-window-drag>
+        <span className="inline-flex items-center gap-1 justify-self-end dw-no-drag" data-no-window-drag>
           {onMoveToConversation && (
             <button
               type="button"

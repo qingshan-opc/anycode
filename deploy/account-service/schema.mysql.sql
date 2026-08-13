@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS entitlements (
   seat_limit                INT         NOT NULL,
   hosted_models_enabled     TINYINT(1)  NOT NULL DEFAULT 0,
   tokens_used               BIGINT      NOT NULL DEFAULT 0,
+  credit_balance_fen        BIGINT      NOT NULL DEFAULT 0 COMMENT '额度余额(分): 充值获得, 按 token×单价(官方2倍)扣减, 无有效期',
   cloud_unlimited_rate      TINYINT(1)  NOT NULL DEFAULT 0,
   quota_window_secs         INT         NOT NULL DEFAULT 0,
   calls_limit_per_window    INT         NOT NULL DEFAULT 0,
@@ -210,11 +211,13 @@ CREATE TABLE IF NOT EXISTS cloud_models (
   sort_order         INT            NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 云端托管目录只保留 DeepSeek V4 Flash / Pro（价格为官方 2 倍）。
 INSERT IGNORE INTO cloud_models
   (id, provider_id, display_name, upstream_model, context_window,
    price_per_1m_input_cny, price_per_1m_output_cny, min_plan, sort_order)
 VALUES
-  ('agnes-chat', 'agnes', 'Agnes Chat', 'agnes-chat', 128000, 3.6000, 10.8000, 'pro', 10);
+  ('deepseek-v4-flash', 'deepseek', 'DeepSeek V4 Flash', 'deepseek-v4-flash', 1000000, 2.0000, 4.0000, 'free', 5),
+  ('deepseek-v4-pro', 'deepseek', 'DeepSeek V4 Pro', 'deepseek-v4-pro', 1000000, 6.0000, 12.0000, 'free', 6);
 
 -- ---------------------------------------------------------------------------
 -- Upstream account pool + ops admin

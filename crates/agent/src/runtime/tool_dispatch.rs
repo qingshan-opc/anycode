@@ -506,7 +506,7 @@ impl AgentRuntime {
         }
         if let Some(v) = &ctx.verification {
             if let Ok(mut g) = v.lock() {
-                g.note_tool(&tool_call.name, &prepared.for_hook);
+                g.note_tool(&tool_call.name, &tool_call.input, &prepared.for_hook);
             }
         }
         if tool_call.name == "Bash" {

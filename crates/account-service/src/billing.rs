@@ -14,6 +14,16 @@ pub const SEAT_ADDON_YEARLY_PRICE_FEN: i32 = 30_000;
 /// payment_orders.plan value for seat add-on purchases (not a cloud_plans id).
 pub const SEAT_ADDON_PLAN: &str = "seat_addon";
 
+/// payment_orders.plan value for credit top-ups (not a cloud_plans id).
+/// 类 Cursor 额度制：支付 ¥50 得 ¥100 额度（额度 = 实付 × 2），永久有效。
+pub const CREDIT_TOPUP_PLAN: &str = "credit_topup";
+
+/// 充值面额（分）：¥50。
+pub const CREDIT_TOPUP_PRICE_FEN: i32 = 5_000;
+
+/// 充值赠送倍率：实付 × 2 入账额度（¥50 → ¥100）。
+pub const CREDIT_TOPUP_CREDIT_MULTIPLIER: i64 = 2;
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PaymentOrderView {
     pub id: String,
@@ -459,6 +469,58 @@ pub async fn pending_order_amount_by_out_trade_no(
     }))
 }
 
+/// Credit a top-up after successful payment: balance += amount × multiplier.
+/// 额度无有效期——不触碰 subscriptions 周期。
+pub async fn activate_credit_topup(
+    db: &AccountDb,
+    org_id: &str,
+    payment_order_id: &str,
+    amount_fen: i32,
+) -> Result<()> {
+    let credit_fen = i64::from(amount_fen) * CREDIT_TOPUP_CREDIT_MULTIPLIER;
+    let today = Utc::now().date_naive();
+    let invoice_id = format!("inv_{}", Uuid::new_v4());
+    let invoice_number = format!(
+        "AC-{}-{}",
+        Utc::now().format("%Y%m"),
+        &payment_order_id[4..12.min(payment_order_id.len())]
+    );
+    let mut tx = db.pool().begin().await?;
+    sqlx::query(
+        "UPDATE entitlements SET credit_balance_fen = credit_balance_fen + ?, updated_at = NOW() WHERE organization_id = ?",
+    )
+    .bind(credit_fen)
+    .bind(org_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE payment_orders SET status = 'paid', paid_at = NOW() WHERE id = ? AND organization_id = ?",
+    )
+    .bind(payment_order_id)
+    .bind(org_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO invoices (id, organization_id, number, period_start, period_end,
+          amount_fen, currency, amount_cny, status, payment_order_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'CNY', ?, 'paid', ?)
+        "#,
+    )
+    .bind(&invoice_id)
+    .bind(org_id)
+    .bind(&invoice_number)
+    .bind(today)
+    .bind(today)
+    .bind(amount_fen)
+    .bind(f64::from(amount_fen) / 100.0)
+    .bind(payment_order_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn mark_order_paid_by_out_trade_no(
     db: &AccountDb,
     out_trade_no: &str,
@@ -514,6 +576,11 @@ pub async fn mark_order_paid_by_out_trade_no(
             },
         )
         .await?;
+        return Ok(());
+    }
+
+    if plan == CREDIT_TOPUP_PLAN {
+        activate_credit_topup(db, &org_id, &order_id, amount_fen).await?;
         return Ok(());
     }
 

@@ -74,42 +74,6 @@ pub fn router(state: AppState) -> Router {
             "/cloud/a2a/handoff/{handoff_id}/reject",
             post(handlers::post_cloud_a2a_handoff_reject),
         )
-        .route("/local-models", get(handlers::list_local_models))
-        .route(
-            "/local-models/{model_id}",
-            get(handlers::get_local_model).delete(handlers::delete_local_model),
-        )
-        .route(
-            "/local-models/{model_id}/download",
-            post(handlers::post_local_model_download),
-        )
-        .route(
-            "/local-models/{model_id}/download/cancel",
-            post(handlers::post_local_model_cancel_download),
-        )
-        .route(
-            "/local-models/{model_id}/start",
-            post(handlers::post_local_model_start),
-        )
-        .route(
-            "/local-models/{model_id}/stop",
-            post(handlers::post_local_model_stop),
-        )
-        .route("/local-llm/status", get(handlers::get_managed_local_status))
-        .route(
-            "/local-llm/download",
-            post(handlers::post_managed_local_download),
-        )
-        .route(
-            "/local-llm/download/cancel",
-            post(handlers::post_managed_local_cancel_download),
-        )
-        .route("/local-llm/start", post(handlers::post_managed_local_start))
-        .route("/local-llm/stop", post(handlers::post_managed_local_stop))
-        .route(
-            "/local-llm/model",
-            delete(handlers::delete_managed_local_model),
-        )
         .route("/auth/me", get(handlers::get_auth_me))
         .route("/auth/login", post(handlers::post_auth_login))
         .route("/auth/logout", post(handlers::post_auth_logout))
@@ -348,6 +312,26 @@ pub fn router(state: AppState) -> Router {
             post(handlers::post_project_git_push),
         )
         .route(
+            "/projects/{project_id}/git/branches",
+            get(handlers::get_project_git_branches),
+        )
+        .route(
+            "/projects/{project_id}/git/checkout",
+            post(handlers::post_project_git_checkout),
+        )
+        .route(
+            "/projects/{project_id}/git/branch",
+            post(handlers::post_project_git_branch),
+        )
+        .route(
+            "/projects/{project_id}/git/log",
+            get(handlers::get_project_git_log),
+        )
+        .route(
+            "/projects/{project_id}/git/commit-diff",
+            get(handlers::get_project_git_commit_diff),
+        )
+        .route(
             "/workbench/browser/status",
             get(handlers::get_workbench_browser_status),
         )
@@ -570,6 +554,7 @@ pub fn router(state: AppState) -> Router {
         .route("/media/transcribe", post(handlers::transcribe_audio))
         .route("/media/ocr", post(handlers::ocr_images))
         .route("/media/tts", post(handlers::synthesize_speech))
+        .route("/media/video/upload", post(handlers::upload_video))
         .route("/settings/services", get(handlers::list_services))
         .route(
             "/settings/service-status",
@@ -714,6 +699,7 @@ pub fn router(state: AppState) -> Router {
         .route("/audit/events", get(handlers::list_audit_events))
         .route("/plugins", get(handlers::list_plugins))
         .route("/files/read-paths", post(handlers::read_file_paths))
+        .route("/diagrams", post(handlers::post_diagram))
         .route(
             "/plugins/{plugin_id}",
             axum::routing::put(handlers::put_plugin_enabled),
@@ -729,6 +715,18 @@ pub fn router(state: AppState) -> Router {
         .with_state(state.clone());
 
     let mut app = Router::new().nest("/api", api);
+
+    // P1.8: diagram share reads live outside /api auth so LAN colleagues can
+    // open a shared link; the /diagram/{id} page itself is an SPA route served
+    // by the UI fallback below. State is captured (top-level router is
+    // stateless) — deliberately not registered inside the authed /api nest.
+    let diagram_share_state = state.clone();
+    app = app.route(
+        "/diagram/{id}/source",
+        get(move |path: axum::extract::Path<String>| {
+            handlers::get_diagram_source_shared(diagram_share_state.clone(), path)
+        }),
+    );
 
     if !state.serve_ui {
         app = app.route(

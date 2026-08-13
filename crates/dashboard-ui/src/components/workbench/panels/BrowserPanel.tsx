@@ -22,6 +22,7 @@ import {
 } from "@/lib/cefBrowserEmbed";
 import { isTauriDesktop } from "@/lib/desktopShell";
 import { useWorkbenchBrowser } from "../hooks/useWorkbenchBrowser";
+import { AgentControlIndicator } from "./AgentControlIndicator";
 
 type Props = {
   projectId: string;
@@ -251,7 +252,9 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
     }
   };
 
-  // Design mode only changes host height — debounce a resize, never recreate CEF.
+  // Design mode and the agent-control pill only change host height — debounce a
+  // resize, never recreate CEF.
+  const agentLocked = lockState === "agent";
   useEffect(() => {
     if (!useCefEmbed || !active) return;
     const el = embedHostRef.current;
@@ -270,7 +273,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
       });
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [designMode, useCefEmbed, active]);
+  }, [designMode, agentLocked, useCefEmbed, active]);
 
   // Sync tab strip + address bar from CEF — never while the user is editing the URL.
   useEffect(() => {
@@ -362,25 +365,13 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
   return (
     <div className="flex flex-col h-full min-h-0">
       {!status.browserEnabled && (
-        <div className="px-2 py-2 text-[10px] text-warn border-b border-outline-variant/60 shrink-0">
+        <div className="px-2 py-2 text-xs text-warn border-b border-outline-variant/60 shrink-0">
           {t("workbench.browserDisabledHint")}{" "}
           <Link to="/settings" search={{ section: "notify" }} className="text-primary">
             {t("workbench.browserSetup")}
           </Link>
         </div>
       )}
-      <div className="flex items-center justify-between gap-2 px-2 py-1 border-b border-outline-variant/60 text-[10px] text-secondary shrink-0">
-        <span>
-          {lockState === "agent"
-            ? t("workbench.browserLockAgent")
-            : t("workbench.browserLockUser")}
-        </span>
-        {lockState === "agent" && (
-          <button type="button" className="dw-btn-secondary px-2 py-0.5 text-[10px]" onClick={unlockForUser}>
-            {t("workbench.browserUnlock")}
-          </button>
-        )}
-      </div>
       {useCefEmbed && (
         <div className="flex items-center gap-1 px-1 py-1 border-b border-outline-variant/60 bg-surface-container-low shrink-0 overflow-x-auto">
           {cefTabs.map((tab) => {
@@ -405,7 +396,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
                 <span className="truncate min-w-0">{label}</span>
                 <button
                   type="button"
-                  className="dw-btn-ghost p-0 text-[10px] leading-none shrink-0"
+                  className="dw-btn-ghost p-0 leading-none shrink-0"
                   aria-label={t("workbench.browserCloseTab")}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -556,13 +547,13 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
       )}
 
       {sendError && (
-        <p className="m-0 px-2 py-1 text-[10px] text-error border-b border-outline-variant/60 shrink-0">
+        <p className="m-0 px-2 py-1 text-xs text-error border-b border-outline-variant/60 shrink-0">
           {sendError}
         </p>
       )}
 
       {cefError && (
-        <p className="m-0 px-2 py-1 text-[10px] text-warn border-b border-outline-variant/60 shrink-0">
+        <p className="m-0 px-2 py-1 text-xs text-warn border-b border-outline-variant/60 shrink-0">
           CEF: {cefError}
         </p>
       )}
@@ -573,7 +564,11 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
             <div
               ref={embedHostRef}
               className={`conv-browser-cef-host w-full min-h-[240px] rounded border border-outline-variant/40 bg-transparent ${
-                designMode ? "h-[calc(100%-4.25rem)]" : "h-full"
+                designMode
+                  ? "h-[calc(100%-4.25rem)]"
+                  : agentLocked
+                    ? "h-[calc(100%-2.75rem)]"
+                    : "h-full"
               }`}
               aria-label={t("workbench.browserCefEmbed")}
             />
@@ -623,7 +618,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
                 />
                 <button
                   type="submit"
-                  className="dw-btn-primary px-2 py-1 text-[11px] shrink-0 rounded-full"
+                  className="dw-btn-primary px-2 py-1 text-xs shrink-0 rounded-full"
                   disabled={
                     !designInstruction.trim() ||
                     !conversationSessionId ||
@@ -731,7 +726,7 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
                 />
                 <button
                   type="submit"
-                  className="dw-btn-primary px-2 py-1 text-[11px] shrink-0 rounded-full"
+                  className="dw-btn-primary px-2 py-1 text-xs shrink-0 rounded-full"
                   disabled={
                     !designInstruction.trim() ||
                     !conversationSessionId ||
@@ -755,10 +750,11 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
                   : t("workbench.browserEmpty")}
             </p>
             {!createSession.isPending && !createSession.isError && !hasMeaningfulUrl && (
-              <p className="m-0 text-[10px] opacity-80">{t("workbench.browserAgentHint")}</p>
+              <p className="m-0 text-xs opacity-80">{t("workbench.browserAgentHint")}</p>
             )}
           </div>
         )}
+        {agentLocked && <AgentControlIndicator onTakeControl={unlockForUser} />}
       </div>
     </div>
   );

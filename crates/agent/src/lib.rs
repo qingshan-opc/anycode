@@ -46,6 +46,7 @@ pub use prompt_assembler::{
     SystemPromptSegment,
 };
 pub use runtime::{
+    delivery_metrics::{summarize_lines, DeliveryGatesSummary, DELIVERY_GATES_LOG},
     failover::{error_triggers_failover, FailoverPolicy},
     AgentClaudeToolGating, AgentRuntime, RuntimeCoreDeps, RuntimeMemoryOptions, RuntimeToolPolicy,
 };

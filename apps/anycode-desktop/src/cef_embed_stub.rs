@@ -18,6 +18,7 @@ pub struct CefEmbedStatus {
     pub title: Option<String>,
     pub tabs: Vec<CefTabInfo>,
     pub active_tab_id: Option<i32>,
+    pub crash_guard_disabled: bool,
 }
 
 fn empty_status() -> CefEmbedStatus {
@@ -28,12 +29,20 @@ fn empty_status() -> CefEmbedStatus {
         title: None,
         tabs: Vec::new(),
         active_tab_id: None,
+        crash_guard_disabled: false,
     }
 }
 
 pub fn clear_stale_cdp_port_if_disabled() {
-    let _ = std::env::remove_var("ANYCODE_CEF_CDP_PORT");
+    std::env::remove_var("ANYCODE_CEF_CDP_PORT");
 }
+
+/// No CEF on this platform — the crash guard is a no-op.
+pub fn evaluate_crash_guard() {}
+
+/// No CEF on this platform — nothing to reset.
+#[allow(dead_code)] // only invoked from the macOS exit handler
+pub fn mark_clean_exit() {}
 
 #[tauri::command]
 pub fn cef_browser_status() -> Result<CefEmbedStatus, String> {

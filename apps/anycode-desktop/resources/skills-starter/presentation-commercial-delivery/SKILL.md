@@ -1,6 +1,9 @@
 ---
 name: presentation-commercial-delivery
-description: Export editable native PPTX from slide_manifest/HTML via brand potx fill (commercial deliverable).
+description: >-
+  Export editable native PPTX from slide_manifest/HTML via brand potx fill.
+  Use only when a .pptx file is required; slide authoring and HTML decks
+  belong to anycode-ppt.
 description_zh: 从 slide_manifest/HTML 填充品牌母版，导出可编辑原生 PPTX（商用终稿）。
 name_zh: 幻灯片商用导出
 category: office

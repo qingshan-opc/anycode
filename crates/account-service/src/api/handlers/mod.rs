@@ -674,6 +674,32 @@ pub async fn billing_checkout(
         };
     }
 
+    if body.plan == crate::billing::CREDIT_TOPUP_PLAN {
+        if provider != "wechat" {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "credit top-up is only available via WeChat Pay",
+            )
+            .into_response();
+        }
+        return match crate::billing_wechat::create_native_order(
+            &state.config,
+            &state.db,
+            &ctx.user.organization_id,
+            crate::billing::CREDIT_TOPUP_PLAN,
+            "monthly",
+        )
+        .await
+        {
+            Ok(order) => Json(serde_json::json!({
+                "provider": "wechat",
+                "order": order,
+            }))
+            .into_response(),
+            Err(e) => json_error(StatusCode::BAD_REQUEST, &e.to_string()).into_response(),
+        };
+    }
+
     let cycle = if body.plan == "cloud_5h" {
         "monthly"
     } else {
@@ -914,6 +940,14 @@ pub async fn gateway_authorize(
         return json_error(StatusCode::FORBIDDEN, "hosted models not enabled for plan")
             .into_response();
     }
+    // 额度制：余额（分）必须为正；按 token 实扣，无过期时间。
+    if ent.credit_balance_fen <= 0 {
+        return json_error(
+            StatusCode::PAYMENT_REQUIRED,
+            "credit balance exhausted — top up to continue",
+        )
+        .into_response();
+    }
     if body.model_id != "auto" && !crate::usage::is_allowed_hosted_model(&body.model_id) {
         return json_error(StatusCode::BAD_REQUEST, "model not supported").into_response();
     }
@@ -959,6 +993,7 @@ pub async fn gateway_authorize(
         "resolved_model_id": resolved_model_id,
         "token_limit": ent.token_limit,
         "tokens_used": ent.tokens_used,
+        "credit_balance_fen": ent.credit_balance_fen,
         "calls_remaining": ent.calls_remaining,
         "quota_resets_at": ent.quota_resets_at,
     });

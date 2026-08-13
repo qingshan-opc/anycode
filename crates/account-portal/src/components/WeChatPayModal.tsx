@@ -48,6 +48,8 @@ export function WeChatPayModal({ order, onClose, onPaid }: Props) {
   }, [order.id, onPaid, status]);
 
   const amountYuan = (order.amount_fen / 100).toFixed(2);
+  const planLabel =
+    order.plan === "credit_topup" ? t("plans.wechatPayPlanTopup") : order.plan;
 
   return (
     <div className="pay-modal-backdrop" role="presentation" onClick={onClose}>
@@ -61,7 +63,7 @@ export function WeChatPayModal({ order, onClose, onPaid }: Props) {
         <h3 id="wechat-pay-title">{t("plans.wechatPayTitle")}</h3>
         <p className="muted">
           {formatMessage(t("plans.wechatPayHint"), {
-            plan: order.plan,
+            plan: planLabel,
             amount: amountYuan,
           })}
         </p>

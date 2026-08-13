@@ -1,7 +1,7 @@
 //! API DTOs for the Digital Workbench.
 
+use crate::control::media_payload::VisionImagePayload;
 use crate::control::text_upload::TextFilePayload;
-use crate::control::vision_payload::VisionImagePayload;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -435,12 +435,19 @@ pub struct StartConversationRequest {
     pub kind: String,
     pub goal: Option<String>,
     pub agent: Option<String>,
+    /// When true, `agent` applies to this task only and is NOT persisted to the
+    /// session (slash-command modes must not change the session's routing).
+    #[serde(default)]
+    pub agent_ephemeral: Option<bool>,
     #[serde(default)]
     pub skills: Option<Vec<String>>,
     #[serde(default)]
     pub vision_images: Option<Vec<VisionImagePayload>>,
     #[serde(default)]
     pub text_files: Option<Vec<TextFilePayload>>,
+    /// Uploaded video reference (`vid_*` from POST /api/media/video/upload).
+    #[serde(default)]
+    pub video_ref: Option<String>,
     /// UI language hint (`zh` / `en`) — propagated to the agent reply language.
     #[serde(default)]
     pub lang: Option<String>,
@@ -448,7 +455,7 @@ pub struct StartConversationRequest {
     /// starts omit this (default false) so each start is a fresh session.
     #[serde(default = "default_recycle_session")]
     pub recycle_session: bool,
-    /// Composer mode hint (`grill` = 拷问 / grill-me Socratic alignment).
+    /// Composer mode hint (`grill` = 拷问 / grill-me Socratic alignment, `plan` = 计划模式).
     #[serde(default)]
     pub composer_mode: Option<String>,
 }
@@ -466,19 +473,26 @@ pub struct SendConversationMessageRequest {
     pub prompt: String,
     #[serde(default)]
     pub agent: Option<String>,
+    /// When true, `agent` applies to this task only and is NOT persisted to the
+    /// session (slash-command modes must not change the session's routing).
+    #[serde(default)]
+    pub agent_ephemeral: Option<bool>,
     #[serde(default)]
     pub skills: Option<Vec<String>>,
     #[serde(default)]
     pub vision_images: Option<Vec<VisionImagePayload>>,
     #[serde(default)]
     pub text_files: Option<Vec<TextFilePayload>>,
+    /// Uploaded video reference (`vid_*` from POST /api/media/video/upload).
+    #[serde(default)]
+    pub video_ref: Option<String>,
     /// UI language hint (`zh` / `en`) — propagated to the agent reply language.
     #[serde(default)]
     pub lang: Option<String>,
     /// When true and the session turn is busy, enqueue instead of dispatching immediately.
     #[serde(default)]
     pub enqueue: Option<bool>,
-    /// Composer mode hint (`grill` = 拷问 / grill-me Socratic alignment).
+    /// Composer mode hint (`grill` = 拷问 / grill-me Socratic alignment, `plan` = 计划模式).
     #[serde(default)]
     pub composer_mode: Option<String>,
 }
@@ -1171,6 +1185,10 @@ pub struct TokenUsageStats {
     pub total_tokens: i64,
     #[serde(alias = "estimated_cost_usd")]
     pub estimated_cost_cny: f64,
+    #[serde(default)]
+    pub cache_read_tokens: i64,
+    #[serde(default)]
+    pub cache_creation_tokens: i64,
     pub generated_at: String,
 }
 
@@ -1184,6 +1202,10 @@ pub struct ModelUsageRow {
     pub total_tokens: i64,
     #[serde(alias = "estimated_cost_usd")]
     pub estimated_cost_cny: f64,
+    #[serde(default)]
+    pub cache_read_tokens: i64,
+    #[serde(default)]
+    pub cache_creation_tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1197,6 +1219,10 @@ pub struct ProjectUsageRow {
     pub total_tokens: i64,
     #[serde(alias = "estimated_cost_usd")]
     pub estimated_cost_cny: f64,
+    #[serde(default)]
+    pub cache_read_tokens: i64,
+    #[serde(default)]
+    pub cache_creation_tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1208,9 +1234,13 @@ pub struct TokenTimelinePoint {
     pub total_tokens: i64,
     #[serde(alias = "estimated_cost_usd")]
     pub estimated_cost_cny: f64,
+    #[serde(default)]
+    pub cache_read_tokens: i64,
+    #[serde(default)]
+    pub cache_creation_tokens: i64,
 }
 
-/// Per-agent-type token usage row (by_agent 分组：payload.agent_type 优先，session 兜底）。
+/// Per-agent-type token usage row (by_agent 分组：payload.agent_type 优先，session 兜底)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageRow {
     pub agent_type: String,

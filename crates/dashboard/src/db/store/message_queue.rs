@@ -1,6 +1,6 @@
 use super::*;
+use crate::control::media_payload::VisionImagePayload;
 use crate::control::text_upload::TextFilePayload;
-use crate::control::vision_payload::VisionImagePayload;
 use crate::schema::QueuedMessageRecord;
 use serde_json::json;
 

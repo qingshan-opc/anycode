@@ -65,6 +65,12 @@ fn git_stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// Stdout without the outer trim — porcelain output is fixed-column (`XY path`)
+/// and a leading space in the first line is significant.
+fn git_stdout_raw(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
 fn git_stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).trim().to_string()
 }
@@ -128,7 +134,7 @@ pub fn git_status(root: &Path) -> Result<GitStatusSummary> {
 
     let branch = run_git(root, &["branch", "--show-current"])
         .ok()
-        .filter(|o| git_ok(o))
+        .filter(git_ok)
         .map(|o| git_stdout(&o))
         .filter(|s| !s.is_empty());
 
@@ -218,6 +224,216 @@ pub fn git_push(root: &Path) -> Result<String> {
     Ok(git_stderr(&push))
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct GitBranchInfo {
+    pub name: String,
+    pub current: bool,
+    pub remote: bool,
+}
+
+/// Local + remote branches. Remote entries are named `origin/foo` and skip the
+/// `origin/HEAD` symref.
+pub fn git_branches(root: &Path) -> Result<Vec<GitBranchInfo>> {
+    if !is_git_repo(root) {
+        return Ok(Vec::new());
+    }
+    let current = run_git(root, &["branch", "--show-current"])
+        .ok()
+        .filter(git_ok)
+        .map(|o| git_stdout(&o))
+        .unwrap_or_default();
+    let mut branches = Vec::new();
+    for (pattern, remote) in [("refs/heads", false), ("refs/remotes", true)] {
+        let out = run_git(
+            root,
+            &["for-each-ref", "--format=%(refname:short)", pattern],
+        )?;
+        if !git_ok(&out) {
+            anyhow::bail!("git for-each-ref failed: {}", git_stderr(&out));
+        }
+        for line in git_stdout(&out).lines() {
+            let name = line.trim();
+            if name.is_empty() || name.ends_with("/HEAD") {
+                continue;
+            }
+            branches.push(GitBranchInfo {
+                name: name.to_string(),
+                current: !remote && !current.is_empty() && name == current,
+                remote,
+            });
+        }
+    }
+    Ok(branches)
+}
+
+/// Why a checkout was refused, structured so the API can return 409 + files.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "error", rename_all = "snake_case")]
+pub enum GitCheckoutError {
+    DirtyTree { files: Vec<String> },
+    Failed { message: String },
+}
+
+impl std::fmt::Display for GitCheckoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DirtyTree { files } => {
+                write!(f, "working tree has {} uncommitted change(s)", files.len())
+            }
+            Self::Failed { message } => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for GitCheckoutError {}
+
+/// Files with uncommitted changes (staged + unstaged + untracked).
+fn dirty_files(root: &Path) -> Vec<String> {
+    run_git(root, &["status", "--porcelain"])
+        .ok()
+        .filter(git_ok)
+        .map(|o| {
+            git_stdout_raw(&o)
+                .lines()
+                .filter(|l| l.len() > 3)
+                .map(|l| l[3..].trim().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Switch branches. Refuses with `DirtyTree` when the working tree has
+/// uncommitted changes unless `force` — switching branches mid agent edit
+/// silently corrupts the review flow, so the default is fail-closed.
+pub fn git_checkout(root: &Path, branch: &str, force: bool) -> Result<(), GitCheckoutError> {
+    if !force {
+        let dirty = dirty_files(root);
+        if !dirty.is_empty() {
+            return Err(GitCheckoutError::DirtyTree {
+                files: dirty.into_iter().take(50).collect(),
+            });
+        }
+    }
+    let out = run_git(root, &["checkout", branch]).map_err(|e| GitCheckoutError::Failed {
+        message: format!("spawn git checkout: {e}"),
+    })?;
+    if !git_ok(&out) {
+        return Err(GitCheckoutError::Failed {
+            message: format!("git checkout failed: {}", git_stderr(&out)),
+        });
+    }
+    Ok(())
+}
+
+/// Create a new branch at HEAD, optionally checking it out (same dirty-tree
+/// guard as `git_checkout` when switching).
+pub fn git_create_branch(root: &Path, name: &str, checkout: bool) -> Result<(), GitCheckoutError> {
+    if checkout {
+        // checkout -b carries the working tree onto the new branch, which is
+        // exactly what users expect here — no dirty guard needed.
+        let out =
+            run_git(root, &["checkout", "-b", name]).map_err(|e| GitCheckoutError::Failed {
+                message: format!("spawn git checkout -b: {e}"),
+            })?;
+        if !git_ok(&out) {
+            return Err(GitCheckoutError::Failed {
+                message: format!("git checkout -b failed: {}", git_stderr(&out)),
+            });
+        }
+        return Ok(());
+    }
+    let out = run_git(root, &["branch", name]).map_err(|e| GitCheckoutError::Failed {
+        message: format!("spawn git branch: {e}"),
+    })?;
+    if !git_ok(&out) {
+        return Err(GitCheckoutError::Failed {
+            message: format!("git branch failed: {}", git_stderr(&out)),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitLogEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    /// ISO 8601 author date.
+    pub date: String,
+    pub subject: String,
+}
+
+pub fn git_log(root: &Path, limit: u32, offset: u32) -> Result<Vec<GitLogEntry>> {
+    if !is_git_repo(root) {
+        return Ok(Vec::new());
+    }
+    let limit = limit.clamp(1, 200);
+    let out = run_git(
+        root,
+        &[
+            "log",
+            &format!("--max-count={limit}"),
+            &format!("--skip={offset}"),
+            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s",
+        ],
+    )?;
+    if !git_ok(&out) {
+        // Unborn HEAD (no commits yet) exits 128 — treat as empty history.
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for line in git_stdout(&out).lines() {
+        let mut parts = line.splitn(5, '\x1f');
+        let (Some(hash), Some(short_hash), Some(author), Some(date), Some(subject)) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
+            continue;
+        };
+        entries.push(GitLogEntry {
+            hash: hash.to_string(),
+            short_hash: short_hash.to_string(),
+            author: author.to_string(),
+            date: date.to_string(),
+            subject: subject.to_string(),
+        });
+    }
+    Ok(entries)
+}
+
+/// Unified diff of one commit (`git show`), truncated server-side.
+pub fn git_commit_diff(root: &Path, hash: &str) -> Result<GitFileDiff> {
+    const MAX_DIFF_BYTES: usize = 200 * 1024;
+    let out = run_git(root, &["show", "--format=", "--patch", hash])?;
+    if !git_ok(&out) {
+        anyhow::bail!("git show failed: {}", git_stderr(&out));
+    }
+    let mut diff = String::from_utf8_lossy(&out.stdout).to_string();
+    if diff.len() > MAX_DIFF_BYTES {
+        diff.truncate(MAX_DIFF_BYTES);
+        diff.push_str("\n… (diff truncated)\n");
+    }
+    let mut insertions = 0u32;
+    let mut deletions = 0u32;
+    for line in diff.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            insertions += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            deletions += 1;
+        }
+    }
+    Ok(GitFileDiff {
+        path: hash.to_string(),
+        kind: GitChangeKind::Modified,
+        diff,
+        insertions,
+        deletions,
+    })
+}
+
 /// Parse one `git status --porcelain` line into a file change.
 /// Format: `XY path` (with possible ` -> ` for renames).
 fn parse_porcelain_line(line: &str) -> Option<GitFileChange> {
@@ -273,7 +489,7 @@ pub fn git_changes(root: &Path) -> Result<Vec<GitFileChange>> {
     if !git_ok(&porcelain) {
         anyhow::bail!("git status failed: {}", git_stderr(&porcelain));
     }
-    let mut changes: Vec<GitFileChange> = git_stdout(&porcelain)
+    let mut changes: Vec<GitFileChange> = git_stdout_raw(&porcelain)
         .lines()
         .filter_map(parse_porcelain_line)
         .collect();
@@ -462,5 +678,82 @@ mod tests {
     fn parse_porcelain_short_line_returns_none() {
         assert!(parse_porcelain_line("").is_none());
         assert!(parse_porcelain_line(" M").is_none()); // 不足 4 字节（缺路径）
+    }
+
+    /// Build a temp repo with one commit on the default branch.
+    fn temp_repo_with_commit() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {:?} failed", args);
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "Tester"]);
+        std::fs::write(root.join("a.txt"), "hello\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "initial"]);
+        dir
+    }
+
+    #[test]
+    fn branches_log_checkout_roundtrip() {
+        let dir = temp_repo_with_commit();
+        let root = dir.path();
+
+        let branches = git_branches(root).unwrap();
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].name, "main");
+        assert!(branches[0].current);
+        assert!(!branches[0].remote);
+
+        let log = git_log(root, 10, 0).unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].subject, "initial");
+        assert_eq!(log[0].author, "Tester");
+
+        // Create + switch to a feature branch.
+        git_create_branch(root, "feature-x", true).unwrap();
+        let branches = git_branches(root).unwrap();
+        assert_eq!(branches.len(), 2);
+        let current = branches.iter().find(|b| b.current).unwrap();
+        assert_eq!(current.name, "feature-x");
+
+        // Dirty tree blocks checkout without force…
+        std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
+        let err = git_checkout(root, "main", false).unwrap_err();
+        match err {
+            GitCheckoutError::DirtyTree { files } => {
+                assert!(files.iter().any(|f| f == "a.txt"));
+            }
+            other => panic!("expected DirtyTree, got {other}"),
+        }
+        // …and force allows it.
+        git_checkout(root, "main", true).unwrap();
+        let branches = git_branches(root).unwrap();
+        assert!(branches.iter().find(|b| b.current).unwrap().name == "main");
+
+        // Commit diff renders the patch.
+        let hash = git_log(root, 1, 0).unwrap()[0].hash.clone();
+        let diff = git_commit_diff(root, &hash).unwrap();
+        assert!(diff.diff.contains("+hello"));
+        assert_eq!(diff.insertions, 1);
+    }
+
+    #[test]
+    fn log_empty_on_unborn_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert!(git_log(dir.path(), 10, 0).unwrap().is_empty());
     }
 }

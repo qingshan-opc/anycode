@@ -6,9 +6,11 @@ import type {
   BrowserState,
   FsEntry,
   FsReadResult,
+  GitBranchInfo,
   GitChangeKind,
   GitFileChange,
   GitFileDiff,
+  GitLogEntry,
   GitStatusSummary,
   TerminalSessionInfo,
 } from "../types/workbench";
@@ -155,5 +157,33 @@ export const workbenchClient = {
     post<{ ok: boolean; detail?: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/git/push`,
       {},
+    ),
+
+  projectGitBranches: (projectId: string) =>
+    get<{ branches: GitBranchInfo[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/git/branches`,
+    ),
+
+  projectGitCheckout: (projectId: string, branch: string, force = false) =>
+    post<{ ok: boolean } | { error: "dirty_tree"; files: string[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/git/checkout`,
+      { branch, force },
+      { acceptStatuses: [409] },
+    ),
+
+  projectGitCreateBranch: (projectId: string, name: string, checkout = true) =>
+    post<{ ok: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/git/branch`,
+      { name, checkout },
+    ),
+
+  projectGitLog: (projectId: string, limit = 30, offset = 0) =>
+    get<{ commits: GitLogEntry[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/git/log?limit=${limit}&offset=${offset}`,
+    ),
+
+  projectGitCommitDiff: (projectId: string, hash: string) =>
+    get<{ diff: GitFileDiff }>(
+      `/api/projects/${encodeURIComponent(projectId)}/git/commit-diff?hash=${encodeURIComponent(hash)}`,
     ),
 };

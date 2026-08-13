@@ -5,6 +5,7 @@ import type { PaymentOrder } from "@/api/types/accountCloud";
 import { accountCloud } from "@/api/client/accountCloud";
 import { PLAN_CATALOG, catalogFromApi } from "@/lib/planCatalog";
 import { isDevMockEnabled } from "@/lib/isDevMockEnabled";
+import { formatFen } from "@/lib/money";
 import { openExternal } from "@/lib/openExternal";
 import { CurrentPlanSummary } from "@/components/service/CurrentPlanSummary";
 import { PlanTierCard } from "@/components/service/PlanTierCard";
@@ -20,6 +21,7 @@ export function ServicePlanSection() {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
   const [pendingTier, setPendingTier] = useState<PlanTier | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState<PlanTier | null>(null);
+  const [topupLoading, setTopupLoading] = useState(false);
   const [wechatOrder, setWechatOrder] = useState<PaymentOrder | null>(null);
   const [error, setError] = useState<string | null>(null);
   const devMock = isDevMockEnabled();
@@ -76,6 +78,24 @@ export function ServicePlanSection() {
     }
   };
 
+  const handleTopup = async () => {
+    if (!baseUrl || devMock) return;
+    setError(null);
+    setTopupLoading(true);
+    try {
+      const res = await accountCloud.checkout(baseUrl, "credit_topup", "wechat", "monthly");
+      if (res.provider === "wechat" && res.order) {
+        setWechatOrder(res.order);
+        return;
+      }
+      setError(t("service.plan.checkoutError"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTopupLoading(false);
+    }
+  };
+
   if (!entitlements) return null;
 
   return (
@@ -102,6 +122,26 @@ export function ServicePlanSection() {
 
       <div className="w-full lg:max-w-[50%]">
         <CurrentPlanSummary entitlements={entitlements} />
+      </div>
+
+      <div className="rounded-xl border border-primary/25 bg-primary/5 px-4 py-3 flex flex-wrap items-center gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium m-0">
+            {t("service.topup.title").replace(
+              "{balance}",
+              formatFen(entitlements.quota.creditBalanceFen),
+            )}
+          </p>
+          <p className="text-xs text-secondary m-0 mt-0.5">{t("service.topup.hint")}</p>
+        </div>
+        <button
+          type="button"
+          className="dw-btn-primary text-sm ml-auto shrink-0"
+          disabled={topupLoading || devMock || !baseUrl}
+          onClick={() => void handleTopup()}
+        >
+          {topupLoading ? t("common.loading") : t("service.topup.action")}
+        </button>
       </div>
 
       {error && (

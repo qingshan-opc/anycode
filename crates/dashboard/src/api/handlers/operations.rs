@@ -5,38 +5,55 @@ pub async fn list_cron_runs(
     Query(q): Query<CronRunsQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.max(1) as usize;
-    match cron_ledger::read_cron_runs(limit, q.job_id.as_deref(), q.session_id.as_deref()) {
-        Ok(rows) => {
-            let mut out = Vec::with_capacity(rows.len());
-            for r in rows {
-                let dashboard_session_id = if r.session_id.is_empty() {
-                    None
-                } else {
-                    state
-                        .db
-                        .find_session_by_correlation(&r.session_id)
-                        .await
-                        .ok()
-                        .flatten()
-                };
-                out.push(CronRunRecord {
-                    job_id: r.job_id,
-                    session_id: r.session_id,
-                    fired_at: r.fired_at,
-                    status: r.status,
-                    detail: r.detail,
-                    line_no: r.line_no,
-                    dashboard_session_id,
-                });
-            }
-            Json(json!({ "runs": out, "ledger_path": cron_ledger::cron_runs_path().map(|p| p.display().to_string()) })).into_response()
+    // P1.6 dual-read: refresh the SQLite mirror from the writer-side file
+    // (best-effort), serve from SQLite, fall back to the file reader.
+    if let Some(path) = cron_ledger::cron_runs_path() {
+        if let Err(e) = state.db.cron_runs_ingest_jsonl(&path).await {
+            tracing::warn!(error = %e, "cron runs mirror ingest failed");
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
     }
+    let rows = match state
+        .db
+        .cron_runs_list(limit as i64, q.job_id.as_deref(), q.session_id.as_deref())
+        .await
+    {
+        Ok(rows) => rows,
+        Err(db_err) => {
+            match cron_ledger::read_cron_runs(limit, q.job_id.as_deref(), q.session_id.as_deref()) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("db: {db_err}; file: {e}") })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let dashboard_session_id = if r.session_id.is_empty() {
+            None
+        } else {
+            state
+                .db
+                .find_session_by_correlation(&r.session_id)
+                .await
+                .ok()
+                .flatten()
+        };
+        out.push(CronRunRecord {
+            job_id: r.job_id,
+            session_id: r.session_id,
+            fired_at: r.fired_at,
+            status: r.status,
+            detail: r.detail,
+            line_no: r.line_no,
+            dashboard_session_id,
+        });
+    }
+    Json(json!({ "runs": out, "ledger_path": cron_ledger::cron_runs_path().map(|p| p.display().to_string()) })).into_response()
 }
 
 pub async fn delete_cron_job(
@@ -80,8 +97,29 @@ pub async fn delete_cron_job(
     }
 }
 
-pub async fn list_cron_jobs(State(_state): State<AppState>) -> impl IntoResponse {
+/// P1.6 dual-read: the orchestration file is still the SSOT. Read it, refresh
+/// the SQLite mirror (best-effort), and serve the file rows; if the file is
+/// unreadable, fall back to the last mirrored snapshot.
+async fn read_cron_jobs_dual(
+    state: &AppState,
+) -> std::result::Result<Vec<cron_ledger::CronJobRecord>, anyhow::Error> {
     match cron_ledger::read_cron_jobs(None) {
+        Ok(jobs) => {
+            if let Err(e) = state.db.cron_jobs_mirror(&jobs).await {
+                tracing::warn!(error = %e, "cron jobs mirror refresh failed");
+            }
+            Ok(jobs)
+        }
+        Err(file_err) => state
+            .db
+            .cron_jobs_list()
+            .await
+            .map_err(|db_err| anyhow::anyhow!("file: {file_err}; db: {db_err}")),
+    }
+}
+
+pub async fn list_cron_jobs(State(state): State<AppState>) -> impl IntoResponse {
+    match read_cron_jobs_dual(&state).await {
         Ok(jobs) => {
             let jobs: Vec<serde_json::Value> = jobs
                 .into_iter()
@@ -232,7 +270,7 @@ pub async fn retry_cron_job(
         )
             .into_response();
     }
-    let jobs = match cron_ledger::read_cron_jobs(None) {
+    let jobs = match read_cron_jobs_dual(&state).await {
         Ok(j) => j,
         Err(e) => {
             return (

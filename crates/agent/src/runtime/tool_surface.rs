@@ -276,6 +276,37 @@ mod tests {
         assert_eq!(out[out.len() - 2..], ["mcp__a__t", "mcp__x__t"]);
     }
 
+    /// P1.5 prefix-cache gate: the tools array must serialize byte-identically
+    /// regardless of registry HashMap iteration order — DeepSeek/Anthropic
+    /// prefix caching keys on the exact request prefix.
+    #[test]
+    fn tool_schemas_serialize_deterministically() {
+        let keys: &[&'static str] = &[
+            "mcp__zeta__run",
+            "Grep",
+            "Bash",
+            "mcp__alpha__fetch",
+            "Glob",
+            "Read",
+        ];
+        let serialized: std::collections::HashSet<String> = (0..8)
+            .map(|_| {
+                let reg = reg_with(keys);
+                let names = resolve_agent_tool_names("general-purpose", vec![], &reg);
+                let names = prepare_tool_names_for_llm(
+                    names,
+                    &[],
+                    &crate::runtime::tool_surface::AgentClaudeToolGating::default(),
+                    &[],
+                    &[],
+                );
+                let schemas = build_tool_schemas(&names, &reg);
+                serde_json::to_string(&schemas).unwrap()
+            })
+            .collect();
+        assert_eq!(serialized.len(), 1, "tool schema JSON must be stable");
+    }
+
     #[test]
     fn resolve_empty_agent_tools_is_all_registry_keys_sorted() {
         let reg = reg_with(&["Zebra", "Alpha", "mcp__s__z"]);
@@ -394,7 +425,7 @@ mod tests {
         let all = build_tool_schemas(&reg.keys().cloned().collect::<Vec<_>>(), &reg);
         let model = ModelConfig {
             provider: LLMProvider::OpenAI,
-            model: "minicpm5-1b".into(),
+            model: "qwen3-1b".into(),
             base_url: Some("http://127.0.0.1:47100/v1/chat/completions".into()),
             ..Default::default()
         };

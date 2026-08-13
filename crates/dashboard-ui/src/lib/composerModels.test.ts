@@ -5,7 +5,6 @@ import {
   imageAttachAllowed,
   listChatModels,
   modelLabel,
-  modelLikelySupportsVision,
   chatModelSupportsVision,
   modelSubtitle,
 } from "@/lib/composerModels";
@@ -50,22 +49,19 @@ describe("composerModels", () => {
     expect(listChatModels(items)).toHaveLength(1);
   });
 
-  it("labels models without display_name", () => {
-    expect(modelLabel(chatItem({ display_name: null }))).toBe("openai/gpt-4");
+  it("pins curated models first and sinks deprecated last", () => {
+    const items = [
+      chatItem({ id: "old", provider: "deepseek", model: "deepseek-chat", tier: "deprecated" }),
+      chatItem({ id: "plain", provider: "groq", model: "llama-3.3-70b" }),
+      chatItem({ id: "curated", provider: "deepseek", model: "deepseek-v4-flash", curated: true }),
+    ];
+    const options = listChatModels(items);
+    expect(options.map((o) => o.id)).toEqual(["curated", "plain", "old"]);
+    expect(options[2]).toMatchObject({ tier: "deprecated" });
   });
 
-  it("shows managed registry id in subtitle", () => {
-    expect(
-      modelSubtitle(
-        chatItem({
-          id: "managed-minicpm5-1b",
-          display_name: "MiniCPM5-1B (SGLang · native tools)",
-          provider: "sglang",
-          model: "minicpm5-1b",
-          source: "managed_local_runtime",
-        }),
-      ),
-    ).toBe("managed-minicpm5-1b · sglang/minicpm5-1b");
+  it("labels models without display_name", () => {
+    expect(modelLabel(chatItem({ display_name: null }))).toBe("openai/gpt-4");
   });
 
   it("finds global default chat id", () => {
@@ -107,20 +103,35 @@ describe("composerModels", () => {
     expect(inferAutoFromRegistry(registry)).toBe(false);
   });
 
-  it("detects likely vision models by name", () => {
-    expect(modelLikelySupportsVision("gpt-4o")).toBe(true);
-    expect(modelLikelySupportsVision("kimi-k2.5")).toBe(true);
-    expect(modelLikelySupportsVision("text-embedding-3-small")).toBe(false);
-  });
-
-  it("allows attachments when active chat model likely supports vision", () => {
+  it("allows attachments when active chat model advertises vision in the registry", () => {
     const registry: ModelsRegistryView = {
       config_present: true,
       active: { chat: "kimi" },
       model_fallback: {},
-      items: [chatItem({ id: "kimi", provider: "moonshot", model: "kimi-k2.5" })],
+      items: [
+        chatItem({
+          id: "kimi",
+          provider: "moonshot",
+          model: "kimi-k2.5",
+          capabilities: ["chat", "vision"],
+        }),
+      ],
     };
     expect(chatModelSupportsVision(registry)).toBe(true);
+  });
+
+  it("rejects attachments when the registry does not advertise vision (no name heuristics)", () => {
+    // Even a historically "vision-looking" model id is denied without the
+    // registry capability — the registry is the sole authority (P1.1).
+    const registry: ModelsRegistryView = {
+      config_present: true,
+      active: { chat: "g4o" },
+      model_fallback: {},
+      items: [
+        chatItem({ id: "g4o", provider: "openai", model: "gpt-4o", capabilities: ["chat"] }),
+      ],
+    };
+    expect(chatModelSupportsVision(registry)).toBe(false);
   });
 
   it("rejects attachments when active chat lacks vision even if another item has it", () => {

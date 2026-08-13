@@ -46,6 +46,10 @@ pub struct EfficiencyReport {
     pub repeat_input_rate: f64,
     pub turn_status: Vec<StatusCount>,
     pub llm: LlmUsageSummary,
+    /// P2.8 门禁度量(逃逸率/返工率/grader 判定),数据源
+    /// `~/.anycode/logs/delivery-gates.jsonl`;无数据或旧版报告为 None。
+    #[serde(default)]
+    pub gates: Option<anycode_agent::DeliveryGatesSummary>,
 }
 
 /// tool-calls.jsonl 的一行（字段对旧格式宽容：缺的按 None 处理）。
@@ -81,6 +85,7 @@ pub fn build_report(
     tool_rows: &[AuditRow],
     turn_status_counts: Vec<StatusCount>,
     usage_rows: &[UsageRow],
+    gate_lines: Vec<String>,
 ) -> EfficiencyReport {
     // per-tool 统计
     let mut by_tool: HashMap<&str, (u64, u64, Vec<u64>)> = HashMap::new(); // (errors, denied, durations)
@@ -148,6 +153,12 @@ pub fn build_report(
         p95_ms: nearest_rank_percentile(&elapsed, 0.95),
     };
 
+    let gates = {
+        let s = anycode_agent::summarize_lines(gate_lines);
+        // 完全无门禁数据时置 None,避免报告出现全零段。
+        (s.guard_evaluations > 0 || s.skipped > 0 || s.fallback_used > 0).then_some(s)
+    };
+
     EfficiencyReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         window_days,
@@ -155,6 +166,7 @@ pub fn build_report(
         repeat_input_rate,
         turn_status,
         llm,
+        gates,
     }
 }
 
@@ -187,7 +199,14 @@ pub async fn generate_weekly_report(db: &crate::db::DashboardDb) -> Result<Optio
     let tool_rows = read_audit_rows(REPORT_WINDOW_DAYS);
     let turn_status = query_turn_status_counts(db, REPORT_WINDOW_DAYS).await?;
     let usage_rows = query_llm_usage_rows(db, REPORT_WINDOW_DAYS).await?;
-    let report = build_report(REPORT_WINDOW_DAYS, &tool_rows, turn_status, &usage_rows);
+    let gate_lines = read_gate_lines(REPORT_WINDOW_DAYS);
+    let report = build_report(
+        REPORT_WINDOW_DAYS,
+        &tool_rows,
+        turn_status,
+        &usage_rows,
+        gate_lines,
+    );
 
     std::fs::create_dir_all(&dir).context("create reports dir")?;
     let json = serde_json::to_string_pretty(&report)?;
@@ -241,6 +260,31 @@ fn read_audit_rows(window_days: u32) -> Vec<AuditRow> {
                 .map(|ts| ts >= cutoff)
                 .unwrap_or(false)
         })
+        .collect()
+}
+
+/// P2.8:读取窗口内的 delivery-gates.jsonl 行(坏行保留给 summarize 内部跳过)。
+fn read_gate_lines(window_days: u32) -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let path = PathBuf::from(home).join(anycode_agent::DELIVERY_GATES_LOG);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(window_days as i64);
+    raw.lines()
+        .filter(|line| {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                return false;
+            };
+            v.get("ts")
+                .and_then(|t| t.as_str())
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|ts| ts >= cutoff)
+                .unwrap_or(false)
+        })
+        .map(|s| s.to_string())
         .collect()
 }
 
@@ -326,6 +370,29 @@ fn render_markdown(r: &EfficiencyReport) -> String {
     for s in &r.turn_status {
         md.push_str(&format!("- {}: {}\n", s.status, s.count));
     }
+    if let Some(g) = &r.gates {
+        md.push_str("\n## Delivery gates\n\n");
+        md.push_str(&format!(
+            "- guard evaluations: {} (complete {} / repair {} / partial {} / failed {})\n",
+            g.guard_evaluations, g.guard_complete, g.guard_repair, g.guard_partial, g.guard_failed
+        ));
+        md.push_str(&format!(
+            "- escape rate: {:.1}% (fallback {} / skipped {} / unverified-pass {})\n",
+            g.escape_rate() * 100.0,
+            g.fallback_used,
+            g.skipped,
+            g.verification_escapes
+        ));
+        if !g.skipped_by_reason.is_empty() {
+            for (reason, n) in &g.skipped_by_reason {
+                md.push_str(&format!("  - skipped[{reason}]: {n}\n"));
+            }
+        }
+        md.push_str(&format!(
+            "- grader: pass {} / refuted {} / unavailable {}\n",
+            g.grader_pass, g.grader_refuted, g.grader_unavailable
+        ));
+    }
     md
 }
 
@@ -354,7 +421,7 @@ mod tests {
             row("result", "WebSearch", "h2", "ok", Some(50)),
             row("pre_check", "Grep", "h3", "denied", None),
         ];
-        let r = build_report(7, &rows, vec![], &[]);
+        let r = build_report(7, &rows, vec![], &[], vec![]);
         let bash = r.tools.iter().find(|t| t.tool_name == "Bash").unwrap();
         assert_eq!(bash.calls, 4);
         assert_eq!(bash.error_rate, 0.25);
@@ -369,7 +436,7 @@ mod tests {
 
     #[test]
     fn build_report_handles_empty() {
-        let r = build_report(7, &[], vec![], &[]);
+        let r = build_report(7, &[], vec![], &[], vec![]);
         assert!(r.tools.is_empty());
         assert_eq!(r.repeat_input_rate, 0.0);
         assert!(r.llm.p50_ms.is_none());
@@ -403,6 +470,7 @@ mod tests {
                 },
             ],
             &usage,
+            vec![],
         );
         assert_eq!(r.llm.llm_calls, 2);
         assert_eq!(r.llm.input_tokens, 30);
@@ -416,5 +484,29 @@ mod tests {
         assert_eq!(nearest_rank_percentile(&[], 0.5), None);
         assert_eq!(nearest_rank_percentile(&[5, 10, 15], 0.5), Some(10));
         assert_eq!(nearest_rank_percentile(&[5, 10, 15], 0.95), Some(15));
+    }
+
+    #[test]
+    fn build_report_includes_gate_summary_when_present() {
+        let gate_lines = vec![
+            serde_json::json!({"ts":"2026-08-06T00:00:00Z","event":"guard_verdict","decision":"complete"}).to_string(),
+            serde_json::json!({"ts":"2026-08-06T00:00:00Z","event":"guard_fallback","inferred_family":"web_design"}).to_string(),
+            serde_json::json!({"ts":"2026-08-06T00:00:00Z","event":"grader_verdict","verdict":"refuted"}).to_string(),
+        ];
+        let r = build_report(7, &[], vec![], &[], gate_lines);
+        let g = r.gates.as_ref().expect("gates section");
+        assert_eq!(g.guard_evaluations, 1);
+        assert_eq!(g.fallback_used, 1);
+        assert_eq!(g.grader_refuted, 1);
+        let md = render_markdown(&r);
+        assert!(md.contains("## Delivery gates"));
+        assert!(md.contains("escape rate"));
+    }
+
+    #[test]
+    fn build_report_omits_gates_when_no_data() {
+        let r = build_report(7, &[], vec![], &[], vec![]);
+        assert!(r.gates.is_none());
+        assert!(!render_markdown(&r).contains("Delivery gates"));
     }
 }

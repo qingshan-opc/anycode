@@ -81,7 +81,7 @@ pub async fn admin_create_upstream_account(
             .into_response()
         }
     };
-    let provider = body.provider_id.as_deref().unwrap_or("agnes");
+    let provider = body.provider_id.as_deref().unwrap_or("deepseek");
     match crate::upstream_pool::create_upstream_account(
         &state.db,
         secret,

@@ -8,13 +8,19 @@ mod listener;
 mod peer;
 mod security;
 
-pub use bundle::{export_bundle, import_bundle, BundleExportOptions, ImportOptions};
+pub use bundle::{
+    export_bundle, import_bundle, package_skill_dir, BundleExportOptions, BundleMcpServerMeta,
+    BundleSkill, ImportOptions, SkillPackageManifest, SKILL_PACKAGE_SCHEMA,
+};
 pub use discovery::{primary_lan_ip, spawn_discovery, DEFAULT_LAN_PORT, MDNS_SERVICE_TYPE};
 pub use handoff::{
     HandoffApprovedNotice, HandoffDirection, HandoffKind, HandoffParty, HandoffRecord,
     HandoffState, IncomingHandoffRequest, OutgoingHandoffStatus,
 };
-pub use instance::{load_or_create_instance, save_instance, LanInstance, LanSettings};
+pub use instance::{
+    load_or_create_instance, load_or_create_instance_dual, save_instance, save_instance_dual,
+    LanInstance, LanSettings,
+};
 pub use listener::{spawn_lan_listener, LanListenerState};
 pub use peer::LanPeer;
 pub use security::is_private_ip;
@@ -35,9 +41,13 @@ pub struct LanHub {
 }
 
 impl LanHub {
-    pub fn new(version: String, data_dir: std::path::PathBuf) -> Self {
-        let instance = load_or_create_instance(&data_dir);
-        let settings = LanSettings::load(&data_dir);
+    pub async fn new(
+        version: String,
+        data_dir: std::path::PathBuf,
+        db: Option<&crate::db::DashboardDb>,
+    ) -> Self {
+        let instance = load_or_create_instance_dual(db, &data_dir).await;
+        let settings = LanSettings::load_dual(db, &data_dir).await;
         Self {
             instance,
             settings: Arc::new(AsyncRwLock::new(settings)),

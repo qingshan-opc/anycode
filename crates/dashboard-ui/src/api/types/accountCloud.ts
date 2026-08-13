@@ -28,6 +28,8 @@ export interface CloudSubscription {
 export interface CloudEntitlements {
   token_limit: number;
   tokens_used: number;
+  /** 额度余额（分）：充值获得，按 token×单价扣减，永久有效。 */
+  credit_balance_fen?: number;
   api_key_limit: number;
   seat_limit: number;
   seat_used: number;

@@ -17,6 +17,12 @@ export function SessionTokenUsage({ sessionId }: { sessionId: string }) {
   const u = usage.data?.usage;
   if (!u || u.total_tokens === 0) return null;
 
+  const cacheRead = u.cache_read_tokens ?? 0;
+  const cacheHitRate =
+    cacheRead > 0 && u.input_tokens > 0
+      ? Math.min(100, (cacheRead / u.input_tokens) * 100)
+      : null;
+
   return (
     <SectionCard title={t("session.tokenUsage")}>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -27,6 +33,13 @@ export function SessionTokenUsage({ sessionId }: { sessionId: string }) {
           value={formatMoney(u.estimated_cost_cny)}
           highlight
         />
+        {cacheHitRate !== null && (
+          <Mini
+            label={t("home.tokenCacheHit")}
+            value={`${cacheHitRate.toFixed(1)}%`}
+            highlight
+          />
+        )}
       </div>
       <SessionTokenChart rows={usage.data?.by_model ?? []} />
       <ModelUsageTable rows={usage.data?.by_model ?? []} />

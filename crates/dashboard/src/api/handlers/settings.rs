@@ -382,6 +382,10 @@ pub async fn patch_llm_config(
             )
             .await;
             state.chat_runtime.invalidate_runtime().await;
+            // P1.6: keep the settings table mirror in step with the write.
+            if let Err(e) = crate::config_patch::settings_sync_only(&state.db, &cfg).await {
+                tracing::warn!(error = %e, "settings mirror refresh failed");
+            }
             Json(json!({
                 "ok": true,
                 "config_path": path.display().to_string(),

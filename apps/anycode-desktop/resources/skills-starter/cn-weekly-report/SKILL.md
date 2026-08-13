@@ -1,57 +1,78 @@
 ---
 name: cn-weekly-report
-description: Summarize a week's work into a Chinese weekly report for managers or teams.
-description_zh: 将一周工作整理为面向团队或上级的中文周报。
+description: >-
+  Turn a week's commits, tasks, and notes into a Chinese weekly report as branded
+  .docx. Use for 周报, 周汇报. Not for daily reports (cn-daily-brief) or
+  meeting notes (cn-meeting-minutes).
+description_zh: >-
+  将一周 git 记录、任务与笔记整理为中文周报，交付品牌 docx（附 HTML 预览）。
+  适用于周报、周汇报；日报用 cn-daily-brief，会议纪要用 cn-meeting-minutes。
 name_zh: 中文周报
-category: writing
-version: 1.1.0
-mode: instructions
-approval: read-only-unless-writing-output
-channel_capabilities: [files, markdown]
+category: office
+version: 2.0.0
+mode: executable
+approval: writes-workspace
+channel_capabilities: [files, artifacts]
+provides_capabilities: [document.author, document.export.docx]
+priority: 120
+platforms: [darwin, linux]
 permissions:
   read_dirs: [workspace]
   write_dirs: [workspace]
   network: false
+acceptance:
+  - type: file-exists
+    path: "reports/weekly/weekly-report.docx"
+  - type: ooxml-openable
+    path: "reports/weekly/weekly-report.docx"
 ---
 
 # cn-weekly-report
 
-> **中文**：根据 git 记录、任务列表、笔记或用户口述，生成标准中文周报。
-> **English**: Turn commits, tasks, notes, or user input into a Chinese weekly report.
+> **中文**：根据 git 记录、任务列表、笔记或用户口述，生成标准中文周报并交付 **docx 终稿**。
+> **English**: Turn commits, tasks, notes, or user input into a Chinese weekly report delivered as `.docx`.
 
-## 适用场景 / When to use
+## Inputs
 
-**适用：**
-- 用户需要生成本周工作总结、周报或周汇报。
-- 信息源包括 git log、任务列表、笔记、文件或用户口述。
+- **报告周期**：默认为本周（周一至今）；用户可指定起止日期。
+- **信息来源**（至少一项，全部可读则全部使用）：
+  - `git log --since=<周一> --oneline`（Bash 收集，按主题分组）
+  - 任务列表 / 计划树 / 笔记文件（Read）
+  - 用户口述的完成项与下周计划
+- **受众**：默认面向团队/上级的正式商务中文。
 
-**不适用：**
-- 日报（使用 cn-daily-brief）。
-- 会议纪要（使用 cn-meeting-minutes）。
-- 英文周报。
-- 凭空生成未发生的工作内容。
+## Steps
 
-## 执行步骤 / Workflow
+1. 确认报告周期与信息来源；git 仓库不可用时标注 `[仅基于用户输入]` 并继续。
+2. 用 **Bash**（`git log --since=... --oneline`）、**Glob**/**Grep**、**Read** 收集本周工作证据。
+3. **Copy** `templates/weekly-report.md` → `reports/weekly/weekly-report.md`，只改内容：
+   - 保留 H1 标题与四个 H2 章节（本周完成 / 进行中 / 下周计划 / 风险与需协调）
+   - 每项完成工作必须能在证据中找到依据；不确定处标注「待确认」
+   - 至少一条 `Action:` 行（负责人 + 日期），否则 validate 失败
+4. `run reports/weekly/weekly-report.md` — validate → HTML 预览 → docx 一次跑完。
+5. 在对话中贴出周报正文（便于粘贴飞书/钉钉/邮件），并交付 docx 文件。
 
-1. 确认报告周期（默认为本周）和信息来源（git log、文件、用户口述等）。
-2. 使用 **Bash**（`git log --since=... --oneline`）、**Glob**/**Grep**、**Read** 收集本周工作证据。
-3. 输出 Markdown 周报，结构如下：
-   - **本周完成** — 按项目或主题分组
-   - **进行中** — 进度与阻塞
-   - **下周计划** — 可执行项
-   - **风险与需协调**（可选）
-4. 默认在对话中输出；需要落盘时保存到 `reports/weekly/YYYY-WXX.md`。
-5. 输出格式便于粘贴到飞书/钉钉/邮件。
+## Output
 
-## 质量契约 / Quality contract
+- `reports/weekly/weekly-report.docx` — **终稿（必须）**
+- `reports/weekly/weekly-report.preview.html` — 评审预览
+- `reports/weekly/weekly-report.md` — 源文件（可 diff）
 
-- 数字与日期要准确；不确定处标注「待确认」。
-- 不捏造未完成的工作项或虚假进度。
-- 每项完成工作必须能在 git log 或用户提供的材料中找到依据。
-- 语气正式、商务中文。
+## Acceptance Checks
 
-## 失败恢复 / Failure recovery
+- `reports/weekly/weekly-report.docx` 存在且可作为 OOXML(zip) 打开——失败则修复后重跑 `run`，不要改交付路径。
 
-- git 仓库不可用时，基于用户口述或提供的文件生成周报，并标注 `[仅基于用户输入]`。
+## 禁止
+
+- 禁止捏造未完成的工作项或虚假进度。
+- 禁止 TBD / 待补充 / placeholder 占位。
+- 禁止只交 Markdown 不交 docx；对话正文是副本，docx 才是交付物。
+
+## 失败恢复
+
 - 信息缺失时先生成「周报草稿」，单列缺失信息，不阻塞其余内容交付。
 - 部分材料不可读时，单独列出并继续处理可读内容。
+
+## DeepSeek 执行要点
+
+Read `../_shared/deepseek-office.md` — copy-first：只做表单填写，模板填完必须 `run reports/weekly/weekly-report.md`。

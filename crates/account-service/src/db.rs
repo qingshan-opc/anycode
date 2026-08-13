@@ -119,6 +119,11 @@ impl AccountDb {
             include_str!("../migrations/024_default_10_seats_and_seat_addons.sql"),
         )
         .await?;
+        self.apply_migration(
+            "025_credit_quota_billing",
+            include_str!("../migrations/025_credit_quota_billing.sql"),
+        )
+        .await?;
         Ok(())
     }
 

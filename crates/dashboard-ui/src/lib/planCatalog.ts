@@ -126,6 +126,7 @@ export function bundleToEntitlements(
     quota: {
       tokenLimit: bundle.entitlements.token_limit,
       tokenUsed,
+      creditBalanceFen: bundle.entitlements.credit_balance_fen ?? 0,
       apiKeyLimit: bundle.entitlements.api_key_limit,
       apiKeyUsed,
       seatLimit: bundle.entitlements.seat_limit,

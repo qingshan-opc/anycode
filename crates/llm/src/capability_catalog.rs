@@ -8,6 +8,10 @@ pub enum ModelCapability {
     Chat,
     /// Multimodal chat input (vision); may share transport with chat.
     Vision,
+    /// Native video understanding input (frames/clips ride the chat transport).
+    Video,
+    /// Native audio understanding input (speech/audio rides the chat transport).
+    AudioInput,
     Embedding,
     Stt,
     Tts,
@@ -38,6 +42,8 @@ impl<'de> Deserialize<'de> for ModelCapability {
                 &[
                     "chat",
                     "vision",
+                    "video_input",
+                    "audio_input",
                     "embedding",
                     "stt",
                     "tts",
@@ -57,6 +63,10 @@ impl ModelCapability {
         match self {
             Self::Chat => "chat",
             Self::Vision => "vision",
+            // Distinct from VideoGen's legacy "video" label: this is input
+            // understanding, not generation.
+            Self::Video => "video_input",
+            Self::AudioInput => "audio_input",
             Self::Embedding => "embedding",
             Self::Stt => "stt",
             Self::Tts => "tts",
@@ -70,6 +80,8 @@ impl ModelCapability {
         &[
             Self::Chat,
             Self::Vision,
+            Self::Video,
+            Self::AudioInput,
             Self::Embedding,
             Self::Stt,
             Self::Tts,
@@ -82,6 +94,8 @@ impl ModelCapability {
         match s.trim().to_ascii_lowercase().as_str() {
             "chat" => Some(Self::Chat),
             "vision" | "multimodal" => Some(Self::Vision),
+            "video_input" | "video_understanding" | "video-input" => Some(Self::Video),
+            "audio_input" | "audio_understanding" | "audio" => Some(Self::AudioInput),
             "embedding" | "embed" => Some(Self::Embedding),
             "stt" | "speech_to_text" | "transcription" => Some(Self::Stt),
             "tts" | "text_to_speech" => Some(Self::Tts),
@@ -109,6 +123,28 @@ mod tests {
             ModelCapability::parse("image"),
             Some(ModelCapability::ImageGen)
         );
+    }
+
+    #[test]
+    fn video_and_audio_input_roundtrip() {
+        // Input modalities serialize distinctly from generation's legacy labels.
+        assert_eq!(ModelCapability::Video.as_str(), "video_input");
+        assert_eq!(ModelCapability::AudioInput.as_str(), "audio_input");
+        assert_eq!(
+            ModelCapability::parse("video_input"),
+            Some(ModelCapability::Video)
+        );
+        assert_eq!(
+            ModelCapability::parse("audio"),
+            Some(ModelCapability::AudioInput)
+        );
+        // Legacy "video" label still means generation.
+        assert_eq!(
+            ModelCapability::parse("video"),
+            Some(ModelCapability::VideoGen)
+        );
+        assert!(ModelCapability::all().contains(&ModelCapability::Video));
+        assert!(ModelCapability::all().contains(&ModelCapability::AudioInput));
     }
 
     #[test]

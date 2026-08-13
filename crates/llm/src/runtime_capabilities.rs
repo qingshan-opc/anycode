@@ -58,18 +58,9 @@ pub fn resolve_runtime_model_capabilities(
         || provider == "sglang"
         || is_loopback_url(base_url)
         || model.starts_with("managed-");
-    let minicpm_1b = model.contains("minicpm5-1b") || model.contains("minicpm-5-1b");
-    let weak_local_model = local && (minicpm_1b || model.contains("1b"));
-    let sglang_native_minicpm_tools = provider == "sglang" && minicpm_1b;
+    let weak_local_model = local && model.contains("1b");
 
-    let context_tokens = if minicpm_1b {
-        if model.contains("-e2e") || (local && (provider == "ollama" || provider == "sglang")) {
-            // Ollama/SGLang harness align compaction threshold with deployment (32k).
-            32_768
-        } else {
-            4_096
-        }
-    } else if local {
+    let context_tokens = if local {
         // Unknown local runtimes must be conservative. Their configured value
         // can still override this through session.context_window_tokens.
         4_096
@@ -81,7 +72,7 @@ pub fn resolve_runtime_model_capabilities(
         chat: true,
         native_tools: true,
         context_tokens,
-        tool_loop_verified: sglang_native_minicpm_tools || !weak_local_model,
+        tool_loop_verified: !weak_local_model,
         weak_local_model,
     }
 }
@@ -196,37 +187,15 @@ mod tests {
     }
 
     #[test]
-    fn sglang_minicpm_uses_32k_context() {
-        let got = resolve_runtime_model_capabilities(
-            "sglang",
-            "MiniCPM5-1B",
-            Some("http://127.0.0.1:30000/v1/chat/completions"),
-        );
-        assert_eq!(got.context_tokens, 32_768);
-        assert!(got.weak_local_model);
-        assert!(got.tool_loop_verified);
-    }
-
-    #[test]
-    fn ollama_minicpm_e2e_uses_32k_context() {
+    fn minicpm_gets_generic_conservative_local_profile() {
+        // The managed MiniCPM launcher is removed (roadmap P1.7): leftover
+        // minicpm configs get the generic conservative local profile.
         let got = resolve_runtime_model_capabilities(
             "ollama",
             "minicpm5-1b-e2e",
             Some("http://127.0.0.1:11434/v1/chat/completions"),
         );
-        assert_eq!(got.context_tokens, 32_768);
-        assert!(got.weak_local_model);
-    }
-
-    #[test]
-    fn managed_minicpm_has_conservative_verified_profile() {
-        let got = resolve_runtime_model_capabilities(
-            "openai",
-            "managed-minicpm5-1b",
-            Some("http://127.0.0.1:47100/v1/chat/completions"),
-        );
         assert_eq!(got.context_tokens, 4_096);
-        assert!(got.native_tools);
         assert!(got.weak_local_model);
         assert!(!got.tool_loop_verified);
     }

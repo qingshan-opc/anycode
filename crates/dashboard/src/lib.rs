@@ -21,7 +21,6 @@ pub mod ipc;
 pub mod lan;
 pub mod llm_probe;
 pub mod local_service;
-pub mod managed_local_llm;
 pub mod mcp_config;
 pub mod media_defaults;
 pub mod memory_ops;

@@ -52,7 +52,7 @@ pub fn coerce_tool_input(tool_name: &str, input: Value) -> Value {
 
     let array_fields: &[&str] = match tool_name {
         "TodoWrite" => &["todos"],
-        "PlanWrite" => &["tree", "updates"],
+        "PlanWrite" => &["doc", "prose", "tree", "updates"],
         "Grep" => &["paths", "glob"],
         "Skill" => &["args"],
         _ => &[],
@@ -64,11 +64,9 @@ pub fn coerce_tool_input(tool_name: &str, input: Value) -> Value {
         }
     }
 
-    if tool_name == "Bash" {
-        if !map.contains_key("command") {
-            if let Some(cmd) = map.get("cmd").and_then(|v| v.as_str()) {
-                map.insert("command".to_string(), Value::String(cmd.to_string()));
-            }
+    if tool_name == "Bash" && !map.contains_key("command") {
+        if let Some(cmd) = map.get("cmd").and_then(|v| v.as_str()) {
+            map.insert("command".to_string(), Value::String(cmd.to_string()));
         }
     }
 

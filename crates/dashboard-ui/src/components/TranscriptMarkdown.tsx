@@ -1,6 +1,9 @@
 import { memo, useMemo, type MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import javascript from "highlight.js/lib/languages/javascript";
@@ -11,6 +14,8 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import "highlight.js/styles/github.css";
 import { MermaidDiagram } from "@/components/chat/MermaidDiagram";
+import { MindmapDiagram } from "@/components/chat/MindmapDiagram";
+import { MathDiagram } from "@/components/chat/MathDiagram";
 import { TableCard } from "@/components/chat/TableCard";
 import { useDeliverableProject } from "@/components/deliverables/DeliverableProjectContext";
 import { splitMarkdownWithTables } from "@/lib/markdownTable";
@@ -41,6 +46,8 @@ type Props = {
   live?: boolean;
   /** Project root for resolving relative markdown links. */
   projectRoot?: string | null;
+  /** Owning session — attached to persisted diagrams when known. */
+  sessionId?: string | null;
 };
 
 function MarkdownBlock({
@@ -52,7 +59,11 @@ function MarkdownBlock({
 }) {
   if (!content.trim()) return null;
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={components}
+    >
       {content}
     </ReactMarkdown>
   );
@@ -87,6 +98,7 @@ export const TranscriptMarkdown = memo(function TranscriptMarkdown({
   className = "",
   live = false,
   projectRoot: projectRootProp = null,
+  sessionId = null,
 }: Props) {
   const { projectRoot: projectRootFromCtx } = useDeliverableProject();
   const projectRoot = projectRootProp ?? projectRootFromCtx ?? null;
@@ -100,7 +112,13 @@ export const TranscriptMarkdown = memo(function TranscriptMarkdown({
         const match = /language-(\w+)/.exec(codeClass ?? "");
         const raw = String(children).replace(/\n$/, "");
         if (match?.[1] === "mermaid") {
-          return <MermaidDiagram code={raw} />;
+          return <MermaidDiagram code={raw} sessionId={sessionId} />;
+        }
+        if (match?.[1] === "mindmap") {
+          return <MindmapDiagram code={raw} sessionId={sessionId} />;
+        }
+        if (match?.[1] === "math") {
+          return <MathDiagram code={raw} sessionId={sessionId} />;
         }
         if (match) {
           const lang = match[1];
@@ -168,7 +186,7 @@ export const TranscriptMarkdown = memo(function TranscriptMarkdown({
         );
       },
     }),
-    [live, projectRoot],
+    [live, projectRoot, sessionId],
   );
 
   const segments = useMemo(

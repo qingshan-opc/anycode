@@ -99,25 +99,26 @@ impl AgentRuntime {
         drop(tools);
 
         // Inject TaskCompiler / Experience / Skill routing once per turn (latest user prompt).
+        // prompt 提升出块:P0.1 grader 需要原始用户意图生成/判定 rubric。
+        let prompt = {
+            let g = messages.lock().await;
+            g.iter()
+                .rev()
+                .find(|m| {
+                    m.role == MessageRole::User
+                        && !m
+                            .metadata
+                            .get(ANYCODE_CONTEXT_USER_METADATA_KEY)
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                })
+                .and_then(|m| match &m.content {
+                    MessageContent::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
         let (gate_plan, expected_artifacts, task_family) = {
-            let prompt = {
-                let g = messages.lock().await;
-                g.iter()
-                    .rev()
-                    .find(|m| {
-                        m.role == MessageRole::User
-                            && !m
-                                .metadata
-                                .get(ANYCODE_CONTEXT_USER_METADATA_KEY)
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                    })
-                    .and_then(|m| match &m.content {
-                        MessageContent::Text(t) => Some(t.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default()
-            };
             if prompt.trim().is_empty() {
                 (None, Vec::new(), None)
             } else {
@@ -837,6 +838,7 @@ impl AgentRuntime {
                     expected_artifacts: &expected_artifacts,
                     artifacts: &artifacts,
                     assistant_text: &last_assistant_text,
+                    task_prompt: &prompt,
                     live_trace_tx: &live_trace_tx,
                     verification: &verification_shared,
                     progress_seq,

@@ -132,7 +132,7 @@ pub fn user_message_event_with_media(
     conversation_turn_id: u32,
     display_prompt: &str,
     model_prompt: Option<&str>,
-    vision_images: Option<&[crate::control::vision_payload::VisionImagePayload]>,
+    vision_images: Option<&[crate::control::media_payload::VisionImagePayload]>,
 ) -> ChatStreamEvent {
     let at = Utc::now().to_rfc3339();
     let block_id = format!("user:u{conversation_turn_id}:{}", Uuid::new_v4().simple());
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn user_message_keeps_ocr_out_of_visible_body() {
-        use crate::control::vision_payload::VisionImagePayload;
+        use crate::control::media_payload::VisionImagePayload;
         let imgs = [VisionImagePayload {
             mime_type: "image/png".into(),
             data_base64: "abc".into(),

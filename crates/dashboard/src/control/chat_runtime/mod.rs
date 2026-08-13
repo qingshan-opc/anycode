@@ -5,7 +5,7 @@ pub mod hydrate;
 
 use crate::control::chat_live_bridge::{log_tail_fallback_enabled, spawn_live_bridge};
 use crate::control::chat_runtime::hydrate::{load_prior_history, HydratedHistory};
-use crate::control::vision_payload::{self, VisionImagePayload};
+use crate::control::media_payload::{self, VisionImagePayload};
 use crate::control::web_chat::WebChatSendResult;
 use crate::control::web_chat_tail::WebChatTailHub;
 use crate::db::DashboardDb;
@@ -193,6 +193,21 @@ impl ChatRuntimeHost {
                 let guard = self.sessions.lock().await;
                 guard.get(session_id).cloned()
             };
+            // The per-message agent is authoritative: when it differs from the
+            // cached session's agent (e.g. an ephemeral `/目标` turn, or the
+            // follow-up message after one), rebuild the embedded session from
+            // DB history under the requested agent. Refuse mid-turn.
+            let existing = match existing {
+                Some(s) if s.agent_type == agent_type => Some(s),
+                Some(s) => {
+                    if s.turn_in_flight.load(Ordering::Acquire) {
+                        return Err(ChatSendConflict::TurnInFlight.into());
+                    }
+                    self.sessions.lock().await.remove(session_id);
+                    None
+                }
+                None => None,
+            };
             if let Some(existing) = existing {
                 existing
             } else {
@@ -315,7 +330,7 @@ impl ChatRuntimeHost {
 
         let prompt = model_trimmed.to_string();
         let vision_images = model_vision_images
-            .map(vision_payload::to_core_images)
+            .map(media_payload::to_core_images)
             .unwrap_or_default();
         let reply_lang_owned = reply_lang.map(str::to_string);
         let composer_mode_owned = composer_mode.map(str::to_string);
@@ -485,19 +500,12 @@ async fn run_embedded_turn_scoped(
         .await?;
     crate::notify::register_inprocess_bus(Arc::clone(&events));
 
-    let tool_deny_names = if crate::control::grill_mode::normalize_composer_mode(
-        composer_mode.as_deref(),
-    )
-    .is_some()
-    {
-        crate::control::grill_mode::grill_tool_deny_names()
+    let tool_deny_names: Vec<String> =
+        crate::control::grill_mode::tool_deny_names_for_mode(composer_mode.as_deref())
             .iter()
             .copied()
             .map(str::to_string)
-            .collect()
-    } else {
-        vec![]
-    };
+            .collect();
 
     let task = Task {
         id: session.task_id,

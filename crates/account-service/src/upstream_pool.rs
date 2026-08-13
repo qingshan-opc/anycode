@@ -31,20 +31,13 @@ pub struct UpstreamCredential {
     pub base_url: String,
 }
 
-pub fn default_agnes_base_url() -> String {
-    std::env::var("AGNES_API_BASE_URL")
-        .unwrap_or_else(|_| "https://apihub.agnes-ai.com/v1/chat/completions".into())
-}
-
 pub fn default_deepseek_base_url() -> String {
     std::env::var("DEEPSEEK_API_BASE_URL").unwrap_or_else(|_| "https://api.deepseek.com".into())
 }
 
-pub fn default_upstream_base_url(provider_id: &str) -> String {
-    match provider_id {
-        "deepseek" => default_deepseek_base_url(),
-        _ => default_agnes_base_url(),
-    }
+/// 上游池默认端点：云端托管只有 DeepSeek，未知 provider 一律回落 DeepSeek。
+pub fn default_upstream_base_url(_provider_id: &str) -> String {
+    default_deepseek_base_url()
 }
 
 pub async fn list_upstream_accounts(

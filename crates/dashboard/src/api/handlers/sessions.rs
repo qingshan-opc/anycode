@@ -222,22 +222,31 @@ pub async fn send_session_message(
     });
     let resolved_agent = crate::control::agent_resolve::resolve_web_chat_agent(effective_agent);
     if requested_agent.is_some() && requested_agent != Some(session_agent) {
-        if let Err(e) = state
-            .db
-            .update_session_agent(&session_id, requested_agent)
-            .await
-        {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
+        if body.agent_ephemeral.unwrap_or(false) {
+            // Slash-mode agent (e.g. `/目标`): this task only — never written to
+            // the session row, so the composer agent picker (global routing) is
+            // untouched. The runtime rebuilds under the override for this turn
+            // and self-reconciles back on the next plain message.
+            state.web_chat.evict(&session_id).await;
+            state.chat_runtime.evict(&session_id).await;
+        } else {
+            if let Err(e) = state
+                .db
+                .update_session_agent(&session_id, requested_agent)
+                .await
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+            state.web_chat.evict(&session_id).await;
+            state.chat_runtime.evict(&session_id).await;
         }
-        state.web_chat.evict(&session_id).await;
-        state.chat_runtime.evict(&session_id).await;
     }
     if let Some(ref imgs) = body.vision_images {
-        if let Err(e) = crate::control::vision_payload::validate_vision_payloads(imgs) {
+        if let Err(e) = crate::control::media_payload::validate_vision_payloads(imgs) {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),
@@ -245,7 +254,7 @@ pub async fn send_session_message(
                 .into_response();
         }
         if !imgs.is_empty() {
-            match crate::control::vision_payload::can_accept_images_for_chat() {
+            match crate::control::media_payload::can_accept_images_for_chat() {
                 Ok(false) => {
                     return (
                         StatusCode::BAD_REQUEST,
@@ -276,6 +285,38 @@ pub async fn send_session_message(
         }
     }
 
+    // Video attachment (P1.2): resolve frames + transcript appendix up front so
+    // both the enqueue and immediate paths carry the baked payload. Frames are
+    // pipeline-generated (own budget), so they bypass the 3-image user cap.
+    let mut vision_images = body.vision_images.clone();
+    let prompt_video;
+    let prompt = if let Some(vref) = body
+        .video_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        match crate::control::video_frames::resolve_video_attachment(vref) {
+            Ok(outcome) => {
+                if !outcome.frames.is_empty() {
+                    vision_images
+                        .get_or_insert_with(Vec::new)
+                        .extend(outcome.frames);
+                }
+                prompt_video = match outcome.appendix {
+                    Some(ap) => format!("{prompt}\n\n{ap}"),
+                    None => prompt.to_string(),
+                };
+                prompt_video.as_str()
+            }
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+            }
+        }
+    } else {
+        prompt
+    };
+
     let should_enqueue = body.enqueue.unwrap_or(true)
         && crate::control::message_queue::session_accepts_enqueue(
             &state,
@@ -301,7 +342,7 @@ pub async fn send_session_message(
                 prompt: prompt.to_string(),
                 agent: requested_agent.map(str::to_string),
                 skills: body.skills.clone(),
-                vision_images: body.vision_images.clone(),
+                vision_images: vision_images.clone(),
                 text_files: body.text_files.clone(),
                 lang: body.lang.clone(),
                 composer_mode: body.composer_mode.clone(),
@@ -357,7 +398,7 @@ pub async fn send_session_message(
         Some(resolved_agent.as_str()),
         prompt,
         &prompt_for_chat,
-        body.vision_images.as_deref(),
+        vision_images.as_deref(),
         body.text_files.as_deref(),
         body.lang.as_deref(),
         false,

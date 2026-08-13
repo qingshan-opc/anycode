@@ -54,6 +54,20 @@ impl PlanStatus {
             Self::Cancelled => "[-]",
         }
     }
+
+    /// Inverse of `glyph` (Markdown plan documents). Note `[x]` (lowercase) is
+    /// completed while `[X]` (uppercase) is failed.
+    pub fn from_glyph(glyph: &str) -> Option<Self> {
+        match glyph.trim() {
+            "[ ]" => Some(Self::Pending),
+            "[~]" => Some(Self::InProgress),
+            "[x]" => Some(Self::Completed),
+            "[X]" => Some(Self::Failed),
+            "[!]" => Some(Self::Blocked),
+            "[-]" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +107,10 @@ pub struct PlanNode {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlanTree {
+    /// Free-form Markdown guidance that sits at the top of the plan document
+    /// (goal, strategy, constraints — the "instruction manual" for the tree).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prose: String,
     #[serde(default)]
     pub roots: Vec<PlanNode>,
 }
@@ -404,6 +422,17 @@ pub fn format_plan_tree_summary(tree: &PlanTree) -> String {
     }
     let mut out = String::from(PLAN_TREE_CONTEXT_PREFIX);
     out.push_str("\n\n");
+    let prose = tree.prose.trim();
+    if !prose.is_empty() {
+        const MAX_PROSE_CHARS: usize = 2000;
+        if prose.chars().count() > MAX_PROSE_CHARS {
+            out.push_str(&prose.chars().take(MAX_PROSE_CHARS).collect::<String>());
+            out.push_str("…\n\n");
+        } else {
+            out.push_str(prose);
+            out.push_str("\n\n");
+        }
+    }
     for root in &tree.roots {
         format_node_summary(root, 0, &mut out);
     }
@@ -427,6 +456,212 @@ fn format_node_summary(node: &PlanNode, depth: usize, out: &mut String) {
     out.push_str(")\n");
     for child in &node.children {
         format_node_summary(child, depth + 1, out);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Markdown plan document (canonical LLM-facing + storage format)
+//
+// A plan document is a multi-level Markdown file:
+//
+// ```markdown
+// # 计划：重构鉴权模块
+//
+// 目标是 ……（指导手册式的文字说明：背景、策略、约束、验收标准）
+//
+// ## 计划树
+//
+// - [ ] 调研现状 `(research)` — 只读，不改代码
+//   - [~] 阅读 auth 模块 `(read-auth)`
+//   - [ ] 整理调用方 `(list-callers)`
+// - [ ] 实施 `(impl)`
+// ```
+//
+// The prose above the first `- [g]` item is the guidance section; the nested
+// checkbox list below is the tree. Ids live in backticks, details after " — ".
+// ---------------------------------------------------------------------------
+
+/// Serialize a plan tree as a multi-level Markdown document.
+pub fn format_plan_doc(tree: &PlanTree) -> String {
+    let mut out = String::new();
+    let prose = tree.prose.trim();
+    if !prose.is_empty() {
+        out.push_str(prose);
+        out.push_str("\n\n");
+    }
+    for root in &tree.roots {
+        format_node_doc_line(root, 0, &mut out);
+    }
+    out.trim_end().to_string()
+}
+
+fn format_node_doc_line(node: &PlanNode, depth: usize, out: &mut String) {
+    let indent = "  ".repeat(depth);
+    out.push_str(&indent);
+    out.push_str("- ");
+    out.push_str(node.status.glyph());
+    out.push(' ');
+    out.push_str(&sanitize_doc_text(&node.title));
+    out.push_str(" `(");
+    out.push_str(node.id.trim());
+    out.push_str(")`");
+    if let Some(detail) = node
+        .detail
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        out.push_str(" — ");
+        out.push_str(&sanitize_doc_text(detail));
+    }
+    out.push('\n');
+    for child in &node.children {
+        format_node_doc_line(child, depth + 1, out);
+    }
+}
+
+fn sanitize_doc_text(text: &str) -> String {
+    text.replace(['\n', '\r', '`'], " ").trim().to_string()
+}
+
+struct DocLine {
+    indent: usize,
+    glyph: String,
+    body: String,
+}
+
+/// Split a doc line into indent/glyph/body if it is a tree item.
+fn parse_doc_item_line(line: &str) -> Option<DocLine> {
+    let trimmed_start = line.trim_start_matches([' ', '\t']);
+    let indent = line.len() - trimmed_start.len();
+    let rest = trimmed_start.strip_prefix("- ")?;
+    let end = rest.find(']')?;
+    let glyph = rest.get(..=end)?;
+    PlanStatus::from_glyph(glyph)?;
+    let body = rest.get(end + 1..)?.trim().to_string();
+    Some(DocLine {
+        indent,
+        glyph: glyph.to_string(),
+        body,
+    })
+}
+
+/// Parse the body after `- [g]`: `Title `(id)` — detail`.
+fn parse_doc_node_body(body: &str, fallback_id: String) -> PlanNode {
+    let (head, detail) = match body.split_once(" — ") {
+        Some((h, d)) => (h.trim(), Some(d.trim().to_string())),
+        None => (body.trim(), None),
+    };
+    let mut id = None;
+    let mut title_parts: Vec<&str> = Vec::new();
+    for part in head.split('`') {
+        // Backtick-quoted segments alternate: text, `quoted`, text, …
+        // Only `(slug)` shaped quoted segments are ids.
+        let is_id_segment = part.starts_with('(')
+            && part.ends_with(')')
+            && part.len() > 2
+            && !part[1..part.len() - 1].contains(char::is_whitespace);
+        if id.is_none() && is_id_segment {
+            id = Some(part[1..part.len() - 1].to_string());
+        } else {
+            title_parts.push(part);
+        }
+    }
+    let title = title_parts.concat().trim().to_string();
+    PlanNode {
+        id: id.unwrap_or(fallback_id),
+        title,
+        status: PlanStatus::Pending,
+        children: Vec::new(),
+        detail: detail.filter(|d| !d.is_empty()),
+        kind: None,
+    }
+}
+
+/// Parse a Markdown plan document into a plan tree. Prose is everything before
+/// the first tree item; nesting follows indentation (deeper indent = child).
+pub fn parse_plan_doc(doc: &str) -> Result<PlanTree, PlanValidationError> {
+    let mut prose_lines: Vec<&str> = Vec::new();
+    let mut items: Vec<DocLine> = Vec::new();
+    let mut seen_item = false;
+    for line in doc.lines() {
+        if let Some(item) = parse_doc_item_line(line) {
+            seen_item = true;
+            items.push(item);
+        } else if !seen_item {
+            prose_lines.push(line);
+        }
+        // Non-item lines after the tree started are ignored.
+    }
+    let prose = prose_lines.join("\n").trim().to_string();
+
+    // Build the tree from indentation: a line is a child of the nearest
+    // previous line with strictly smaller indent.
+    let mut tree = PlanTree {
+        prose,
+        roots: Vec::new(),
+    };
+    // Stack of (indent, path-of-child-indices from roots).
+    let mut stack: Vec<(usize, Vec<usize>)> = Vec::new();
+    let mut counter = 0usize;
+    for item in items {
+        counter += 1;
+        let status = PlanStatus::from_glyph(&item.glyph).unwrap_or_default();
+        let mut node = parse_doc_node_body(&item.body, format!("node-{counter}"));
+        node.status = status;
+        while stack
+            .last()
+            .is_some_and(|(indent, _)| *indent >= item.indent)
+        {
+            stack.pop();
+        }
+        let parent_path = stack.last().map(|(_, path)| path.clone());
+        let path = insert_doc_node(&mut tree, parent_path.as_deref(), node);
+        stack.push((item.indent, path));
+    }
+    Ok(tree)
+}
+
+fn insert_doc_node(
+    tree: &mut PlanTree,
+    parent_path: Option<&[usize]>,
+    node: PlanNode,
+) -> Vec<usize> {
+    fn node_at<'a>(roots: &'a mut [PlanNode], path: &[usize]) -> &'a mut PlanNode {
+        let mut current = &mut roots[path[0]];
+        for &idx in &path[1..] {
+            current = &mut current.children[idx];
+        }
+        current
+    }
+    match parent_path {
+        None => {
+            tree.roots.push(node);
+            vec![tree.roots.len() - 1]
+        }
+        Some(path) => {
+            let parent = node_at(&mut tree.roots, path);
+            parent.children.push(node);
+            let mut child_path = path.to_vec();
+            child_path.push(parent.children.len() - 1);
+            child_path
+        }
+    }
+}
+
+/// Serialize for persistence: Markdown plan document.
+pub fn plan_tree_to_storage(tree: &PlanTree) -> String {
+    format_plan_doc(tree)
+}
+
+/// Deserialize from persistence. Legacy rows hold the old JSON encoding
+/// (`{"roots": …}`); new rows hold the Markdown plan document.
+pub fn plan_tree_from_storage(raw: &str) -> PlanTree {
+    let trimmed = raw.trim_start();
+    if trimmed.starts_with('{') {
+        serde_json::from_str(raw).unwrap_or_default()
+    } else {
+        parse_plan_doc(raw).unwrap_or_default()
     }
 }
 
@@ -498,6 +733,7 @@ mod tests {
 
     fn sample_tree() -> PlanTree {
         PlanTree {
+            prose: String::new(),
             roots: vec![PlanNode {
                 id: "phase-1".into(),
                 title: "Research".into(),
@@ -519,6 +755,7 @@ mod tests {
     #[test]
     fn validate_rejects_duplicate_ids() {
         let tree = PlanTree {
+            prose: String::new(),
             roots: vec![
                 PlanNode {
                     id: "a".into(),
@@ -582,6 +819,7 @@ mod tests {
     #[test]
     fn focus_and_next_guide_lines() {
         let mut tree = PlanTree {
+            prose: String::new(),
             roots: vec![PlanNode {
                 id: "phase-1".into(),
                 title: "Build".into(),
@@ -626,6 +864,7 @@ mod tests {
     #[test]
     fn focus_prefers_deepest_in_progress() {
         let tree = PlanTree {
+            prose: String::new(),
             roots: vec![PlanNode {
                 id: "p".into(),
                 title: "Phase".into(),
@@ -647,5 +886,95 @@ mod tests {
             Some("Phase / Leaf task")
         );
         assert_eq!(plan_tree_in_progress_leaf_count(&tree), 1);
+    }
+
+    #[test]
+    fn plan_doc_round_trip() {
+        let doc = "# 计划：重构鉴权模块\n\n目标是拆出 token 校验；先调研再动手，改完跑全量测试。\n\n## 计划树\n\n- [ ] 调研现状 `(research)` — 只读，不改代码\n  - [~] 阅读 auth 模块 `(read-auth)`\n  - [ ] 整理调用方 `(list-callers)`\n- [ ] 实施 `(impl)`\n  - [ ] 拆分校验层 `(split)`\n    - [X] 失败的尝试 `(failed-try)`\n";
+        let tree = parse_plan_doc(doc).unwrap();
+        assert!(tree.prose.contains("目标是拆出 token 校验"));
+        assert!(tree.prose.contains("# 计划：重构鉴权模块"));
+        assert_eq!(tree.roots.len(), 2);
+        let research = &tree.roots[0];
+        assert_eq!(research.id, "research");
+        assert_eq!(research.title, "调研现状");
+        assert_eq!(research.detail.as_deref(), Some("只读，不改代码"));
+        assert_eq!(research.status, PlanStatus::Pending);
+        assert_eq!(research.children.len(), 2);
+        assert_eq!(research.children[0].id, "read-auth");
+        assert_eq!(research.children[0].status, PlanStatus::InProgress);
+        let split = &tree.roots[1].children[0];
+        assert_eq!(split.id, "split");
+        assert_eq!(split.children[0].status, PlanStatus::Failed);
+
+        let rendered = format_plan_doc(&tree);
+        let reparsed = parse_plan_doc(&rendered).unwrap();
+        assert_eq!(reparsed.prose, tree.prose);
+        assert_eq!(reparsed.roots.len(), 2);
+        assert_eq!(reparsed.roots[0].children[1].id, "list-callers");
+        assert_eq!(reparsed.roots[1].children[0].children[0].id, "failed-try");
+    }
+
+    #[test]
+    fn plan_doc_assigns_fallback_ids_and_glyphs() {
+        let doc = "- [x] done thing\n  - [!] blocked thing\n    - [-] dropped thing\n";
+        let tree = parse_plan_doc(doc).unwrap();
+        assert_eq!(tree.roots[0].status, PlanStatus::Completed);
+        assert!(!tree.roots[0].id.is_empty());
+        assert_eq!(tree.roots[0].children[0].status, PlanStatus::Blocked);
+        assert_eq!(
+            tree.roots[0].children[0].children[0].status,
+            PlanStatus::Cancelled
+        );
+        assert!(tree.prose.is_empty());
+    }
+
+    #[test]
+    fn storage_round_trip_and_legacy_json() {
+        let mut tree = PlanTree {
+            prose: "指导说明：稳步推进。".into(),
+            roots: vec![PlanNode {
+                id: "a".into(),
+                title: "Task A".into(),
+                status: PlanStatus::InProgress,
+                children: vec![],
+                detail: None,
+                kind: None,
+            }],
+        };
+        let stored = plan_tree_to_storage(&tree);
+        assert!(stored.contains("- [~] Task A `(a)`"));
+        let loaded = plan_tree_from_storage(&stored);
+        assert_eq!(loaded.prose, tree.prose);
+        assert_eq!(loaded.roots[0].id, "a");
+        assert_eq!(loaded.roots[0].status, PlanStatus::InProgress);
+
+        // Legacy JSON rows still load.
+        let legacy = serde_json::to_string(&tree).unwrap();
+        let loaded_legacy = plan_tree_from_storage(&legacy);
+        assert_eq!(loaded_legacy.roots[0].id, "a");
+        assert_eq!(loaded_legacy.prose, "指导说明：稳步推进。");
+
+        tree.prose.clear();
+        tree.roots.clear();
+        assert!(plan_tree_to_storage(&tree).is_empty());
+    }
+
+    #[test]
+    fn summary_includes_prose() {
+        let tree = PlanTree {
+            prose: "先读代码，再小步修改。".into(),
+            roots: vec![PlanNode {
+                id: "a".into(),
+                title: "Work".into(),
+                status: PlanStatus::Pending,
+                children: vec![],
+                detail: None,
+                kind: None,
+            }],
+        };
+        let summary = format_plan_tree_summary(&tree);
+        assert!(summary.contains("先读代码，再小步修改。"));
+        assert!(summary.contains("[ ] Work (a)"));
     }
 }

@@ -2051,6 +2051,12 @@
     color: var(--color-primary);
   }
 
+  .dw-model-picker__deprecated-badge {
+    @apply shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-full;
+    background: color-mix(in srgb, var(--color-warn, #b26a00) 14%, transparent);
+    color: var(--color-warn, #b26a00);
+  }
+
   .dw-model-picker__item-tier {
     @apply text-[11px] text-secondary truncate;
     font-family: var(--font-mono, ui-monospace, monospace);
@@ -2447,6 +2453,14 @@
 
   .conv-git-bar__menu-item {
     @apply block w-full text-left px-3 py-2 text-sm border-0 bg-transparent cursor-pointer hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .conv-git-bar__menu--branches {
+    @apply min-w-[16rem] max-w-[22rem] max-h-[24rem] overflow-y-auto;
+  }
+
+  .conv-git-bar__menu-label {
+    @apply px-3 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-secondary;
   }
 
   .conv-git-bar__tree {
@@ -3474,6 +3488,37 @@ html[data-skin="mono"] .accent-text {
   display: block;
   max-width: 100%;
   height: auto;
+}
+
+/* P1.8: standalone /diagram/{id} share page */
+.diagram-share__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.diagram-share__body {
+  padding: 1rem 1.25rem 2rem;
+}
+
+.diagram-share__canvas svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+@media print {
+  .diagram-share__bar {
+    display: none;
+  }
 }
 
 @keyframes deliverable-thumb-shimmer {

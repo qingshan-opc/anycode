@@ -24,7 +24,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, error};
 
 const DEFAULT_OPENAI_CHAT_URL: &str = "https://api.openai.com/v1/chat/completions";
-use crate::http_client::{build_api_http_client, configured_api_timeout_ms};
+use crate::http_client::{
+    build_api_http_client, build_streaming_api_http_client, configured_api_timeout_ms,
+    configured_stream_idle_timeout_ms,
+};
 const DEFAULT_MAX_RETRIES: u32 = 10;
 
 #[derive(Debug, Serialize)]
@@ -96,6 +99,7 @@ async fn send_chat_with_retries(
     source: QuerySource,
     model: &str,
     observer: Option<&dyn LlmRetryObserver>,
+    streaming: bool,
 ) -> Result<reqwest::Response, CoreError> {
     let provider_cfg = ProviderRetryConfig::openai();
     let max_retries = provider_cfg.base_config.max_retries;
@@ -126,7 +130,7 @@ async fn send_chat_with_retries(
                     snippet.truncate(MAX_ERR);
                     snippet.push_str("...<truncated>");
                 }
-                last_err = Some(format!(
+                let mut detail = format!(
                     "OpenAI API error: status={} url={} body={}",
                     status.as_u16(),
                     url,
@@ -135,7 +139,12 @@ async fn send_chat_with_retries(
                     } else {
                         &snippet
                     }
-                ));
+                );
+                if let Some(hint) = crate::providers::zai::billing_failure_hint(status, &error_text)
+                {
+                    detail = format!("{detail} · {hint}");
+                }
+                last_err = Some(detail);
 
                 if crate::providers::zai::is_quota_exhausted(&error_text) {
                     error!("OpenAI-compatible quota exhausted — failing fast without retries");
@@ -161,10 +170,17 @@ async fn send_chat_with_retries(
             Err(e) => {
                 let mut msg = e.to_string();
                 if e.is_timeout() {
-                    msg = format!(
-                        "{msg} · API_TIMEOUT_MS={}ms, try increasing it",
-                        configured_api_timeout_ms()
-                    );
+                    msg = if streaming {
+                        format!(
+                            "{msg} · API_STREAM_IDLE_TIMEOUT_MS={}ms (相邻 chunk 间隔上限), try increasing it",
+                            configured_stream_idle_timeout_ms()
+                        )
+                    } else {
+                        format!(
+                            "{msg} · API_TIMEOUT_MS={}ms, try increasing it",
+                            configured_api_timeout_ms()
+                        )
+                    };
                 }
                 last_err = Some(msg);
                 let out = evaluate_network_retry(&provider_cfg, source, attempt);
@@ -188,6 +204,8 @@ async fn send_chat_with_retries(
 /// OpenAI 官方 Chat Completions 客户端（`feature = "openai"`）。
 pub struct OpenAIClient {
     client: Client,
+    /// 流式专用：无总超时，仅 connect + 读空闲超时（见 `crate::http_client`）。
+    stream_client: Client,
     api_key: String,
     base_url: String,
 }
@@ -200,6 +218,7 @@ impl OpenAIClient {
 
         Ok(Self {
             client: build_api_http_client(),
+            stream_client: build_streaming_api_http_client(),
             api_key,
             base_url: DEFAULT_OPENAI_CHAT_URL.to_string(),
         })
@@ -274,6 +293,7 @@ impl LLMClient for OpenAIClient {
             config.query_source,
             &model_for_retry,
             config.retry_observer.as_deref(),
+            false,
         )
         .await?;
 
@@ -346,7 +366,7 @@ impl LLMClient for OpenAIClient {
             .map(|s| s.to_string())
             .unwrap_or_else(|| self.api_key.clone());
 
-        let client = self.client.clone();
+        let client = self.stream_client.clone();
         let (tx, rx) = mpsc::channel(128);
         let stream_tools = tools.clone();
         let source = config.query_source;
@@ -364,6 +384,7 @@ impl LLMClient for OpenAIClient {
                 source,
                 &model_for_retry,
                 observer.as_deref(),
+                true,
             )
             .await
             {
@@ -491,7 +512,7 @@ mod tests {
     fn local_config() -> ModelConfig {
         ModelConfig {
             provider: LLMProvider::OpenAI,
-            model: "minicpm5-1b".into(),
+            model: "qwen3-1b".into(),
             base_url: Some("http://127.0.0.1:47100/v1/chat/completions".into()),
             ..Default::default()
         }

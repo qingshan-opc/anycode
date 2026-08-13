@@ -749,7 +749,7 @@ pub async fn get_entitlements(db: &AccountDb, org_id: &str) -> Result<Entitlemen
     let row = sqlx::query(
         r#"
         SELECT token_limit, api_key_limit, seat_limit, extra_seats, extra_seats_until,
-          tokens_used, hosted_models_enabled,
+          tokens_used, credit_balance_fen, hosted_models_enabled,
           quota_window_secs, calls_limit_per_window, calls_used_in_window, quota_window_started_at
         FROM entitlements WHERE organization_id = ?
         "#,
@@ -793,6 +793,7 @@ pub async fn get_entitlements(db: &AccountDb, org_id: &str) -> Result<Entitlemen
             .map(|d| d.to_string()),
         seat_used: seat_used as i32,
         tokens_used: row.get("tokens_used"),
+        credit_balance_fen: row.get("credit_balance_fen"),
         hosted_models_enabled: row.get("hosted_models_enabled"),
         calls_limit_per_window: if calls_limit > 0 {
             Some(calls_limit)

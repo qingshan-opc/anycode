@@ -21,7 +21,14 @@ import {
 } from "@/lib/optimisticMessageQueue";
 import { useComposerIme } from "@/lib/composerIme";
 import { chatModelSupportsVision, imageAttachAllowed } from "@/lib/composerModels";
-import { handleComposerPasteEvent } from "@/lib/composerPaste";
+import {
+  formatVideoMeta,
+  isVideoFile,
+  MAX_VIDEO_BYTES,
+  VIDEO_ACCEPT,
+  type VideoAttachment,
+} from "@/lib/composerVideo";
+import { handleComposerPasteEvent, ingestPastedFilePaths } from "@/lib/composerPaste";
 import { useMediaStatus } from "@/hooks/useMediaStatus";
 import {
   formatTextAttachmentMeta,
@@ -40,7 +47,7 @@ import {
   type VisionAttachment,
 } from "@/lib/composerVision";
 import {
-  composerModeForSend,
+  GRILL_COMPOSER_MODE,
   grillSlashCommand,
   isGrillSlashToken,
   loadGrillMode,
@@ -64,6 +71,14 @@ import {
   loadGoalMode,
   saveGoalMode,
 } from "@/lib/goalMode";
+import {
+  PLAN_COMPOSER_MODE,
+  isPlanSlashToken,
+  loadPlanMode,
+  planSlashCommand,
+  savePlanMode,
+  shouldExitPlanMode,
+} from "@/lib/planMode";
 import { useAnchoredAboveStyle } from "@/lib/useAnchoredAboveStyle";
 
 type ConversationStartSuccess = {
@@ -98,7 +113,7 @@ type StartProps = {
 type Props = FollowUpProps | StartProps;
 
 const TEXT_FILE_ACCEPT = ".txt,.md,.json,.csv,.log,.pdf,.xlsx,.docx,.pptx";
-const ATTACH_ACCEPT = `image/*,${TEXT_FILE_ACCEPT}`;
+const ATTACH_ACCEPT = `image/*,${VIDEO_ACCEPT},${TEXT_FILE_ACCEPT}`;
 
 function parseSkillAllowlist(skillsJson: string): string[] | null {
   if (!skillsJson.trim()) return null;
@@ -171,6 +186,8 @@ export function ConversationComposer(props: Props) {
   const [slashOpen, setSlashOpen] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [attachedImages, setAttachedImages] = useState<VisionAttachment[]>([]);
+  const [attachedVideo, setAttachedVideo] = useState<VideoAttachment | null>(null);
+  const [videoPreparing, setVideoPreparing] = useState(false);
   const [attachedTextFiles, setAttachedTextFiles] = useState<TextAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentHint, setAttachmentHint] = useState<string | null>(null);
@@ -275,6 +292,44 @@ export function ConversationComposer(props: Props) {
     [attachedImages.length, canAttachImages, t, usesOcrForImages],
   );
 
+  const ingestVideoFile = useCallback(
+    async (file: File) => {
+      if (file.size > MAX_VIDEO_BYTES) {
+        setAttachmentError(
+          t("conversations.attachmentVideoTooLarge").replace("{name}", file.name || "video"),
+        );
+        return;
+      }
+      setVideoPreparing(true);
+      setAttachmentError(null);
+      setAttachmentHint(t("conversations.attachmentVideoPreparing"));
+      try {
+        const result = await api.uploadVideo(file);
+        if (!result.ok || !result.video_ref) {
+          setAttachmentError(
+            (result.error || t("conversations.attachmentVideoFailed")).replace(
+              "{name}",
+              file.name || "video",
+            ),
+          );
+          setAttachmentHint(null);
+          return;
+        }
+        setAttachedVideo({
+          video_ref: result.video_ref,
+          name: file.name || "video",
+          duration_secs: result.duration_secs,
+          frame_count: result.frame_count,
+          has_transcript: result.has_transcript,
+        });
+        setAttachmentHint(null);
+      } finally {
+        setVideoPreparing(false);
+      }
+    },
+    [t],
+  );
+
   const handleComposerPaste = useCallback(
     async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const result = await handleComposerPasteEvent(event.nativeEvent, {
@@ -284,9 +339,16 @@ export function ConversationComposer(props: Props) {
         locale,
         t,
         ingestImageFiles,
+        ingestFilePaths: (paths) => ingestPastedFilePaths(paths, t),
       });
       if (result.kind === "text-card") {
         setAttachedTextFiles((prev) => [...prev, result.file].slice(0, MAX_TEXT_FILES));
+        setAttachmentError(null);
+        setAttachmentHint(result.hint);
+        return;
+      }
+      if (result.kind === "text-cards") {
+        setAttachedTextFiles((prev) => [...prev, ...result.files].slice(0, MAX_TEXT_FILES));
         setAttachmentError(null);
         setAttachmentHint(result.hint);
         return;
@@ -317,25 +379,19 @@ export function ConversationComposer(props: Props) {
 
   const grillStorageKey = isStart ? `project:${projectId}` : session?.id;
   const goalStorageKey = grillStorageKey;
-  const agentBeforeGoalRef = useRef<string | null>(null);
+  const planStorageKey = grillStorageKey;
   const [grillMode, setGrillMode] = useState(() => loadGrillMode(grillStorageKey));
   const [goalMode, setGoalMode] = useState(() => loadGoalMode(goalStorageKey));
+  const [planMode, setPlanMode] = useState(() => loadPlanMode(planStorageKey));
 
   useEffect(() => {
     const grill = loadGrillMode(grillStorageKey);
     const goal = loadGoalMode(goalStorageKey);
+    const plan = loadPlanMode(planStorageKey);
     setGrillMode(grill);
-    setGoalMode(goal && !grill);
-  }, [grillStorageKey, goalStorageKey]);
-
-  useEffect(() => {
-    if (!goalMode) return;
-    setAgent((current) => {
-      if (current === GOAL_AGENT_ID) return current;
-      agentBeforeGoalRef.current = current;
-      return GOAL_AGENT_ID;
-    });
-  }, [goalMode, grillStorageKey]);
+    setGoalMode(goal && !grill && !plan);
+    setPlanMode(plan && !grill);
+  }, [grillStorageKey, goalStorageKey, planStorageKey]);
 
   useEffect(() => {
     saveGrillMode(grillStorageKey, grillMode);
@@ -344,6 +400,10 @@ export function ConversationComposer(props: Props) {
   useEffect(() => {
     saveGoalMode(goalStorageKey, goalMode);
   }, [goalStorageKey, goalMode]);
+
+  useEffect(() => {
+    savePlanMode(planStorageKey, planMode);
+  }, [planStorageKey, planMode]);
 
   // Draft cache: restore the draft for the current session/project scope when
   // the scope changes, then persist edits for the active scope.
@@ -357,45 +417,44 @@ export function ConversationComposer(props: Props) {
     saveComposerDraft(draftScope, message);
   }, [draftScope, message]);
 
+  // Slash modes are task-scoped: they never touch the agent picker below
+  // (global routing). The picker simply mirrors the session's persisted agent.
   useEffect(() => {
     if (props.mode === "follow-up" && session?.agent_type) {
       const fromSession = session.agent_type === "general-purpose" ? "" : session.agent_type;
-      if (goalMode) {
-        agentBeforeGoalRef.current = fromSession;
-        setAgent(GOAL_AGENT_ID);
-      } else {
-        setAgent(fromSession);
-      }
+      setAgent(fromSession);
     }
-  }, [props.mode, session?.agent_type, goalMode]);
+  }, [props.mode, session?.agent_type]);
 
   const slashCommands = useMemo(
-    () => [grillSlashCommand(locale), goalSlashCommand(locale)],
+    () => [grillSlashCommand(locale), goalSlashCommand(locale), planSlashCommand(locale)],
     [locale],
   );
 
-  function restoreAgentAfterGoal() {
-    if (agent === GOAL_AGENT_ID) {
-      setAgent(agentBeforeGoalRef.current ?? "");
-    }
-    agentBeforeGoalRef.current = null;
-  }
-
   function enableGoalMode() {
     setGrillMode(false);
+    setPlanMode(false);
     setGoalMode(true);
-    agentBeforeGoalRef.current = agent;
-    setAgent(GOAL_AGENT_ID);
   }
 
   function disableGoalMode() {
     setGoalMode(false);
-    restoreAgentAfterGoal();
   }
 
   function enableGrillMode() {
     disableGoalMode();
+    setPlanMode(false);
     setGrillMode(true);
+  }
+
+  function enablePlanMode() {
+    setGrillMode(false);
+    disableGoalMode();
+    setPlanMode(true);
+  }
+
+  function disablePlanMode() {
+    setPlanMode(false);
   }
 
   const skillOptions = useMemo(() => {
@@ -454,6 +513,7 @@ export function ConversationComposer(props: Props) {
     mutationFn: (payload: {
       prompt: string;
       agent?: string;
+      agent_ephemeral?: boolean;
       skills?: string[];
       vision_images?: { mime_type: string; data_base64: string }[];
       text_files?: { filename: string; content: string }[];
@@ -483,6 +543,7 @@ export function ConversationComposer(props: Props) {
       setMessage("");
       revokeVisionAttachments(attachedImages);
       setAttachedImages([]);
+      setAttachedVideo(null);
       setAttachedTextFiles([]);
       setAttachmentError(null);
       setAttachmentHint(null);
@@ -549,18 +610,21 @@ export function ConversationComposer(props: Props) {
       prompt: string;
       grill: boolean;
       goal: boolean;
+      plan: boolean;
     }) =>
       api.startConversation(projectId, {
         title: sessionTitle.trim() || undefined,
         prompt: vars.prompt,
         agent: vars.goal ? GOAL_AGENT_ID : agent.trim() || undefined,
+        agent_ephemeral: vars.goal ? true : undefined,
         skills: mentionedSkills.length > 0 ? mentionedSkills : undefined,
         vision_images:
           attachedImages.length > 0 ? visionPayloadsForApi(attachedImages) : undefined,
         text_files:
           attachedTextFiles.length > 0 ? textPayloadsForApi(attachedTextFiles) : undefined,
+        video_ref: attachedVideo?.video_ref,
         recycle_session: false,
-        composer_mode: composerModeForSend(vars.grill),
+        composer_mode: composerModeFor(vars.grill, vars.plan),
       }),
     onSuccess: (data, vars) => {
       if (vars.grill) {
@@ -571,10 +635,15 @@ export function ConversationComposer(props: Props) {
         saveGoalMode(data.session.id, true);
         saveGoalMode(`project:${projectId}`, false);
       }
+      if (vars.plan) {
+        savePlanMode(data.session.id, true);
+        savePlanMode(`project:${projectId}`, false);
+      }
       clearComposerDraft(draftScope);
       setMessage("");
       revokeVisionAttachments(attachedImages);
       setAttachedImages([]);
+      setAttachedVideo(null);
       setAttachedTextFiles([]);
       setAttachmentError(null);
       setAttachmentHint(null);
@@ -638,12 +707,21 @@ export function ConversationComposer(props: Props) {
     textareaRef.current?.focus();
   }
 
+  function composerModeFor(grill: boolean, plan: boolean): string | undefined {
+    if (grill) return GRILL_COMPOSER_MODE;
+    if (plan) return PLAN_COMPOSER_MODE;
+    return undefined;
+  }
+
   function slashCmdLabel(cmd: string): string {
     if (isGrillSlashToken(cmd)) {
       return t("conversations.slashCmd.grill");
     }
     if (isGoalSlashToken(cmd)) {
       return t("conversations.slashCmd.goal");
+    }
+    if (isPlanSlashToken(cmd)) {
+      return t("conversations.slashCmd.plan");
     }
     return cmd;
   }
@@ -669,24 +747,38 @@ export function ConversationComposer(props: Props) {
       setMessage(composerSlashKeepText(cmd, message));
       setSlashOpen(false);
       textareaRef.current?.focus();
+      return;
+    }
+    if (isPlanSlashToken(cmd)) {
+      if (planMode && parseComposerSlashInput(message).bareSlash) {
+        disablePlanMode();
+      } else {
+        enablePlanMode();
+      }
+      setMessage(composerSlashKeepText(cmd, message));
+      setSlashOpen(false);
+      textareaRef.current?.focus();
     }
   }
 
   function buildFollowUpPayload(
     prompt: string,
-    opts?: { grill?: boolean; goal?: boolean },
+    opts?: { grill?: boolean; goal?: boolean; plan?: boolean },
   ) {
     const grill = opts?.grill ?? grillMode;
     const goal = opts?.goal ?? goalMode;
+    const plan = opts?.plan ?? planMode;
     return {
       prompt: prompt.trim(),
       agent: goal ? GOAL_AGENT_ID : agent.trim() || undefined,
+      agent_ephemeral: goal ? true : undefined,
       skills: mentionedSkills.length > 0 ? mentionedSkills : undefined,
-      composer_mode: composerModeForSend(grill),
+      composer_mode: composerModeFor(grill, plan),
       vision_images:
         attachedImages.length > 0 ? visionPayloadsForApi(attachedImages) : undefined,
       text_files:
         attachedTextFiles.length > 0 ? textPayloadsForApi(attachedTextFiles) : undefined,
+      video_ref: attachedVideo?.video_ref,
     };
   }
 
@@ -696,14 +788,18 @@ export function ConversationComposer(props: Props) {
     const parsed = parseComposerSlashInput(message);
     const grillActive = grillMode || parsed.mode === "grill";
     const goalActive = goalMode || parsed.mode === "goal";
+    const planActive = planMode || parsed.mode === "plan";
 
     if (parsed.bareSlash && parsed.mode) {
       if (parsed.mode === "grill") {
         if (grillMode) setGrillMode(false);
         else enableGrillMode();
-      } else {
+      } else if (parsed.mode === "goal") {
         if (goalMode) disableGoalMode();
         else enableGoalMode();
+      } else {
+        if (planMode) disablePlanMode();
+        else enablePlanMode();
       }
       setMessage("");
       setSlashOpen(false);
@@ -720,6 +816,7 @@ export function ConversationComposer(props: Props) {
 
     if (parsed.mode === "grill" && !grillMode) enableGrillMode();
     if (parsed.mode === "goal" && !goalMode) enableGoalMode();
+    if (parsed.mode === "plan" && !planMode) enablePlanMode();
 
     if (attachedImages.length > 0 && usesOcrForImages) {
       setAttachmentHint(t("conversations.ocrExtracting"));
@@ -728,13 +825,16 @@ export function ConversationComposer(props: Props) {
     const payload = buildFollowUpPayload(outgoingPrompt, {
       grill: grillActive,
       goal: goalActive,
+      plan: planActive,
     });
     const exitGrill = grillActive && shouldExitGrillMode(outgoingPrompt);
+    const exitPlan = planActive && shouldExitPlanMode(outgoingPrompt);
     if (isStart) {
       startSession.mutate({
         prompt: outgoingPrompt,
         grill: grillActive,
         goal: goalActive,
+        plan: planActive,
       });
     } else {
       const optimisticId = turnActive ? `opt-${Date.now()}` : undefined;
@@ -742,6 +842,9 @@ export function ConversationComposer(props: Props) {
     }
     if (exitGrill) {
       setGrillMode(false);
+    }
+    if (exitPlan) {
+      setPlanMode(false);
     }
   }
 
@@ -933,6 +1036,21 @@ export function ConversationComposer(props: Props) {
             </button>
           </div>
         ) : null}
+        {planMode ? (
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-tertiary/30 bg-tertiary/8 px-2.5 py-1 text-xs text-tertiary">
+              <Icon name="account_tree" size={14} />
+              {t("conversations.planModeActive")}
+            </span>
+            <button
+              type="button"
+              className="dw-btn-ghost text-xs py-0.5 px-1.5"
+              onClick={() => disablePlanMode()}
+            >
+              {t("conversations.planModeExit")}
+            </button>
+          </div>
+        ) : null}
         <textarea
           ref={textareaRef}
           className="dw-composer-textarea"
@@ -943,11 +1061,13 @@ export function ConversationComposer(props: Props) {
                 ? t("conversations.grillModePlaceholder")
                 : goalMode
                   ? t("conversations.goalModePlaceholder")
-                  : turnActive
-                    ? t("conversations.composePlaceholderRunning")
-                    : isStart
-                      ? t("conversations.composePlaceholderStart")
-                      : t("conversations.composePlaceholder")
+                  : planMode
+                    ? t("conversations.planModePlaceholder")
+                    : turnActive
+                      ? t("conversations.composePlaceholderRunning")
+                      : isStart
+                        ? t("conversations.composePlaceholderStart")
+                        : t("conversations.composePlaceholder")
           }
           value={message}
           onChange={(e) => onMessageChange(e.target.value)}
@@ -957,8 +1077,33 @@ export function ConversationComposer(props: Props) {
           onPaste={(e) => void handleComposerPaste(e)}
           {...compositionProps}
         />
-        {(attachedTextFiles.length > 0 || attachedImages.length > 0) && (
+        {(attachedTextFiles.length > 0 || attachedImages.length > 0 || attachedVideo || videoPreparing) && (
           <div className="flex flex-wrap gap-2 mt-2 items-center">
+            {(attachedVideo || videoPreparing) && (
+              <span className="inline-flex items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-2.5 py-1.5 text-xs max-w-[16rem]">
+                <Icon name="movie" size={16} className="text-secondary shrink-0" />
+                <span className="min-w-0 flex flex-col gap-0.5">
+                  <span className="font-code truncate">
+                    {attachedVideo ? attachedVideo.name : t("conversations.attachmentVideoPreparing")}
+                  </span>
+                  {attachedVideo && (
+                    <span className="text-[11px] text-secondary truncate">
+                      {formatVideoMeta(attachedVideo)}
+                      {attachedVideo.has_transcript ? ` · ${t("conversations.attachmentVideoTranscript")}` : ""}
+                    </span>
+                  )}
+                </span>
+                {attachedVideo && (
+                  <button
+                    type="button"
+                    className="dw-btn-ghost text-[10px] px-1 py-0 min-h-0 shrink-0"
+                    onClick={() => setAttachedVideo(null)}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            )}
             {attachedImages.map((img, idx) => (
               <div key={img.previewUrl} className="relative">
                 <img
@@ -1019,6 +1164,10 @@ export function ConversationComposer(props: Props) {
             const nextImages: VisionAttachment[] = [];
             const nextTexts: TextAttachment[] = [];
             for (const file of files) {
+              if (isVideoFile(file)) {
+                await ingestVideoFile(file);
+                continue;
+              }
               if (isImageFile(file)) {
                 if (!canAttachImages) {
                   setAttachmentError(t("conversations.attachmentVisionDisabled"));
@@ -1149,6 +1298,7 @@ export function ConversationComposer(props: Props) {
               if (usesOcrForImages) {
                 revokeVisionAttachments(attachedImages);
                 setAttachedImages([]);
+      setAttachedVideo(null);
                 setAttachmentHint(null);
               }
             }}

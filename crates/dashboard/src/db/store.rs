@@ -53,14 +53,18 @@ impl DashboardDb {
 pub mod agents;
 mod artifacts;
 mod chat_turn_events;
+mod cron;
+pub mod diagrams;
 mod events;
 mod gates;
+pub mod kv;
 pub(crate) mod message_queue;
 mod open;
 mod projects;
 mod services;
 mod session_plan_trees;
 mod sessions;
+mod settings;
 mod skills;
 
 #[cfg(test)]
@@ -369,6 +373,7 @@ mod tests {
             .await
             .unwrap();
         let tree = anycode_core::PlanTree {
+            prose: String::new(),
             roots: vec![anycode_core::PlanNode {
                 id: "root".into(),
                 title: "Ship".into(),

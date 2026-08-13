@@ -10,8 +10,9 @@ pub use fs::{
     DEFAULT_MAX_RAW_BYTES, DEFAULT_MAX_READ_BYTES,
 };
 pub use git::{
-    git_changes, git_commit_all, git_file_diff, git_push, git_status, is_git_repo, GitChangeKind,
-    GitFileChange, GitFileDiff, GitStatusSummary,
+    git_branches, git_changes, git_checkout, git_commit_all, git_commit_diff, git_create_branch,
+    git_file_diff, git_log, git_push, git_status, is_git_repo, GitBranchInfo, GitChangeKind,
+    GitCheckoutError, GitFileChange, GitFileDiff, GitLogEntry, GitStatusSummary,
 };
 pub use terminal::{
     shared_manager as terminal_shared_manager, PtySession, TerminalClientMessage,

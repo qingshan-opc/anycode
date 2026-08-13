@@ -3,7 +3,7 @@
 use crate::api::state::AppState;
 use crate::audit::{record_audit, AuditEventInput};
 use crate::lan::{
-    export_bundle, primary_lan_ip, save_instance, BundleExportOptions, HandoffApprovedNotice,
+    export_bundle, primary_lan_ip, save_instance_dual, BundleExportOptions, HandoffApprovedNotice,
     HandoffDirection, HandoffKind, HandoffParty, HandoffRecord, HandoffState,
     IncomingHandoffRequest, LanSettings, OutgoingHandoffStatus,
 };
@@ -26,6 +26,9 @@ pub struct HandoffRequestBody {
     pub project_id: Option<String>,
     pub session_id: Option<String>,
     pub target_project_id: Option<String>,
+    /// handoff_v2 payloads; default on, wizard checkboxes can opt out.
+    pub include_skills: Option<bool>,
+    pub include_mcp: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -94,7 +97,7 @@ pub async fn patch_lan_settings(
     if let Some(v) = body.max_bundle_mb {
         settings.max_bundle_mb = v;
     }
-    if let Err(e) = settings.save(&hub.data_dir) {
+    if let Err(e) = settings.save_dual(Some(&state.db), &hub.data_dir).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -107,7 +110,7 @@ pub async fn patch_lan_settings(
     }
     let mut inst = hub.instance.clone();
     inst.device_name = settings.display_name.clone();
-    let _ = save_instance(&hub.data_dir, &inst);
+    let _ = save_instance_dual(Some(&state.db), &hub.data_dir, &inst).await;
     Json(json!({ "ok": true, "settings": settings })).into_response()
 }
 
@@ -235,22 +238,39 @@ pub async fn post_lan_handoff_request(
         state.clone(),
         hub,
         id.clone(),
-        body.kind,
-        project_id.clone(),
-        body.session_id.clone(),
+        OutgoingUploadSpec {
+            kind: body.kind,
+            project_id: project_id.clone(),
+            session_id: body.session_id.clone(),
+            include_skills: body.include_skills.unwrap_or(true),
+            include_mcp: body.include_mcp.unwrap_or(true),
+        },
     ));
 
     Json(json!({ "ok": true, "handoff_id": id })).into_response()
+}
+
+struct OutgoingUploadSpec {
+    kind: HandoffKind,
+    project_id: String,
+    session_id: Option<String>,
+    include_skills: bool,
+    include_mcp: bool,
 }
 
 async fn run_outgoing_upload(
     state: AppState,
     hub: Arc<crate::lan::LanHub>,
     handoff_id: String,
-    kind: HandoffKind,
-    project_id: String,
-    session_id: Option<String>,
+    spec: OutgoingUploadSpec,
 ) {
+    let OutgoingUploadSpec {
+        kind,
+        project_id,
+        session_id,
+        include_skills,
+        include_mcp,
+    } = spec;
     let settings = hub.settings_snapshot().await;
     let max_bytes = settings.max_bundle_mb * 1024 * 1024;
     for _ in 0..120 {
@@ -278,6 +298,8 @@ async fn run_outgoing_upload(
                 source_instance_id: hub.instance.instance_id.clone(),
                 source_device_name: settings.display_name.clone(),
                 max_bytes,
+                include_skills,
+                include_mcp,
             },
         )
         .await

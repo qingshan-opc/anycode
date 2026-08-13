@@ -19,12 +19,13 @@ impl DashboardDb {
         };
         let tree_json: String = row.try_get("tree_json")?;
         let updated_at: String = row.try_get("updated_at")?;
-        let tree: PlanTree = serde_json::from_str(&tree_json).unwrap_or_default();
+        // Storage is the Markdown plan document; legacy rows hold JSON.
+        let tree: PlanTree = anycode_core::plan_tree_from_storage(&tree_json);
         Ok(Some((tree, updated_at)))
     }
 
     pub async fn upsert_session_plan_tree(&self, session_id: &str, tree: &PlanTree) -> Result<()> {
-        let tree_json = serde_json::to_string(tree)?;
+        let tree_json = anycode_core::plan_tree_to_storage(tree);
         sqlx::query(
             r#"
             INSERT INTO session_plan_trees (session_id, tree_json, updated_at)

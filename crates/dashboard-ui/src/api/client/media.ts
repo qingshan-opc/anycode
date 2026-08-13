@@ -1,6 +1,18 @@
 import { get, apiUrl } from "../http";
 
 const TRANSCRIBE_TIMEOUT_MS = 120_000;
+const VIDEO_UPLOAD_TIMEOUT_MS = 300_000;
+
+export interface VideoUploadResult {
+  ok: boolean;
+  video_ref?: string;
+  duration_secs?: number;
+  frame_count?: number;
+  has_audio?: boolean;
+  has_transcript?: boolean;
+  extractor?: string;
+  error?: string;
+}
 
 export interface MediaStatus {
   stt_configured: boolean;
@@ -94,6 +106,32 @@ export const mediaClient = {
       return data;
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  },
+
+  uploadVideo: async (file: File): Promise<VideoUploadResult> => {
+    const form = new FormData();
+    form.append("file", file, file.name || "video.mp4");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VIDEO_UPLOAD_TIMEOUT_MS);
+    try {
+      const url = apiUrl("/api/media/video/upload");
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        body: form,
+        signal: controller.signal,
+      });
+      const data = (await res.json()) as VideoUploadResult;
+      if (!res.ok) {
+        return { ok: false, error: data.error ?? `${res.status} video upload failed` };
+      }
+      return data;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: msg };
+    } finally {
+      clearTimeout(timer);
     }
   },
 

@@ -51,6 +51,8 @@ export function WeChatPayModal({ baseUrl, order, onClose, onPaid }: Props) {
   }, [baseUrl, order.id, onPaid, status]);
 
   const amountYuan = (order.amount_fen / 100).toFixed(2);
+  const planLabel =
+    order.plan === "credit_topup" ? t("service.plan.wechatPayPlanTopup") : order.plan;
 
   return (
     <ModalOverlay open labelledBy="wechat-pay-title" onClose={onClose} zIndex={380}>
@@ -60,7 +62,7 @@ export function WeChatPayModal({ baseUrl, order, onClose, onPaid }: Props) {
         </h2>
         <p className="text-sm text-secondary m-0 mb-4">
           {t("service.plan.wechatPayHint")
-            .replace("{plan}", order.plan)
+            .replace("{plan}", planLabel)
             .replace("{amount}", amountYuan)}
         </p>
         {order.code_url && status === "pending" && (

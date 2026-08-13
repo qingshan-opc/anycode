@@ -25,6 +25,7 @@ mod model_catalog;
 mod model_context;
 mod model_registry;
 mod model_router;
+mod model_tiers;
 mod multi_client;
 mod openai_compat_stream;
 mod provider_catalog;
@@ -51,11 +52,10 @@ pub use chat_model_ref::{
 };
 pub use cloud_session::{
     account_api_url, clear_cloud_session, cloud_portal_url, cloud_session_path,
-    default_gateway_chat_url, direct_agnes_fallback_for_cloud_model, gateway_chat_url_reachable,
-    gateway_host_reachable, read_cloud_access_token, read_cloud_session,
-    refresh_cloud_access_token, resolve_anycode_cloud_endpoint, resolve_gateway_host,
-    write_cloud_session, CloudSessionFile, DirectAgnesFallback, ResolvedCloudEndpoint,
-    AGNES_DIRECT_CHAT_URL, DEFAULT_ACCOUNT_API, DEFAULT_CLOUD_PORTAL, DEFAULT_GATEWAY_HOST,
+    default_gateway_chat_url, gateway_chat_url_reachable, gateway_host_reachable,
+    read_cloud_access_token, read_cloud_session, refresh_cloud_access_token,
+    resolve_anycode_cloud_endpoint, resolve_gateway_host, write_cloud_session, CloudSessionFile,
+    ResolvedCloudEndpoint, DEFAULT_ACCOUNT_API, DEFAULT_CLOUD_PORTAL, DEFAULT_GATEWAY_HOST,
 };
 pub use config_file::{
     clear_config_value_override, default_config_path, migrate_legacy_llm_section, patch_llm_config,
@@ -93,6 +93,10 @@ pub use model_registry::{
     sync_legacy_models_section, upsert_registry_item, RegistryView, ResolvedModelRegistry,
 };
 pub use model_router::ModelRouter;
+pub use model_tiers::{
+    is_curated_model, rule_for_model, tier_for_model, ModelTier, ModelTierRule,
+    CURATED_MODEL_SUITE, MODEL_TIER_RULES,
+};
 pub use multi_client::MultiProviderLlmClient;
 pub use provider_catalog::{
     catalog_lookup, is_known_provider_id, normalize_provider_id, transport_for_provider_id,

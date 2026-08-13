@@ -59,6 +59,39 @@ pub async fn start_project_conversation(
         .map(|s| truncate_field(s, 120))
         .unwrap_or_else(|| truncate_field(prompt, 120));
     let prompt_preview = truncate_field(prompt, 240);
+    // Video attachment (P1.2): bake frames + transcript appendix before either
+    // dispatch path. Title/preview above intentionally use the raw prompt.
+    let mut vision_images = body.vision_images.clone();
+    let prompt_video;
+    let prompt_for_chat_video;
+    let (prompt, prompt_for_chat) = if let Some(vref) = body
+        .video_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        match crate::control::video_frames::resolve_video_attachment(vref) {
+            Ok(outcome) => {
+                if !outcome.frames.is_empty() {
+                    vision_images
+                        .get_or_insert_with(Vec::new)
+                        .extend(outcome.frames);
+                }
+                prompt_video = match &outcome.appendix {
+                    Some(ap) => format!("{prompt}\n\n{ap}"),
+                    None => prompt.to_string(),
+                };
+                prompt_for_chat_video =
+                    crate::task_trigger::prompt_with_skills(&prompt_video, body.skills.as_deref());
+                (prompt_video.as_str(), prompt_for_chat_video.as_str())
+            }
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+            }
+        }
+    } else {
+        (prompt, prompt_for_chat.as_str())
+    };
     let agent_type = body
         .agent
         .as_deref()
@@ -67,6 +100,14 @@ pub async fn start_project_conversation(
         .map(str::to_string);
     let resolved_agent =
         crate::control::agent_resolve::resolve_web_chat_agent(agent_type.as_deref());
+    // Slash-mode agent override (`/目标` etc.): this task only. The session row
+    // keeps its default routing; only the dispatched turn runs under the override.
+    let agent_ephemeral = body.agent_ephemeral.unwrap_or(false) && agent_type.is_some();
+    let session_agent_type = if agent_ephemeral {
+        None
+    } else {
+        agent_type.clone()
+    };
 
     let root_path = std::path::PathBuf::from(&project.root_path);
     if let Err(e) = crate::task_trigger::validate_trigger_skills_for_project(
@@ -101,7 +142,7 @@ pub async fn start_project_conversation(
     if body.recycle_session {
         if let Ok(Some(recycled)) = state
             .db
-            .find_recyclable_web_chat_session(&project_id, agent_type.as_deref())
+            .find_recyclable_web_chat_session(&project_id, session_agent_type.as_deref())
             .await
         {
             let session_id = recycled.id.clone();
@@ -122,19 +163,25 @@ pub async fn start_project_conversation(
             }
             let session_agent = recycled.agent_type.trim();
             if agent_type.as_deref().is_some() && agent_type.as_deref() != Some(session_agent) {
-                if let Err(e) = state
-                    .db
-                    .update_session_agent(&session_id, agent_type.as_deref())
-                    .await
-                {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": e.to_string() })),
-                    )
-                        .into_response();
+                if agent_ephemeral {
+                    // 仅本次任务: 不写库; runtime 按请求 agent 自重建.
+                    state.web_chat.evict(&session_id).await;
+                    state.chat_runtime.evict(&session_id).await;
+                } else {
+                    if let Err(e) = state
+                        .db
+                        .update_session_agent(&session_id, agent_type.as_deref())
+                        .await
+                    {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": e.to_string() })),
+                        )
+                            .into_response();
+                    }
+                    state.web_chat.evict(&session_id).await;
+                    state.chat_runtime.evict(&session_id).await;
                 }
-                state.web_chat.evict(&session_id).await;
-                state.chat_runtime.evict(&session_id).await;
             }
             match crate::control::web_chat_dispatch::dispatch_web_chat_prompt(
                 &state,
@@ -144,7 +191,7 @@ pub async fn start_project_conversation(
                 Some(resolved_agent.as_str()),
                 prompt,
                 &prompt_for_chat,
-                body.vision_images.as_deref(),
+                vision_images.as_deref(),
                 body.text_files.as_deref(),
                 body.lang.as_deref(),
                 true,
@@ -181,7 +228,7 @@ pub async fn start_project_conversation(
             task_id: None,
             title: title.clone(),
             prompt_preview: Some(prompt_preview.clone()),
-            agent_type: agent_type.clone(),
+            agent_type: session_agent_type.clone(),
             model: None,
             metadata_json: Some(r#"{"source":"conversations_start"}"#.to_string()),
         })
@@ -205,7 +252,7 @@ pub async fn start_project_conversation(
         Some(resolved_agent.as_str()),
         prompt,
         &prompt_for_chat,
-        body.vision_images.as_deref(),
+        vision_images.as_deref(),
         body.text_files.as_deref(),
         body.lang.as_deref(),
         false,

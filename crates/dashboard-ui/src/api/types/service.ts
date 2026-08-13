@@ -13,6 +13,8 @@ export type MemberStatus = "active" | "invited";
 export interface ServiceQuota {
   tokenLimit: number;
   tokenUsed: number;
+  /** 额度余额（分）：充值获得，按 token×单价（官方 2 倍）扣减，永久有效。 */
+  creditBalanceFen: number;
   apiKeyLimit: number;
   apiKeyUsed: number;
   seatLimit: number;

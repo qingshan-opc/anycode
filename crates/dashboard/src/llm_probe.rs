@@ -43,6 +43,8 @@ async fn probe_registry(
 ) -> Result<String, String> {
     match capability {
         ModelCapability::Chat | ModelCapability::Vision => probe_chat(registry).await,
+        // Input modalities ride the chat transport — probing chat covers them.
+        ModelCapability::Video | ModelCapability::AudioInput => probe_chat(registry).await,
         ModelCapability::Embedding => probe_embedding(registry).await,
         ModelCapability::Stt => probe_stt(registry).await,
         ModelCapability::Tts => probe_tts(registry).await,

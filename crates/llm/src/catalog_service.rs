@@ -73,9 +73,13 @@ pub fn builtin_catalog_models(provider: &str) -> Vec<CatalogModelEntry> {
                 id: m.id.to_string(),
                 label: m.label.to_string(),
                 description: None,
+                // Gemini 2.x natively understands images, video, and audio on
+                // the same chat transport.
                 capabilities: vec![
                     ModelCapability::Chat.as_str().to_string(),
                     ModelCapability::Vision.as_str().to_string(),
+                    ModelCapability::Video.as_str().to_string(),
+                    ModelCapability::AudioInput.as_str().to_string(),
                 ],
             })
             .collect();
@@ -212,6 +216,9 @@ async fn fetch_openai_compatible_models(
     Ok(out)
 }
 
+/// Build-time aid ONLY: fills capabilities for remote-fetched `/models` lists
+/// when a provider catalog cache is constructed/refreshed. Runtime routing
+/// must never call this — the registry is the sole authority (roadmap P1.1).
 fn infer_capabilities(provider: &str, model_id: &str) -> Vec<String> {
     let mid = model_id.to_ascii_lowercase();
     let mut caps = Vec::new();
@@ -389,11 +396,15 @@ pub fn aggregate_catalog_view() -> Value {
         merge_deepseek_catalog(vec![], builtin_catalog_models("deepseek"))
             .into_iter()
             .map(|m| {
+                let rule = crate::model_tiers::rule_for_model("deepseek", &m.id);
                 json!({
                     "id": m.id,
                     "label": m.label,
                     "description": m.description,
                     "capabilities": m.capabilities,
+                    "tier": rule.map(|r| r.tier.as_str()).unwrap_or("current"),
+                    "tier_replacement": rule.and_then(|r| r.replacement),
+                    "tier_note": rule.map(|r| r.note),
                 })
             })
             .collect();
@@ -414,7 +425,19 @@ pub fn aggregate_catalog_view() -> Value {
         .collect();
 
     let mut cache_meta: HashMap<String, CatalogRefreshMeta> = HashMap::new();
-    let mut provider_models: HashMap<String, Vec<CatalogModelEntry>> = HashMap::new();
+    let mut provider_models: HashMap<String, Vec<Value>> = HashMap::new();
+    let model_row_json = |provider: &str, m: &CatalogModelEntry| {
+        let rule = crate::model_tiers::rule_for_model(provider, &m.id);
+        json!({
+            "id": m.id,
+            "label": m.label,
+            "description": m.description,
+            "capabilities": m.capabilities,
+            "tier": rule.map(|r| r.tier.as_str()).unwrap_or("current"),
+            "tier_replacement": rule.and_then(|r| r.replacement),
+            "tier_note": rule.map(|r| r.note),
+        })
+    };
     for p in PROVIDER_CATALOG.iter() {
         if let Some(c) = load_cached_catalog(p.id) {
             cache_meta.insert(p.id.to_string(), c.meta.clone());
@@ -424,7 +447,10 @@ pub fn aggregate_catalog_view() -> Value {
                 } else {
                     c.models.clone()
                 };
-                provider_models.insert(p.id.to_string(), models);
+                provider_models.insert(
+                    p.id.to_string(),
+                    models.iter().map(|m| model_row_json(p.id, m)).collect(),
+                );
             }
         } else {
             let builtin = builtin_catalog_models(p.id);
@@ -434,10 +460,18 @@ pub fn aggregate_catalog_view() -> Value {
                 } else {
                     builtin
                 };
-                provider_models.insert(p.id.to_string(), models);
+                provider_models.insert(
+                    p.id.to_string(),
+                    models.iter().map(|m| model_row_json(p.id, m)).collect(),
+                );
             }
         }
     }
+
+    let curated_suite: Vec<Value> = crate::model_tiers::CURATED_MODEL_SUITE
+        .iter()
+        .map(|(provider, model)| json!({ "provider": provider, "model": model }))
+        .collect();
 
     json!({
         "providers": providers,
@@ -445,6 +479,7 @@ pub fn aggregate_catalog_view() -> Value {
         "google_models": google_models,
         "deepseek_models": deepseek_models,
         "provider_models": provider_models,
+        "curated_suite": curated_suite,
         "zai_auth_methods": zai_auth,
         "routing_agent_presets": routing_presets,
         "capabilities": capabilities,

@@ -1394,6 +1394,7 @@ async fn session_plan_tree_api_empty_then_upsert() {
     db.upsert_session_plan_tree(
         session_id,
         &anycode_core::PlanTree {
+            prose: String::new(),
             roots: vec![anycode_core::PlanNode {
                 id: "r1".into(),
                 title: "Root".into(),

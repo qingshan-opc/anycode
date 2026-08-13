@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::task_spec::{ExpectedArtifact, TaskFamily};
 
-pub const VERIFICATION_SCHEMA_VERSION: u32 = 1;
+pub const VERIFICATION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +34,16 @@ pub struct GateRequirement {
     pub timeout_ms: u64,
 }
 
+/// P0.1 意图 rubric:任务语义的验收标准(由模型在编译期/守卫期生成,
+/// 独立上下文 grader 逐条判定)。与按文件类型的确定性 GateRequirement 互补:
+/// validators 验证「这是个合格的 html」,rubric 验证「这是用户要的那个页面」。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RubricItem {
+    pub id: String,
+    pub requirement: String,
+    pub severity: GateSeverity,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GatePlan {
     pub schema_version: u32,
@@ -42,6 +52,9 @@ pub struct GatePlan {
     pub requirements: Vec<GateRequirement>,
     #[serde(default)]
     pub extras: HashMap<String, String>,
+    /// 意图 rubric(schema v2 新增;v1 反序列化为空)。
+    #[serde(default)]
+    pub rubric_items: Vec<RubricItem>,
 }
 
 impl GatePlan {
@@ -52,6 +65,7 @@ impl GatePlan {
             family: None,
             requirements: Vec::new(),
             extras: HashMap::new(),
+            rubric_items: Vec::new(),
         }
     }
 
@@ -193,6 +207,24 @@ impl GatePolicy {
             .unwrap_or("fde-editorial");
         let scenario = extras_map.get("scenario").map(String::as_str);
         let mut requirements = Vec::new();
+        // P0.4 代码任务门禁:workspace 级栈验证,不绑定具体产物——
+        // validator 在守卫期自行探测栈(Cargo.toml/tsconfig.json/*.py)。
+        if family == Some(TaskFamily::CrossFileCoding) {
+            requirements.push(GateRequirement {
+                id: "code.stack_verify.workspace".into(),
+                validator_id: "code.stack_verify".into(),
+                artifact_ref: "workspace".into(),
+                severity: GateSeverity::P0,
+                timeout_ms: 180_000,
+            });
+            requirements.push(GateRequirement {
+                id: "code.stack_tests.workspace".into(),
+                validator_id: "code.stack_tests".into(),
+                artifact_ref: "workspace".into(),
+                severity: GateSeverity::P1,
+                timeout_ms: 300_000,
+            });
+        }
         for art in expected.iter().filter(|a| a.required) {
             requirements.push(GateRequirement {
                 id: format!("artifact.{}", art.id),
@@ -349,6 +381,7 @@ impl GatePolicy {
             family,
             requirements,
             extras: extras_map,
+            rubric_items: Vec::new(),
         }
     }
 }

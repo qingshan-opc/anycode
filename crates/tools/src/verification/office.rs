@@ -22,7 +22,9 @@ fn first_path(candidates: &[Artifact], suffixes: &[&str]) -> Option<String> {
     candidates.iter().find_map(|a| a.path.clone())
 }
 
-fn zip_openable(path: &Path) -> Result<(), String> {
+/// Container-level openability check shared by the OOXML validators and skill
+/// acceptance checks: real ZIP with readable central directory.
+pub fn zip_openable(path: &Path) -> Result<(), String> {
     // Really try to open the archive — a 2-byte "PK" check lets forged files
     // pass the P0 gate.
     let file = fs::File::open(path).map_err(|e| e.to_string())?;

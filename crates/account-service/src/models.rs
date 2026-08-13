@@ -43,6 +43,8 @@ pub struct EntitlementsView {
     pub extra_seats_until: Option<String>,
     pub seat_used: i32,
     pub tokens_used: i64,
+    /// 额度余额（分）：充值获得，按 token × 单价（官方 2 倍）扣减，永久有效。
+    pub credit_balance_fen: i64,
     pub hosted_models_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_limit_per_window: Option<i32>,

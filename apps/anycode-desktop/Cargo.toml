@@ -44,6 +44,9 @@ anycode-browser-cef = { path = "../../crates/browser-cef", features = ["host"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWindow"] }
 
+[dev-dependencies]
+tempfile = "3.10"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

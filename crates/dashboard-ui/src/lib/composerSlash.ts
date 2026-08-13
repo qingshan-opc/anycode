@@ -1,7 +1,11 @@
 import { GRILL_COMPOSER_MODE, isGrillSlashToken } from "./grillMode";
 import { GOAL_AGENT_ID, isGoalSlashToken } from "./goalMode";
+import { PLAN_COMPOSER_MODE, isPlanSlashToken } from "./planMode";
 
-export type ComposerSlashMode = typeof GRILL_COMPOSER_MODE | typeof GOAL_AGENT_ID;
+export type ComposerSlashMode =
+  | typeof GRILL_COMPOSER_MODE
+  | typeof GOAL_AGENT_ID
+  | typeof PLAN_COMPOSER_MODE;
 
 export type ComposerSlashParse = {
   mode: ComposerSlashMode | null;
@@ -59,6 +63,13 @@ export function parseComposerSlashInput(text: string): ComposerSlashParse {
       bareSlash: remainder.length === 0,
     };
   }
+  if (isPlanSlashToken(token)) {
+    return {
+      mode: PLAN_COMPOSER_MODE,
+      prompt: remainder,
+      bareSlash: remainder.length === 0,
+    };
+  }
 
   return { mode: null, prompt: trimmed, bareSlash: false };
 }
@@ -74,9 +85,11 @@ export function composerSlashKeepText(cmd: string, text: string): string {
   const parsed = parseComposerSlashInput(text);
   const targetIsGrill = isGrillSlashToken(cmd);
   const targetIsGoal = isGoalSlashToken(cmd);
+  const targetIsPlan = isPlanSlashToken(cmd);
   const matchesTarget =
     (targetIsGrill && parsed.mode === GRILL_COMPOSER_MODE) ||
-    (targetIsGoal && parsed.mode === GOAL_AGENT_ID);
+    (targetIsGoal && parsed.mode === GOAL_AGENT_ID) ||
+    (targetIsPlan && parsed.mode === PLAN_COMPOSER_MODE);
   if (matchesTarget) return parsed.prompt;
   return text.replace(/^\s*\/\S*\s*/, "");
 }

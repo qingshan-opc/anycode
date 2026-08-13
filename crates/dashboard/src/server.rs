@@ -88,6 +88,11 @@ async fn run_inner(
             let _ = db.sync_workspace_paths(&workspace_paths).await;
         }
     }
+    // P1.6: refresh the config.json → settings table mirror at startup
+    // (auto-backups config.json.bak before the first SQLite write).
+    if let Err(e) = crate::config_patch::sync_settings_mirror(&db).await {
+        tracing::warn!(error = %e, "settings mirror sync skipped");
+    }
     // Skill discovery walks every workspace root; keep it off the startup
     // critical path so HTTP binds while the catalog populates in background.
     // Read handlers that need fresh skills call sync_skills_to_db themselves
@@ -165,10 +170,14 @@ async fn run_inner(
     crate::notify::register_inprocess_bus(Arc::clone(&events));
     let db_for_state = db.clone();
     let lan_hub = if crate::lan::lan_enabled() {
-        Some(Arc::new(crate::lan::LanHub::new(
-            config.version.clone(),
-            crate::lan::lan_data_dir(),
-        )))
+        Some(Arc::new(
+            crate::lan::LanHub::new(
+                config.version.clone(),
+                crate::lan::lan_data_dir(),
+                Some(&db),
+            )
+            .await,
+        ))
     } else {
         None
     };
@@ -189,7 +198,6 @@ async fn run_inner(
         port: config.port,
         started_at: started_at.clone(),
         pid: std::process::id(),
-        managed_local_llm: crate::managed_local_llm::ManagedLocalLlm::new(),
         desktop_bootstrap_token: Arc::new(tokio::sync::Mutex::new(
             config.desktop_bootstrap_token.clone(),
         )),
@@ -443,7 +451,6 @@ pub async fn app_for_test_custom(db_path: &Path, opts: TestAppOptions) -> Result
         port: 43180,
         started_at: chrono::Utc::now().to_rfc3339(),
         pid: std::process::id(),
-        managed_local_llm: crate::managed_local_llm::ManagedLocalLlm::new(),
         desktop_bootstrap_token: Arc::new(tokio::sync::Mutex::new(opts.desktop_bootstrap_token)),
         test_auth_bypass: opts.auth_bypass,
         embedded_desktop: opts.embedded_desktop,
@@ -480,28 +487,6 @@ mod tests {
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "api_only");
-    }
-
-    #[tokio::test]
-    async fn local_models_api_lists_descriptor_status() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = app_for_test(&dir.path().join("local-models.db"))
-            .await
-            .unwrap();
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/api/local-models")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["models"][0]["id"], "managed-minicpm5-1b");
-        assert_eq!(json["models"][0]["sha256"].as_str().unwrap().len(), 64);
     }
 
     #[tokio::test]

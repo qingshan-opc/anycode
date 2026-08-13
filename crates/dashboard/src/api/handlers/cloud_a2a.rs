@@ -170,13 +170,20 @@ pub async fn post_cloud_a2a_heartbeat(State(state): State<AppState>) -> impl Int
     };
     let hub = state.lan_hub.as_ref();
     let data_dir = lan_data_dir();
-    let instance_id = hub
-        .map(|h| h.instance.instance_id.clone())
-        .unwrap_or_else(|| crate::lan::load_or_create_instance(&data_dir).instance_id);
+    let instance_id = match hub {
+        Some(h) => h.instance.instance_id.clone(),
+        None => {
+            crate::lan::load_or_create_instance_dual(Some(&state.db), &data_dir)
+                .await
+                .instance_id
+        }
+    };
     let display_name = if let Some(h) = hub {
         h.settings_snapshot().await.display_name
     } else {
-        crate::lan::load_or_create_instance(&data_dir).device_name
+        crate::lan::load_or_create_instance_dual(Some(&state.db), &data_dir)
+            .await
+            .device_name
     };
     let me: serde_json::Value = match cloud_proxy_get("/api/v1/auth/me", &token).await {
         Ok(r) => {
@@ -232,6 +239,9 @@ pub struct CloudHandoffRequestBody {
     pub project_id: Option<String>,
     pub session_id: Option<String>,
     pub target_project_id: Option<String>,
+    /// handoff_v2 payloads; default on, wizard checkboxes can opt out.
+    pub include_skills: Option<bool>,
+    pub include_mcp: Option<bool>,
 }
 
 pub async fn post_cloud_a2a_handoff_request(
@@ -247,11 +257,14 @@ pub async fn post_cloud_a2a_handoff_request(
         Err(e) => return e.into_response(),
     };
     let data_dir = lan_data_dir();
-    let instance_id = state
-        .lan_hub
-        .as_ref()
-        .map(|h| h.instance.instance_id.clone())
-        .unwrap_or_else(|| crate::lan::load_or_create_instance(&data_dir).instance_id);
+    let instance_id = match state.lan_hub.as_ref() {
+        Some(h) => h.instance.instance_id.clone(),
+        None => {
+            crate::lan::load_or_create_instance_dual(Some(&state.db), &data_dir)
+                .await
+                .instance_id
+        }
+    };
 
     let project_id = match body.project_id.as_deref() {
         Some(id) => id.to_string(),
@@ -319,9 +332,13 @@ pub async fn post_cloud_a2a_handoff_request(
         tokio::spawn(run_cloud_outgoing_upload(
             st,
             handoff_id.clone(),
-            body.kind,
-            project_id,
-            body.session_id.clone(),
+            CloudUploadSpec {
+                kind: body.kind,
+                project_id,
+                session_id: body.session_id.clone(),
+                include_skills: body.include_skills.unwrap_or(true),
+                include_mcp: body.include_mcp.unwrap_or(true),
+            },
         ));
     }
     Response::builder()
@@ -457,13 +474,22 @@ pub fn spawn_cloud_a2a_heartbeat(state: AppState) {
     });
 }
 
-async fn run_cloud_outgoing_upload(
-    state: AppState,
-    handoff_id: String,
+struct CloudUploadSpec {
     kind: HandoffKind,
     project_id: String,
     session_id: Option<String>,
-) {
+    include_skills: bool,
+    include_mcp: bool,
+}
+
+async fn run_cloud_outgoing_upload(state: AppState, handoff_id: String, spec: CloudUploadSpec) {
+    let CloudUploadSpec {
+        kind,
+        project_id,
+        session_id,
+        include_skills,
+        include_mcp,
+    } = spec;
     let token = match read_cloud_access_token() {
         Some(t) => t,
         None => return,
@@ -500,15 +526,20 @@ async fn run_cloud_outgoing_upload(
             _ => continue,
         };
         let data_dir = lan_data_dir();
-        let instance_id = state
-            .lan_hub
-            .as_ref()
-            .map(|h| h.instance.instance_id.clone())
-            .unwrap_or_else(|| crate::lan::load_or_create_instance(&data_dir).instance_id);
+        let instance_id = match state.lan_hub.as_ref() {
+            Some(h) => h.instance.instance_id.clone(),
+            None => {
+                crate::lan::load_or_create_instance_dual(Some(&state.db), &data_dir)
+                    .await
+                    .instance_id
+            }
+        };
         let display_name = if let Some(h) = state.lan_hub.as_ref() {
             h.settings_snapshot().await.display_name.clone()
         } else {
-            crate::lan::load_or_create_instance(&data_dir).device_name
+            crate::lan::load_or_create_instance_dual(Some(&state.db), &data_dir)
+                .await
+                .device_name
         };
         let bundle_path = match export_bundle(
             &state.db,
@@ -521,6 +552,8 @@ async fn run_cloud_outgoing_upload(
                 source_device_name: display_name,
                 // Must stay ≤ account-service MAX_RELAY_BUFFER_BYTES (64 MiB).
                 max_bytes: 64 * 1024 * 1024,
+                include_skills,
+                include_mcp,
             },
         )
         .await

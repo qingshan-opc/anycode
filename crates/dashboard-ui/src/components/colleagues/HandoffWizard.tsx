@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { CloudTeamPeer } from "@/api/client/cloudA2a";
 import type { HandoffKind } from "@/api/client/lan";
@@ -33,11 +33,22 @@ export function HandoffWizard({
   const [wizardSessionId, setWizardSessionId] = useState("");
   const [wizardTargetProjectId, setWizardTargetProjectId] = useState("");
   const [wizardStep, setWizardStep] = useState<WizardStep>("pick");
+  const [includeSkills, setIncludeSkills] = useState(true);
+  const [includeMcp, setIncludeMcp] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sentId, setSentId] = useState<string | null>(null);
 
   const peerName = cloudPeer?.display_name || cloudPeer?.device_name;
+
+  // Review surface for the skills the bundle would carry (handoff_v2).
+  const { data: projectSkillsData } = useQuery({
+    queryKey: ["project-skills", wizardProjectId],
+    queryFn: () => api.projectSkills(wizardProjectId),
+    enabled: open && !!wizardProjectId && includeSkills,
+    staleTime: 30_000,
+  });
+  const enabledSkills = (projectSkillsData?.skills ?? []).filter((s) => s.enabled);
 
   useEffect(() => {
     if (!open) {
@@ -47,6 +58,8 @@ export function HandoffWizard({
       setWizardProjectId("");
       setWizardSessionId("");
       setWizardTargetProjectId("");
+      setIncludeSkills(true);
+      setIncludeMcp(true);
       return;
     }
     if (initialProjectId) {
@@ -80,6 +93,8 @@ export function HandoffWizard({
         project_id: wizardProjectId || undefined,
         session_id: kind === "session" ? wizardSessionId || undefined : undefined,
         target_project_id: kind === "session" ? wizardTargetProjectId || undefined : undefined,
+        include_skills: includeSkills,
+        include_mcp: includeMcp,
       });
       setSentId(resp.handoff?.id ?? null);
       setWizardStep("confirm");
@@ -158,6 +173,41 @@ export function HandoffWizard({
                   </label>
                 </>
               ) : null}
+              <div className="rounded-xl border border-outline-variant p-3 space-y-2">
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={includeSkills}
+                    onChange={(e) => setIncludeSkills(e.target.checked)}
+                  />
+                  <span>
+                    {t("colleagues.includeSkills")}
+                    <span className="block text-xs text-on-surface-variant">
+                      {enabledSkills.length > 0
+                        ? `${enabledSkills.length} ${t("colleagues.includeSkillsReview")} · ${enabledSkills
+                            .slice(0, 4)
+                            .map((s) => s.name)
+                            .join(", ")}`
+                        : t("colleagues.includeSkillsNone")}
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={includeMcp}
+                    onChange={(e) => setIncludeMcp(e.target.checked)}
+                  />
+                  <span>
+                    {t("colleagues.includeMcp")}
+                    <span className="block text-xs text-on-surface-variant">
+                      {t("colleagues.includeMcpHint")}
+                    </span>
+                  </span>
+                </label>
+              </div>
               {error ? <p className="text-sm text-error m-0">{error}</p> : null}
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" className="dw-btn dw-btn--ghost" onClick={onClose}>

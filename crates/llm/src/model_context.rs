@@ -92,14 +92,14 @@ mod tests {
     }
 
     #[test]
-    fn minicpm_and_ollama_do_not_fall_back_to_128k() {
+    fn local_models_do_not_fall_back_to_128k() {
         assert_eq!(
             resolve_context_window_tokens("openai", "managed-minicpm5-1b"),
             4_096
         );
         assert_eq!(
             resolve_context_window_tokens("ollama", "minicpm5-1b-e2e"),
-            32_768
+            4_096
         );
         assert_eq!(
             resolve_context_window_tokens("ollama", "custom-local"),

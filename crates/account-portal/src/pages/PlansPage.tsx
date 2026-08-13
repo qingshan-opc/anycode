@@ -10,15 +10,19 @@ export function PlansPage() {
   const { plans, loading: plansLoading } = usePlanTiers();
   const [plan, setPlan] = useState("free");
   const [status, setStatus] = useState("");
+  const [creditBalanceFen, setCreditBalanceFen] = useState(0);
   const [msg, setMsg] = useState<string | null>(null);
   const [provider, setProvider] = useState<PaymentProvider>("wechat");
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("monthly");
+  const [topupLoading, setTopupLoading] = useState(false);
   const [wechatOrder, setWechatOrder] = useState<PaymentOrder | null>(null);
 
   const refresh = () => {
     void api.bundle().then((b) => {
       setPlan(b.account.subscription.plan);
       setStatus(b.account.subscription.status);
+      const ent = b.account.entitlements as { credit_balance_fen?: number };
+      setCreditBalanceFen(ent.credit_balance_fen ?? 0);
     });
   };
 
@@ -41,6 +45,23 @@ export function PlansPage() {
       setMsg(t("plans.checkoutError"));
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const topup = async () => {
+    setMsg(null);
+    setTopupLoading(true);
+    try {
+      const res = await api.checkout("credit_topup", "wechat", "monthly");
+      if (res.provider === "wechat" && res.order) {
+        setWechatOrder(res.order);
+        return;
+      }
+      setMsg(t("plans.checkoutError"));
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTopupLoading(false);
     }
   };
 
@@ -94,6 +115,24 @@ export function PlansPage() {
         </div>
       </div>
       {msg && <p className="form-note">{msg}</p>}
+      <div className="card nx-plan-card" style={{ marginBottom: "1rem" }}>
+        <span className="nx-section-label">CREDIT</span>
+        <h3>{t("plans.topupTitle")}</h3>
+        <p className="muted">{t("plans.topupDesc")}</p>
+        <p className="muted">
+          {t("plans.topupBalance").replace("{balance}", `¥${(creditBalanceFen / 100).toFixed(2)}`)}
+        </p>
+        <div className="plan-actions">
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={topupLoading}
+            onClick={() => void topup()}
+          >
+            {topupLoading ? t("common.loading") : t("plans.topupAction")}
+          </button>
+        </div>
+      </div>
       {plansLoading && <p className="muted">{t("common.loading")}</p>}
       <div className="plan-grid plan-grid-console">
         {plans.map((p, index) => (

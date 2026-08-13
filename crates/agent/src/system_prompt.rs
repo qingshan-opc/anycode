@@ -109,6 +109,12 @@ pub(crate) fn default_stack_sections(
         }
     }
     parts.push("<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->".to_string());
+    if crate::prompt_catalog::prefix_stable_mode() {
+        // P1.5: volatile content (date, reply language) rides the trailing
+        // dynamic block so the static prefix above is byte-stable across
+        // turns, sessions, languages, and day boundaries.
+        parts.extend(crate::prompt_catalog::dynamic_tail_sections());
+    }
     parts
 }
 
@@ -118,10 +124,19 @@ pub(crate) fn compose_default_sections(
     skills_section: Option<&str>,
 ) -> String {
     let mut parts = default_stack_sections(agent, cwd, skills_section);
-    parts.push(format!(
-        "# Custom Agent Instructions\n\n{}",
-        agent.description()
-    ));
+    let desc = format!("# Custom Agent Instructions\n\n{}", agent.description());
+    if crate::prompt_catalog::prefix_stable_mode() {
+        // Keep the (static) agent description ahead of the dynamic tail.
+        match parts
+            .iter()
+            .position(|p| p == "<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->")
+        {
+            Some(pos) => parts.insert(pos, desc),
+            None => parts.push(desc),
+        }
+    } else {
+        parts.push(desc);
+    }
     parts.join("\n\n")
 }
 
@@ -511,6 +526,8 @@ mod tests {
 
     #[tokio::test]
     async fn reply_language_section_precedes_tone_in_default_stack() {
+        let _guard = STABLE_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ANYCODE_PROMPT_PREFIX_STABLE");
         let out = anycode_core::scope_chat_turn(
             anycode_core::ChatTurnContext {
                 dashboard_session_id: Some("sess".into()),
@@ -545,5 +562,64 @@ mod tests {
             .unwrap();
 
         assert!(cfg.model_instructions_content.is_none());
+    }
+
+    /// Env-mutating tests serialize on this lock (env is process-global).
+    static STABLE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    async fn prefix_stable_mode_moves_volatile_content_to_trailing_block() {
+        let _guard = STABLE_ENV_LOCK.lock().unwrap();
+        std::env::set_var("ANYCODE_PROMPT_PREFIX_STABLE", "1");
+        let out = anycode_core::scope_chat_turn(
+            anycode_core::ChatTurnContext {
+                dashboard_session_id: Some("sess_stable".into()),
+                user_turn_id: Some(1),
+                reply_language: Some("zh".into()),
+                host_intent_hint: None,
+            },
+            async {
+                let cfg = RuntimePromptConfig::default();
+                let agent = stub(vec!["Bash".into()]);
+                compose_effective_system_prompt(&cfg, &agent, "/w", None)
+            },
+        )
+        .await;
+        std::env::remove_var("ANYCODE_PROMPT_PREFIX_STABLE");
+
+        let boundary = out
+            .find("<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->")
+            .expect("boundary marker");
+        let session_ctx = out.find("# Session Context").expect("dynamic tail");
+        let date_pos = out.find("- Local date:").expect("date line");
+        let desc_pos = out.find("# Custom Agent Instructions").expect("agent desc");
+        let tone_pos = out.find("# Tone").expect("tone");
+        let reply_lang = out.find("# Reply language").expect("reply language");
+
+        // Volatile content strictly after the boundary, static content before.
+        assert!(boundary < session_ctx, "dynamic tail after boundary");
+        assert!(session_ctx < date_pos, "date rides the tail");
+        assert!(desc_pos < boundary, "agent desc stays static");
+        assert!(tone_pos < boundary, "tone stays static");
+        assert!(reply_lang > boundary, "reply language moves to the tail");
+        // The static environment section keeps cwd/OS but drops the date line.
+        let static_zone = &out[..boundary];
+        assert!(static_zone.contains("- Working directory: /w"));
+        assert!(!static_zone.contains("- Local date:"));
+    }
+
+    #[test]
+    fn default_mode_keeps_legacy_layout() {
+        let _guard = STABLE_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ANYCODE_PROMPT_PREFIX_STABLE");
+        let cfg = RuntimePromptConfig::default();
+        let agent = stub(vec!["Bash".into()]);
+        let out = compose_effective_system_prompt(&cfg, &agent, "/w", None);
+        // Legacy: date lives inside the environment section, no dynamic block.
+        assert!(out.contains("- Local date:"));
+        assert!(!out.contains("# Session Context"));
+        let desc_pos = out.find("# Custom Agent Instructions").unwrap();
+        let boundary = out.find("<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDARY -->").unwrap();
+        assert!(desc_pos > boundary, "legacy desc stays last");
     }
 }
