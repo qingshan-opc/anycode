@@ -1644,9 +1644,13 @@ mod structured_output_tests {
             services.structured_output_schema(tid).is_some(),
             "schema slot must be keyed by the background task id"
         );
-        // 等待后台完成，槽应被回收
+        // 等待后台完成：schema 槽回收；结构化捕获保留给 TaskOutput 一次性取走
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(services.structured_output_schema(tid).is_none());
+        assert_eq!(
+            services.take_structured_output(tid),
+            Some(json!({ "v": 1 }))
+        );
         assert!(services.take_structured_output(tid).is_none());
     }
 
