@@ -14,7 +14,7 @@ read_when:
 
 - **跳过** — 不写 `memory`
 - **`noop`** — `memory.backend=noop`，关闭持久召回
-- **Markdown 预设（hybrid）** — `memory.path` 下 Markdown + 同名 **关键词 sled**；菜单默认高亮项
+- **Markdown 预设（hybrid）** — `memory.path` 下 Markdown + 同名 **关键词索引**（SQLite，`*.hot.db`）；菜单默认高亮项
 - **远程嵌入（pipeline）** — OpenAI 兼容 `embedding_base_url` + 模型；HTTP 向量默认复用 **`llm.api_key`**，需独立密钥时请事后改 JSON
 - **本地 ONNX（pipeline + local）** — 仅在用 **`embedding-local`** 构建的二进制上出现
 
@@ -22,27 +22,27 @@ read_when:
 
 ## 更轻：只要目录 Markdown（`file`）
 
-若你希望**仅** Markdown 文件、不要 Hybrid 的旁路 sled，可手写 **`memory.backend: file`**（JSON schema 默认值也是 `file`）。向导将 Hybrid 作为主推荐路径是为了「目录 + 检索」一体体验。
+若你希望**仅** Markdown 文件、不要 Hybrid 的旁路索引，可手写 **`memory.backend: file`**（JSON schema 默认值也是 `file`）。向导将 Hybrid 作为主推荐路径是为了「目录 + 检索」一体体验。
 
 ## Hybrid 与 Pipeline
 
 | | **Hybrid** | **Pipeline** |
 |---|------------|----------------|
 | 主存储 | Markdown 目录 | 归根热层 + 可选只读并入 legacy `*.md` |
-| 附加 | 旁路 **关键词 sled** | 可选 **缓冲+WAL**、晋升、autosave ingest |
-| 向量 | 无（向导里选向量会切 pipeline） | 可选 `*.pipeline.vec.sled` + HTTP/本地嵌入 |
+| 附加 | 旁路 **关键词索引**（`*.hot.db`） | 可选 **缓冲+WAL**、晋升、autosave ingest |
+| 向量 | 无（向导里选向量会切 pipeline） | 可选向量索引（与热层共用 `*.pipeline.hot.db`）+ HTTP/本地嵌入 |
 
 ```mermaid
 flowchart LR
   subgraph hybrid [Hybrid]
     md[Markdown目录]
-    sled_kw[Sled关键词索引]
-    md --- sled_kw
+    kw[关键词索引_SQLite]
+    md --- kw
   end
   subgraph pipeline [Pipeline]
     buf[缓冲_WAL可选]
-    hot[热层Sled]
-    vec[向量Sled可选]
+    hot[热层_SQLite_hot.db]
+    vec[向量_可选_同库]
     buf --> hot --> vec
   end
 ```
@@ -60,7 +60,9 @@ Pipeline 且 `merge_legacy_file_recall` 为默认 true 时，根目录既有 `*.
 ### WAL 与向量
 
 - **WAL**：`buffer_wal_enabled` 时缓冲写入 `*.pipeline.buffer.wal`，启动重放并按策略 `fsync`。
-- **向量**：由 pipeline embedding 字段控制，落地 `*.pipeline.vec.sled`；本地依赖 **`embedding-local`** 构建。
+- **向量**：由 pipeline embedding 字段控制，与热层共用 `*.pipeline.hot.db`（DATA-02 前为独立 `*.pipeline.vec.sled`）；本地依赖 **`embedding-local`** 构建。
+
+**旧数据迁移**：0.42.1 起热层/向量从 sled 迁到 SQLite。用 `--features sled-migrate` 构建的版本首次打开空库且发现旧 sled 目录时，会一次性搬迁存量数据；普通发行构建不含 sled。
 
 **导入**：`anycode memory import [--dry-run] [--limit N]` 需 `memory.backend: pipeline`。
 

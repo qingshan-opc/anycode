@@ -14,7 +14,7 @@ After model credentials, setup offers:
 
 - **Skip** — keep JSON as-is  
 - **`memory.backend=noop`** — disable persistent recall  
-- **Markdown preset** (`hybrid`) — Markdown under `memory.path` plus a sibling **keyword index** (`*.sled`). Default **highlight** in the menu.  
+- **Markdown preset** (`hybrid`) — Markdown under `memory.path` plus a sibling **keyword index** (SQLite, `*.hot.db`). Default **highlight** in the menu.  
 - **Remote embeddings** (`pipeline`) — OpenAI-compatible `embedding_base_url` + model; embeddings reuse **`llm.api_key`** unless you edit JSON later.  
 - **Local ONNX** (`pipeline` + `embedding_provider=local`) — only if the binary is built with **`--features embedding-local`**.
 
@@ -22,27 +22,27 @@ After model credentials, setup offers:
 
 ## Lightweight alternative: pure `file`
 
-若只要目录 Markdown、**不想要** Hybrid 自带的旁路 sled，仍可手动设 **`memory.backend: file`**（JSON 默认值即 `file`）。Setup 主推 Hybrid 作为主目录 + 检索体验。
+若只要目录 Markdown、**不想要** Hybrid 自带的旁路索引，仍可手动设 **`memory.backend: file`**（JSON 默认值即 `file`）。Setup 主推 Hybrid 作为主目录 + 检索体验。
 
 ## Hybrid vs pipeline
 
 | | **Hybrid (`hybrid`)** | **Pipeline (`pipeline`)** |
 |---|------------------------|----------------------------|
-| Primary store | Markdown 根目录 | 归根通道 hot Sled + 可选只读并入 legacy `*.md` |
-| Extras | 旁路 **关键词** sled | 可选 **缓冲 + WAL**，晋升钩子， autosave ingest |
-| Vectors | 无（Setup 中选向量会切到 pipeline） | 可选 `*.pipeline.vec.sled` + HTTP / 本地嵌入 |
+| Primary store | Markdown 根目录 | 归根通道 hot 层（SQLite）+ 可选只读并入 legacy `*.md` |
+| Extras | 旁路 **关键词索引**（`*.hot.db`） | 可选 **缓冲 + WAL**，晋升钩子， autosave ingest |
+| Vectors | 无（Setup 中选向量会切到 pipeline） | 可选向量索引（与热层共用 `*.pipeline.hot.db`）+ HTTP / 本地嵌入 |
 
 ```mermaid
 flowchart LR
   subgraph hybrid [Hybrid]
     md[Markdown_dir]
-    sled_kw[Sled_keyword_index]
-    md --- sled_kw
+    kw[Keyword_index_SQLite]
+    md --- kw
   end
   subgraph pipeline [Pipeline]
     buf[Buffer_WAL_optional]
-    hot[Hot_Sled]
-    vec[Vector_Sled_optional]
+    hot[Hot_SQLite]
+    vec[Vector_optional_same_db]
     buf --> hot --> vec
   end
 ```
@@ -60,7 +60,9 @@ Optional `memory.pipeline` fields include: `buffer_ttl_secs`, `max_buffer_fragme
 ## WAL & vectors
 
 - **WAL**: When `buffer_wal_enabled`, buffer state appends to `*.pipeline.buffer.wal` beside the hot DB; replayed on startup; `fsync` per `buffer_wal_fsync_every_n` and on bridge / task checkpoints.
-- **Vectors**: Enabled when pipeline embedding fields / `embedding_provider` request it; stored in `*.pipeline.vec.sled`. See project docs for `--features embedding-local`.
+- **Vectors**: Enabled when pipeline embedding fields / `embedding_provider` request it; stored in the same `*.pipeline.hot.db` as the hot layer (a separate `*.pipeline.vec.sled` before DATA-02). See project docs for `--features embedding-local`.
+
+**Migrating old data**: since 0.42.1 the hot layer / vectors moved from sled to SQLite. A binary built with `--features sled-migrate` copies existing sled data once, on first open of an empty database; regular release builds ship without sled.
 
 **CLI import**: `anycode memory import [--dry-run] [--limit N]` imports legacy Markdown into pipeline hot (`memory.backend: pipeline`).
 
