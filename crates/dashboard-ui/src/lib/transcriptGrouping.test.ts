@@ -148,8 +148,8 @@ describe("groupTurnReplies", () => {
 });
 
 describe("groupTurnReplies subagent groups", () => {
-  const sa = (taskId: string, agentType = "explore") => ({
-    subagent: { task_id: taskId, agent_type: agentType, parent_task_id: null },
+  const sa = (taskId: string, agentType = "explore", parentTaskId: string | null = null) => ({
+    subagent: { task_id: taskId, agent_type: agentType, parent_task_id: parentTaskId },
   });
 
   it("groups consecutive same-task blocks into a collapsible subagent group", () => {
@@ -213,6 +213,68 @@ describe("groupTurnReplies subagent groups", () => {
     if (gb?.kind === "subagent_group") {
       expect(gb.agentType).toBe("plan");
       expect(gb.status).toBeNull();
+    }
+  });
+
+  it("nests grandchild blocks as their own subagent group (depth 2)", () => {
+    const replies = [
+      block("h1", "system_notice", {
+        meta: { source: "subagent_start", ...sa("task-a") },
+      }),
+      block("a1", "tool_call", {
+        meta: { tool_key: "u3:satask-a:1:1", phase: "start", ...sa("task-a") },
+      }),
+      block("a2", "tool_result", {
+        meta: { tool_key: "u3:satask-a:1:1", phase: "end", ...sa("task-a") },
+      }),
+      // grandchild: tagged with its own task id inside task-a's stream
+      block("b1", "tool_call", {
+        meta: { tool_key: "u3:satask-b:1:1", phase: "start", ...sa("task-b", "plan", "task-a") },
+      }),
+      block("b2", "tool_result", {
+        meta: { tool_key: "u3:satask-b:1:1", phase: "end", ...sa("task-b", "plan", "task-a") },
+      }),
+      block("d1", "system_notice", {
+        meta: { source: "subagent_done", status: "completed", ...sa("task-a") },
+      }),
+    ];
+    const grouped = groupTurnReplies(replies);
+    expect(grouped.map((item) => item.kind)).toEqual(["subagent_group"]);
+    const ga = grouped[0];
+    if (ga?.kind === "subagent_group") {
+      expect(ga.taskId).toBe("task-a");
+      expect(ga.status).toBe("completed");
+      // own activity flattened (tool cluster), grandchild grouped separately
+      expect(ga.items.map((item) => item.kind)).toEqual([
+        "tool_cluster",
+        "subagent_group",
+      ]);
+      const gb = ga.items[1];
+      if (gb?.kind === "subagent_group") {
+        expect(gb.taskId).toBe("task-b");
+        expect(gb.agentType).toBe("plan");
+        expect(gb.toolCount).toBe(1);
+      }
+    }
+  });
+
+  it("does not re-group a group's own blocks into itself (no infinite recursion)", () => {
+    const replies = [
+      block("a1", "assistant_message", {
+        body: "child narration",
+        meta: { narration: true, message_role: "status", ...sa("task-a") },
+      }),
+      block("a2", "assistant_message", { body: "child final", ...sa("task-a") }),
+    ];
+    const grouped = groupTurnReplies(replies);
+    const ga = grouped[0];
+    if (ga?.kind === "subagent_group") {
+      // own blocks stay flat inside the group — no nested group with same id
+      expect(
+        ga.items.every(
+          (item) => item.kind !== "subagent_group" || item.taskId !== "task-a",
+        ),
+      ).toBe(true);
     }
   });
 

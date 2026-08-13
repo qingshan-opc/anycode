@@ -387,7 +387,7 @@ impl Tool for TaskOutputTool {
         "TaskOutput"
     }
     fn description(&self) -> &str {
-        "Returns the orchestration task record when `task_id` matches TaskCreate. If it is a runtime execution UUID (e.g. `nested_task_id` from Agent, or `background_task_id` from Bash `run_in_background`), also returns `output_log_path` and a tail of `output.log` under ~/.anycode/tasks/<id>/ when the file exists. For background jobs, includes `background_status` / `background_summary` from the in-process registry while the process lives. Accepts `task_id` (Claude Code) or `id`."
+        "Returns the orchestration task record when `task_id` matches TaskCreate. If it is a runtime execution UUID (e.g. `nested_task_id` from Agent, or `background_task_id` from Bash `run_in_background`), also returns `output_log_path` and a tail of `output.log` under ~/.anycode/tasks/<id>/ when the file exists. For background jobs, includes `background_status` / `background_summary` from the in-process registry while the process lives. If the nested agent finished with a StructuredOutput contract, the first poll after completion returns it as `structured_output` (one-shot). Accepts `task_id` (Claude Code) or `id`."
     }
     fn schema(&self) -> serde_json::Value {
         json!({
@@ -417,11 +417,15 @@ impl Tool for TaskOutputTool {
         let mut output_tail: Option<String> = None;
         let mut background_status: Option<String> = None;
         let mut background_summary: Option<String> = None;
+        let mut structured_output: Option<serde_json::Value> = None;
         if let Ok(uid) = Uuid::parse_str(gid.trim()) {
             if let Some((st, sum)) = self.services.background_agent_tool_view(uid) {
                 background_status = Some(st.as_json_str().to_string());
                 background_summary = sum;
             }
+            // 后台嵌套代理的 StructuredOutput 捕获：完成后由首次 TaskOutput 轮询
+            // 一次性取走（take 语义与前台 Agent 收尾一致），再次轮询返回 null。
+            structured_output = self.services.take_structured_output(uid);
             if let Some(home) = dirs::home_dir() {
                 let disk = DiskTaskOutput::new(home.join(".anycode").join("tasks"));
                 let path = disk.output_path(uid);
@@ -443,6 +447,7 @@ impl Tool for TaskOutputTool {
                 "output_tail": output_tail,
                 "background_status": background_status,
                 "background_summary": background_summary,
+                "structured_output": structured_output,
             }),
             error: None,
             duration_ms: start.elapsed().as_millis() as u64,
@@ -1443,5 +1448,49 @@ impl Tool for MonitorTool {
             error: None,
             duration_ms: start.elapsed().as_millis() as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod task_output_tests {
+    use super::*;
+    use crate::services::ToolServices;
+    use anycode_core::ToolInput;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    fn ti(id: &str) -> ToolInput {
+        ToolInput {
+            name: "TaskOutput".into(),
+            input: json!({ "task_id": id }),
+            working_directory: None,
+            sandbox_mode: false,
+            dashboard_session_id: None,
+            task_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn task_output_surfaces_structured_output_once() {
+        let services = Arc::new(ToolServices::default());
+        let tid = Uuid::new_v4();
+        services.record_structured_output(tid, json!({ "answer": 42 }));
+        let tool = TaskOutputTool::new(services.clone());
+
+        let first = tool.execute(ti(&tid.to_string())).await.unwrap();
+        assert_eq!(first.result["structured_output"], json!({ "answer": 42 }));
+
+        // one-shot: 再次轮询返回 null（与前台 Agent 收尾的 take 语义一致）。
+        let second = tool.execute(ti(&tid.to_string())).await.unwrap();
+        assert_eq!(second.result["structured_output"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn task_output_without_capture_returns_null() {
+        let services = Arc::new(ToolServices::default());
+        let tool = TaskOutputTool::new(services);
+        let out = tool.execute(ti(&Uuid::new_v4().to_string())).await.unwrap();
+        assert!(out.error.is_none());
+        assert_eq!(out.result["structured_output"], serde_json::Value::Null);
     }
 }

@@ -161,10 +161,65 @@ export function mergeFinalAssistantBlocks(replies: TranscriptBlock[]): Transcrip
  * per-child groups; each group renders as a collapsible nested timeline.
  */
 export function groupTurnReplies(replies: TranscriptBlock[]): TurnReplyItem[] {
-  // Aggregate subagent-tagged blocks per child task_id (group placed at first
-  // sight) so interleaved parallel children still render as one card each;
-  // untagged blocks keep flat timeline grouping.
-  type Marker = { type: "normal"; blocks: TranscriptBlock[] } | { type: "group"; taskId: string };
+  const taggedIds = collectTaggedTaskIds(replies);
+  return groupScoped(replies, null, new Set(), taggedIds);
+}
+
+type SubagentTag = {
+  taskId: string;
+  agentType?: string;
+  parentTaskId: string | null;
+};
+
+function subagentTagOf(block: TranscriptBlock): SubagentTag | null {
+  const sa = block.meta?.subagent as
+    | { task_id?: unknown; agent_type?: unknown; parent_task_id?: unknown }
+    | null
+    | undefined;
+  const id = sa?.task_id;
+  if (typeof id !== "string" || id.length === 0) return null;
+  return {
+    taskId: id,
+    agentType:
+      typeof sa?.agent_type === "string" && sa.agent_type
+        ? sa.agent_type
+        : undefined,
+    parentTaskId:
+      typeof sa?.parent_task_id === "string" && sa.parent_task_id
+        ? sa.parent_task_id
+        : null,
+  };
+}
+
+function collectTaggedTaskIds(replies: TranscriptBlock[]): Set<string> {
+  const ids = new Set<string>();
+  for (const block of replies) {
+    const tag = subagentTagOf(block);
+    if (tag) ids.add(tag.taskId);
+  }
+  return ids;
+}
+
+/**
+ * One grouping pass at a fixed nesting scope:
+ * - untagged blocks, and blocks tagged with an ancestor scope's own id, stay
+ *   flat at this level (ancestor-tag flattening is what terminates recursion);
+ * - blocks whose `parent_task_id` is this scope (or, at root, whose parent is
+ *   not a subtask present in this stream) aggregate into per-child groups,
+ *   placed at first sight so interleaved parallel children still render as
+ *   one card each;
+ * - deeper-tagged blocks are skipped here and consumed by the recursion that
+ *   builds their ancestor's group.
+ */
+function groupScoped(
+  replies: TranscriptBlock[],
+  scopeTaskId: string | null,
+  ancestors: Set<string>,
+  taggedIds: Set<string>,
+): TurnReplyItem[] {
+  type Marker =
+    | { type: "normal"; blocks: TranscriptBlock[] }
+    | { type: "group"; taskId: string };
   const markers: Marker[] = [];
   const groupBlocks = new Map<string, TranscriptBlock[]>();
   let normal: TranscriptBlock[] = [];
@@ -175,17 +230,44 @@ export function groupTurnReplies(replies: TranscriptBlock[]): TurnReplyItem[] {
     }
   };
   for (const block of replies) {
-    const taskId = subagentTaskIdOf(block);
-    if (taskId === null) {
-      normal.push(block);
+    const tag = subagentTagOf(block);
+    if (!tag) {
+      // Untagged blocks are the owning task's own activity: they belong to the
+      // ancestor scopes, not to a child group's inner timeline.
+      if (scopeTaskId === null) {
+        normal.push(block);
+      }
       continue;
     }
-    let blocks = groupBlocks.get(taskId);
+    if (tag.taskId === scopeTaskId) {
+      // This scope's own activity renders flat inside its group; the start/done
+      // markers already folded into the group card's chrome.
+      const source = block.meta?.source;
+      if (source !== "subagent_start" && source !== "subagent_done") {
+        normal.push(block);
+      }
+      continue;
+    }
+    if (ancestors.has(tag.taskId)) {
+      continue; // defensive: ancestor-tag cycle, consumed at its own scope
+    }
+    const parentInStream =
+      tag.parentTaskId !== null &&
+      taggedIds.has(tag.parentTaskId) &&
+      !ancestors.has(tag.parentTaskId);
+    const directChild =
+      scopeTaskId === null
+        ? !parentInStream
+        : tag.parentTaskId === scopeTaskId;
+    if (!directChild) {
+      continue;
+    }
+    let blocks = groupBlocks.get(tag.taskId);
     if (!blocks) {
       flushNormal();
       blocks = [];
-      groupBlocks.set(taskId, blocks);
-      markers.push({ type: "group", taskId });
+      groupBlocks.set(tag.taskId, blocks);
+      markers.push({ type: "group", taskId: tag.taskId });
     }
     blocks.push(block);
   }
@@ -196,7 +278,17 @@ export function groupTurnReplies(replies: TranscriptBlock[]): TurnReplyItem[] {
     if (marker.type === "normal") {
       out.push(...groupFlatTurnReplies(marker.blocks));
     } else {
-      out.push(buildSubagentGroup(marker.taskId, groupBlocks.get(marker.taskId)!));
+      const childAncestors = new Set(ancestors);
+      childAncestors.add(marker.taskId);
+      out.push(
+        buildSubagentGroup(
+          marker.taskId,
+          groupBlocks.get(marker.taskId)!,
+          replies,
+          childAncestors,
+          taggedIds,
+        ),
+      );
     }
   }
   return out;
@@ -205,6 +297,9 @@ export function groupTurnReplies(replies: TranscriptBlock[]): TurnReplyItem[] {
 function buildSubagentGroup(
   taskId: string,
   blocks: TranscriptBlock[],
+  replies: TranscriptBlock[],
+  ancestors: Set<string>,
+  taggedIds: Set<string>,
 ): SubagentGroupItem {
   let agentType = "subagent";
   let status: string | null = null;
@@ -231,7 +326,9 @@ function buildSubagentGroup(
     taskId,
     agentType,
     status,
-    items: groupFlatTurnReplies(inner),
+    // Recurse at this group's scope: own-tag blocks flatten (ancestors guard),
+    // grandchild-tagged blocks form their own nested subagent_group cards.
+    items: groupScoped(replies, taskId, ancestors, taggedIds),
     toolCount: countLogicalToolSteps(inner.filter(isToolBlock)),
   };
 }

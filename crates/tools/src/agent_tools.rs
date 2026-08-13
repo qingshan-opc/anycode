@@ -397,8 +397,8 @@ impl AgentTool {
                     task_id,
                 };
                 let res = exe_c.run_nested_task(invoke_bg).await;
-                // 回收结构化输出槽，防跨任务泄漏（后台结果展示 structured_output 属 follow-up）。
-                let _ = services_c.take_structured_output(task_id);
+                // 结构化输出捕获保留给 TaskOutput 一次性取用（不在这里丢弃）；
+                // schema 槽始终回收。未轮询的残留以进程内后台任务数为界。
                 services_c.clear_structured_output_schema(task_id);
                 services_c.finish_background_agent(task_id, res);
             });
