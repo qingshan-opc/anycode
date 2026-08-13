@@ -1210,12 +1210,29 @@ pub struct TokenTimelinePoint {
     pub estimated_cost_cny: f64,
 }
 
+/// Per-agent-type token usage row (by_agent 分组：payload.agent_type 优先，session 兜底）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentUsageRow {
+    pub agent_type: String,
+    pub llm_calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub total_tokens: i64,
+    /// 其中嵌套子代理（subagent）贡献的 input/output tokens。
+    #[serde(default)]
+    pub nested_input_tokens: i64,
+    #[serde(default)]
+    pub nested_output_tokens: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenUsageDetail {
     pub usage: TokenUsageStats,
     pub by_model: Vec<ModelUsageRow>,
     pub by_project: Vec<ProjectUsageRow>,
     pub by_day: Vec<TokenTimelinePoint>,
+    #[serde(default)]
+    pub by_agent: Vec<AgentUsageRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

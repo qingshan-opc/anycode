@@ -53,6 +53,10 @@ pub struct DashboardRecorder {
     pending_artifact_rel: Option<String>,
     last_model: Option<String>,
     started_at: SystemTime,
+    /// 最近一次 ingest 用的磁盘句柄（嵌套子代理 output.log 摄取复用同一 root）。
+    disk: Option<DiskTaskOutput>,
+    /// 已摄取的嵌套子代理 task_id（实例内去重；跨实例幂等靠 DB 存在性检查）。
+    nested_ingested: HashSet<String>,
 }
 
 impl DashboardRecorder {
@@ -208,6 +212,8 @@ impl DashboardRecorder {
             pending_artifact_rel: None,
             last_model: None,
             started_at: SystemTime::now(),
+            disk: None,
+            nested_ingested: HashSet::new(),
         })
     }
 
@@ -226,6 +232,7 @@ impl DashboardRecorder {
     }
 
     pub async fn ingest_delta(&mut self, disk: &DiskTaskOutput, task_id: TaskId) {
+        self.disk = Some(disk.clone());
         let Ok((delta, new_offset)) = disk.read_delta(task_id, self.log_offset, 64 * 1024) else {
             return;
         };
@@ -339,6 +346,27 @@ impl DashboardRecorder {
                 self.maybe_record_llm_usage(&parsed, &mut dedup).await;
                 continue;
             }
+            if parsed.event_type == "nested_task_end" {
+                // 嵌套子代理完成标记：子任务 output.log 此时已完整（标记由 agent runtime
+                // 在子任务 execute_task 返回后写入父日志），立即摄取其 token usage。
+                let nested_id = parsed
+                    .payload
+                    .get("task_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let agent_type = parsed
+                    .payload
+                    .get("agent_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !nested_id.is_empty() {
+                    self.record_nested_task_end_event(&parsed, &nested_id).await;
+                    self.ingest_nested_log(&nested_id, &agent_type).await;
+                }
+                continue;
+            }
             if !is_index_event_type(&parsed.event_type) {
                 continue;
             }
@@ -444,6 +472,150 @@ impl DashboardRecorder {
         }
     }
 
+    /// 嵌套子代理完成的时间线事件（task_id 键控为子任务 id，DB 幂等——recorder 每轮
+    /// 重建会从 offset 0 重读父日志重见标记）。
+    async fn record_nested_task_end_event(
+        &self,
+        parsed: &crate::log_parser::ParsedLine,
+        nested_task_id: &str,
+    ) {
+        let exists: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*) FROM project_events
+            WHERE session_id = ? AND event_type = 'nested_task_end' AND task_id = ?
+            "#,
+        )
+        .bind(&self.session_id)
+        .bind(nested_task_id)
+        .fetch_one(self.db.pool())
+        .await
+        .unwrap_or(1);
+        if exists > 0 {
+            return;
+        }
+        // agent_id 是 agents 表 FK——recorder 一律置 None，agent_type 走 payload。
+        if let Ok(evt) = self
+            .db
+            .insert_event(InsertEventRequest {
+                project_id: self.project_id.clone(),
+                session_id: Some(self.session_id.clone()),
+                task_id: Some(nested_task_id.to_string()),
+                agent_id: None,
+                event_type: "nested_task_end".into(),
+                severity: Some(parsed.severity.clone()),
+                title: parsed.title.clone(),
+                body: Some(parsed.body.clone()),
+                payload: Some(parsed.payload.clone()),
+            })
+            .await
+        {
+            Self::notify_sse(evt);
+        }
+    }
+
+    /// 摄取嵌套子代理 output.log 的 `llm_response_end` → `llm_usage` 事件
+    ///（task_id = 子任务 id，payload 带 `agent_type` / `nested` / `parent_task_id`），
+    /// 解锁 metrics 的 by_agent token 分组。实例内 `nested_ingested` 去重 +
+    /// DB（session, task_id, turn）存在性检查兜底跨实例幂等。
+    async fn ingest_nested_log(&mut self, nested_task_id: &str, agent_type: &str) {
+        if !self.nested_ingested.insert(nested_task_id.to_string()) {
+            return;
+        }
+        let (Some(disk), Ok(nested_uuid)) =
+            (self.disk.clone(), uuid::Uuid::parse_str(nested_task_id))
+        else {
+            return;
+        };
+        let content = std::fs::read_to_string(disk.output_path(nested_uuid)).unwrap_or_default();
+        if content.is_empty() {
+            return;
+        }
+        let mut last_model: Option<String> = None;
+        for line in content.lines() {
+            let Some(parsed) = parse_line(line) else {
+                continue;
+            };
+            if parsed.event_type == "llm_request_start" {
+                if let Some(model) = parsed
+                    .payload
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    last_model = Some(model.to_string());
+                }
+                continue;
+            }
+            if parsed.event_type != "llm_response_end" {
+                continue;
+            }
+            let Some(mut payload) =
+                llm_usage::usage_payload_from_parsed_with_model(&parsed, last_model.as_deref())
+            else {
+                continue;
+            };
+            // 子代理身份以标记为准（行内 agent_type 缺失时兜底，如旧日志）。
+            if payload.get("agent_type").is_none() && !agent_type.is_empty() {
+                payload["agent_type"] = Value::String(agent_type.to_string());
+            }
+            payload["nested"] = Value::Bool(true);
+            payload["parent_task_id"] = Value::String(self.task_id.clone());
+            let turn = payload
+                .get("turn")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0")
+                .to_string();
+            let exists: i64 = sqlx::query_scalar(
+                r#"
+                SELECT COUNT(*) FROM project_events
+                WHERE session_id = ?
+                  AND event_type = ?
+                  AND task_id = ?
+                  AND json_extract(payload_json, '$.turn') = ?
+                "#,
+            )
+            .bind(&self.session_id)
+            .bind(LLM_USAGE_EVENT)
+            .bind(nested_task_id)
+            .bind(&turn)
+            .fetch_one(self.db.pool())
+            .await
+            .unwrap_or(1);
+            if exists > 0 {
+                continue;
+            }
+            let input = payload
+                .get("input_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output = payload
+                .get("output_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let title =
+                format!("LLM usage ({input} in / {output} out tokens, subagent {agent_type})");
+            // agent_id 是 agents 表 FK——置 None，agent_type 已在 payload。
+            if let Ok(evt) = self
+                .db
+                .insert_event(InsertEventRequest {
+                    project_id: self.project_id.clone(),
+                    session_id: Some(self.session_id.clone()),
+                    task_id: Some(nested_task_id.to_string()),
+                    agent_id: None,
+                    event_type: LLM_USAGE_EVENT.into(),
+                    severity: Some("info".into()),
+                    title,
+                    body: None,
+                    payload: Some(payload),
+                })
+                .await
+            {
+                Self::notify_sse(evt);
+            }
+        }
+    }
+
     async fn maybe_record_artifact(&self, _parsed: &crate::log_parser::ParsedLine) {
         let Some(tool) = self.pending_tool_name.as_deref() else {
             return;
@@ -526,7 +698,15 @@ impl DashboardRecorder {
         crate::cancel_ipc::unregister_active(&self.session_id);
     }
 
-    pub async fn finish_run(&self, disk: &DiskTaskOutput, task_id: TaskId, summary: Option<&str>) {
+    pub async fn finish_run(
+        &mut self,
+        disk: &DiskTaskOutput,
+        task_id: TaskId,
+        summary: Option<&str>,
+    ) {
+        // 补读尾部 delta：channel-bridge 路径直接调 finish_run（无前置 ingest_full_log），
+        // 尾段里的嵌套 `nested_task_end` 标记与 llm_usage 需在此落库（offset 幂等）。
+        self.ingest_full_log(disk, task_id).await;
         let path = disk.output_path(task_id);
         let content = std::fs::read_to_string(&path).unwrap_or_default();
         let lines: Vec<&str> = content.lines().collect();

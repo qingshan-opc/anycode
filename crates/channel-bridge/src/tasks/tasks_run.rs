@@ -195,7 +195,7 @@ pub(crate) async fn run_single_task_with_tail(
     if let Err(e) = exec_result {
         if options.dashboard_parent.is_none() {
             if let Some(r) = recorder.as_ref() {
-                let guard = r.lock().await;
+                let mut guard = r.lock().await;
                 guard.finish_run(disk, task.id, Some(&e.to_string())).await;
             }
             std::env::remove_var(anycode_dashboard::approval_ipc::SESSION_ENV);
@@ -273,7 +273,7 @@ pub(crate) async fn run_single_task_with_tail(
 
     if options.dashboard_parent.is_none() {
         if let Some(r) = recorder.as_ref() {
-            let guard = r.lock().await;
+            let mut guard = r.lock().await;
             guard.finish_run(disk, task.id, summary_for_db).await;
         }
         std::env::remove_var(anycode_dashboard::approval_ipc::SESSION_ENV);
@@ -364,7 +364,7 @@ pub(crate) async fn run_goal_task_with_tail(
         Err(e) => {
             if options.dashboard_parent.is_none() {
                 if let Some(r) = recorder.as_ref() {
-                    let guard = r.lock().await;
+                    let mut guard = r.lock().await;
                     guard.finish_run(disk, task.id, Some(&e.to_string())).await;
                 }
                 std::env::remove_var(anycode_dashboard::approval_ipc::SESSION_ENV);

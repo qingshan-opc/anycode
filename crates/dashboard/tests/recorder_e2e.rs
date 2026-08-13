@@ -254,3 +254,170 @@ async fn recorder_begin_attaches_precreated_session_and_preserves_title() {
         .collect();
     assert_eq!(user_prompts.len(), 1, "should not duplicate user_prompt");
 }
+
+/// 嵌套子代理 output.log 摄取：父日志的 `nested_task_end` 标记触发 recorder 读取子任务
+/// log，token usage 以 task_id=子任务 + payload.agent_type 落库，解锁 by_agent 指标。
+#[tokio::test]
+async fn recorder_ingests_nested_subagent_log_via_marker() {
+    let dir = tempdir().unwrap();
+    let db = DashboardDb::open(dir.path().join("projects.db"))
+        .await
+        .unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+
+    let parent_id = Uuid::new_v4();
+    let nested_id = Uuid::new_v4();
+    let task = Task {
+        id: parent_id,
+        agent_type: AgentType::new("general-purpose"),
+        prompt: "orchestrate subagents".into(),
+        context: TaskContext {
+            session_id: Uuid::new_v4(),
+            working_directory: work.to_string_lossy().into(),
+            environment: Default::default(),
+            user_id: None,
+            system_prompt_append: None,
+            context_injections: vec![],
+            nested_model_override: None,
+            nested_worktree_path: None,
+            nested_worktree_repo_root: None,
+            nested_cancel: None,
+            channel_progress_tx: None,
+            live_trace_tx: None,
+            tool_deny_names: vec![],
+            tool_deny_prefixes: vec![],
+            user_vision_images: vec![],
+            budget: TaskBudget::default(),
+            loop_limits: AgentLoopLimits::default(),
+            chat_turn: None,
+        },
+        created_at: chrono::Utc::now(),
+    };
+
+    let mut rec = DashboardRecorder::begin(
+        std::sync::Arc::new(db.clone()),
+        RunSessionKind::Run,
+        &task,
+        "orchestrate",
+    )
+    .await
+    .unwrap();
+
+    let disk = DiskTaskOutput::new(dir.path().join("tasks"));
+    // 子任务自己的 log：execute_task 路径的 llm_response_end 行自带 agent_type=
+    disk.append_line(
+        nested_id,
+        "[llm_request_start] turn=1 model=claude-haiku-4-5 base_url=https://example.com",
+    )
+    .unwrap();
+    disk.append_line(
+        nested_id,
+        "[llm_response_end] turn=1 elapsed_ms=200 input_tokens=500 output_tokens=100 agent_type=explore",
+    )
+    .unwrap();
+    disk.append_line(
+        nested_id,
+        "[llm_response_end] turn=2 elapsed_ms=300 input_tokens=700 output_tokens=150 agent_type=explore",
+    )
+    .unwrap();
+    disk.append_line(nested_id, "[task_end] status=completed")
+        .unwrap();
+
+    // 父日志：自身一轮 usage + 嵌套完成标记（agent runtime 在子任务结束后写入）
+    disk.append_line(
+        parent_id,
+        "[llm_response_end] turn=1 elapsed_ms=900 input_tokens=2000 output_tokens=400 agent_type=general-purpose",
+    )
+    .unwrap();
+    disk.append_line(
+        parent_id,
+        &format!("[nested_task_end] task_id={nested_id} agent_type=explore status=completed"),
+    )
+    .unwrap();
+    disk.append_line(parent_id, "[task_end] status=completed")
+        .unwrap();
+
+    rec.ingest_full_log(&disk, parent_id).await;
+    rec.finish_run(&disk, parent_id, Some("ok")).await;
+
+    let events = db
+        .list_session_events(rec.session_id(), None, 100, None, None, None)
+        .await
+        .unwrap();
+
+    // 时间线事件：子代理完成，task_id 键控为子任务 id
+    let marker: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == "nested_task_end")
+        .collect();
+    assert_eq!(marker.len(), 1, "nested_task_end event recorded once");
+    assert_eq!(
+        marker[0].task_id.as_deref(),
+        Some(nested_id.to_string().as_str())
+    );
+
+    // 嵌套 usage：两个 turn 都落库，payload 带 agent_type / nested / parent_task_id
+    let nested_usage: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e.event_type == "llm_usage"
+                && e.task_id.as_deref() == Some(nested_id.to_string().as_str())
+        })
+        .collect();
+    assert_eq!(nested_usage.len(), 2, "nested turns ingested");
+    let payload = &nested_usage[0].payload;
+    assert_eq!(payload["agent_type"], "explore");
+    assert_eq!(payload["nested"], true);
+    assert_eq!(payload["parent_task_id"], parent_id.to_string().as_str());
+    assert_eq!(payload["model"], "claude-haiku-4-5");
+
+    // by_agent 归并：explore（嵌套 1200 in / 250 out）与 general-purpose（父 2000/400）分列
+    let detail = anycode_dashboard::metrics::session_token_usage_detail(&db, rec.session_id())
+        .await
+        .unwrap();
+    let explore = detail
+        .by_agent
+        .iter()
+        .find(|r| r.agent_type == "explore")
+        .expect("explore row");
+    assert_eq!(explore.llm_calls, 2);
+    assert_eq!(explore.input_tokens, 1200);
+    assert_eq!(explore.output_tokens, 250);
+    assert_eq!(explore.nested_input_tokens, 1200);
+    let parent_row = detail
+        .by_agent
+        .iter()
+        .find(|r| r.agent_type == "general-purpose")
+        .expect("parent row");
+    assert_eq!(parent_row.input_tokens, 2000);
+    assert_eq!(parent_row.nested_input_tokens, 0);
+
+    // 幂等：新 recorder 实例（每聊天轮重建）重读全量父日志 → 不重复插入
+    let mut rec2 = DashboardRecorder::begin(
+        std::sync::Arc::new(db.clone()),
+        RunSessionKind::Run,
+        &task,
+        "orchestrate",
+    )
+    .await
+    .unwrap();
+    rec2.ingest_full_log(&disk, parent_id).await;
+    let events2 = db
+        .list_session_events(rec.session_id(), None, 100, None, None, None)
+        .await
+        .unwrap();
+    let nested_usage2: Vec<_> = events2
+        .iter()
+        .filter(|e| {
+            e.event_type == "llm_usage"
+                && e.task_id.as_deref() == Some(nested_id.to_string().as_str())
+        })
+        .collect();
+    assert_eq!(nested_usage2.len(), 2, "re-ingest must not duplicate");
+    let marker2: Vec<_> = events2
+        .iter()
+        .filter(|e| e.event_type == "nested_task_end")
+        .collect();
+    assert_eq!(marker2.len(), 1, "marker event must not duplicate");
+}

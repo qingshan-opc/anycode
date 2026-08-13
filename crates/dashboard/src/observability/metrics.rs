@@ -40,6 +40,81 @@ fn calendar_day_keys(days: u32) -> Vec<String> {
         .collect()
 }
 
+/// Prefer llm_usage payload.agent_type (execute_task 行内字段 / 嵌套摄取写入), then session.agent_type.
+fn resolved_usage_agent_sql() -> &'static str {
+    "COALESCE(NULLIF(TRIM(json_extract(e.payload_json, '$.agent_type')), ''), NULLIF(TRIM(s.agent_type), ''), 'unknown')"
+}
+
+/// by_agent token 指标：嵌套子代理 usage（recorder 摄取子任务 output.log 写入，
+/// payload.nested=true）归并到其 agent_type 下，并单列 nested 贡献。
+async fn usage_by_agent(
+    db: &DashboardDb,
+    days: Option<u32>,
+    session_id: Option<&str>,
+    project_id: Option<&str>,
+) -> Result<Vec<crate::schema::AgentUsageRow>> {
+    use crate::schema::AgentUsageRow;
+    use sqlx::Row;
+    let event_filter = usage_event_filter_sql();
+    let mock_filter = mock_model_filter_sql();
+    let mut sql = format!(
+        r#"
+        SELECT
+          {resolved_agent} AS usage_agent,
+          COUNT(*) AS llm_calls,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.input_tokens') AS INTEGER)), 0) AS input_tokens,
+          COALESCE(SUM(CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER)), 0) AS output_tokens,
+          COALESCE(SUM(CASE WHEN json_extract(e.payload_json, '$.nested') = 1
+                            THEN CAST(json_extract(e.payload_json, '$.input_tokens') AS INTEGER) ELSE 0 END), 0) AS nested_input_tokens,
+          COALESCE(SUM(CASE WHEN json_extract(e.payload_json, '$.nested') = 1
+                            THEN CAST(json_extract(e.payload_json, '$.output_tokens') AS INTEGER) ELSE 0 END), 0) AS nested_output_tokens
+        FROM project_events e
+        LEFT JOIN sessions s ON s.id = e.session_id
+        WHERE {event_filter}
+          {mock_filter}
+        "#,
+        resolved_agent = resolved_usage_agent_sql(),
+        event_filter = event_filter,
+        mock_filter = mock_filter,
+    );
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(days) = days {
+        sql.push_str(" AND datetime(e.occurred_at) >= datetime('now', ?)");
+        binds.push(format!("-{} days", days.clamp(1, 90)));
+    }
+    if let Some(sid) = session_id.filter(|s| !s.is_empty()) {
+        sql.push_str(" AND e.session_id = ?");
+        binds.push(sid.to_string());
+    }
+    if let Some(pid) = project_id.filter(|s| !s.is_empty()) {
+        sql.push_str(" AND e.project_id = ?");
+        binds.push(pid.to_string());
+    }
+    // 别名必须区别于 sessions.agent_type 列名：SQLite GROUP BY 同名时优先解析为表列。
+    sql.push_str(" GROUP BY usage_agent ORDER BY input_tokens + output_tokens DESC LIMIT 50");
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.fetch_all(db.pool()).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let input_tokens: i64 = r.get("input_tokens");
+            let output_tokens: i64 = r.get("output_tokens");
+            AgentUsageRow {
+                agent_type: r.get("usage_agent"),
+                llm_calls: r.get("llm_calls"),
+                input_tokens,
+                output_tokens,
+                total_tokens: input_tokens + output_tokens,
+                nested_input_tokens: r.get("nested_input_tokens"),
+                nested_output_tokens: r.get("nested_output_tokens"),
+            }
+        })
+        .collect())
+}
+
 pub async fn global_readiness(db: &DashboardDb) -> Result<DeliveryReadiness> {
     let overview = db.overview_stats().await?;
     let blocked = overview.sessions_blocked;
@@ -316,6 +391,7 @@ async fn usage_detail(
     let by_model = usage_by_model(db, days, project_id).await?;
     let by_project = usage_by_project(db, days, project_id).await?;
     let by_day = usage_by_day(db, days, project_id).await?;
+    let by_agent = usage_by_agent(db, Some(days), None, project_id).await?;
     let llm_calls: i64 = by_model.iter().map(|r| r.llm_calls).sum();
     let input_tokens: i64 = by_model.iter().map(|r| r.input_tokens).sum();
     let output_tokens: i64 = by_model.iter().map(|r| r.output_tokens).sum();
@@ -333,6 +409,7 @@ async fn usage_detail(
         by_model,
         by_project,
         by_day,
+        by_agent,
     })
 }
 
@@ -660,6 +737,7 @@ pub async fn session_token_usage_detail(
     use crate::schema::{TokenUsageDetail, TokenUsageStats};
     let by_model = usage_by_model_session(db, session_id).await?;
     let by_day = usage_by_day_session(db, session_id).await?;
+    let by_agent = usage_by_agent(db, None, Some(session_id), None).await?;
     let llm_calls: i64 = by_model.iter().map(|r| r.llm_calls).sum();
     let input_tokens: i64 = by_model.iter().map(|r| r.input_tokens).sum();
     let output_tokens: i64 = by_model.iter().map(|r| r.output_tokens).sum();
@@ -677,6 +755,7 @@ pub async fn session_token_usage_detail(
         by_model,
         by_project: Vec::new(),
         by_day,
+        by_agent,
     })
 }
 
