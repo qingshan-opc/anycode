@@ -25,6 +25,7 @@ pub use runtime::{initialize_runtime, initialize_runtime_legacy, RuntimeHosts};
 pub use runtimes::{detect_runtime_status, RuntimeStatus};
 pub use workbench::project_skills::load_project_enabled_skills;
 pub use workbench::workbench_ask::WorkbenchAskUserQuestionHost;
+pub use workbench::workbench_skill_app::WorkbenchSkillAppHost;
 
 use anycode_config::Config;
 use anycode_core::prelude::*;
@@ -67,7 +68,14 @@ pub fn build_model_routing_parts(
         base_url: default_base_url.clone(),
         temperature: Some(config.llm.temperature),
         max_tokens: Some(config.llm.max_tokens),
-        api_key: None,
+        api_key: {
+            let key = config.llm.api_key.trim();
+            if key.is_empty() {
+                None
+            } else {
+                Some(key.to_string())
+            }
+        },
         prompt_cache: config.llm.prompt_cache,
         thinking_enabled: config.llm.thinking_enabled,
         reasoning_effort: config.llm.reasoning_effort.clone(),
@@ -139,7 +147,14 @@ pub fn build_preview_model_router(config: &Config) -> ModelRouter {
                     base_url: default_base_url,
                     temperature: Some(config.llm.temperature),
                     max_tokens: Some(config.llm.max_tokens),
-                    api_key: None,
+                    api_key: {
+                        let key = config.llm.api_key.trim();
+                        if key.is_empty() {
+                            None
+                        } else {
+                            Some(key.to_string())
+                        }
+                    },
                     prompt_cache: config.llm.prompt_cache,
                     thinking_enabled: config.llm.thinking_enabled,
                     reasoning_effort: config.llm.reasoning_effort.clone(),

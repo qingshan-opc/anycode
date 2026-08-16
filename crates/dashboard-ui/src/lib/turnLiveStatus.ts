@@ -122,7 +122,9 @@ export function deriveTurnLiveStatus(input: TurnLiveStatusInput): TurnLiveStatus
   const live = isLast && isRunning;
   const waitingForUser =
     live && (pendingQuestionsCount > 0 || pendingApprovalsCount > 0);
-  const recapCompact = live && hasProgressContent;
+  // When thinking/tools are already visible in the transcript tip, keep the
+  // composer pill compact (timer) — don't echo the same long context there.
+  const recapCompact = live && (hasProgressContent || hasThinkingCluster);
 
   const showLiveRecap =
     live &&

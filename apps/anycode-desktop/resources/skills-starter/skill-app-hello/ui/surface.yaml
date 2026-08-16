@@ -1,0 +1,10 @@
+id: hello-app
+title: Hello Skill App
+entry: index.html
+slots: [dock, conversation, project]
+default_slot: dock
+lifecycle: persistent
+icon: dashboard_customize
+permissions:
+  host_api: [state, brief.submit, agent.prompt]
+  network: false

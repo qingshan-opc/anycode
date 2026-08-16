@@ -1,0 +1,10 @@
+id: video-studio
+title: 短视频工作台
+entry: index.html
+slots: [dock, conversation, project]
+default_slot: conversation
+lifecycle: persistent
+icon: movie
+permissions:
+  host_api: [state, brief.submit, agent.prompt]
+  network: false

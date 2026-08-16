@@ -11,6 +11,8 @@ UI_PKG="$ROOT/crates/dashboard-ui/package.json"
 UI_LOCK="$ROOT/crates/dashboard-ui/package-lock.json"
 DESKTOP_CARGO="$ROOT/apps/anycode-desktop/Cargo.toml"
 DESKTOP_TAURI="$ROOT/apps/anycode-desktop/tauri.conf.json"
+ACCOUNT_CARGO="$ROOT/crates/account-service/Cargo.toml"
+BROWSER_CEF_CARGO="$ROOT/crates/browser-cef/Cargo.toml"
 
 read_workspace_version() {
   local line
@@ -39,7 +41,7 @@ with open(sys.argv[1], encoding="utf-8") as f:
 PY
 }
 
-read_desktop_cargo_version() {
+read_cargo_version() {
   awk '
     /^version[[:space:]]*=/ {
       gsub(/.*version[[:space:]]*=[[:space:]]*"/, "")
@@ -47,7 +49,7 @@ read_desktop_cargo_version() {
       print
       exit
     }
-  ' "$DESKTOP_CARGO"
+  ' "$1"
 }
 
 read_npm_lock_version() {
@@ -88,8 +90,13 @@ PY
 }
 
 write_desktop_cargo_version() {
-  local version="$1"
-  python3 - "$DESKTOP_CARGO" "$version" <<'PY'
+  write_package_cargo_version "$DESKTOP_CARGO" "$1"
+}
+
+write_package_cargo_version() {
+  local cargo_file="$1"
+  local version="$2"
+  python3 - "$cargo_file" "$version" <<'PY'
 import pathlib, re, sys
 path = pathlib.Path(sys.argv[1])
 version = sys.argv[2]
@@ -114,8 +121,10 @@ fi
 
 UI_VER="$(read_json_version "$UI_PKG")"
 UI_LOCK_VER="$(read_npm_lock_version "$UI_LOCK")"
-DESKTOP_CARGO_VER="$(read_desktop_cargo_version)"
+DESKTOP_CARGO_VER="$(read_cargo_version "$DESKTOP_CARGO")"
 DESKTOP_TAURI_VER="$(read_json_version "$DESKTOP_TAURI")"
+ACCOUNT_CARGO_VER="$(read_cargo_version "$ACCOUNT_CARGO")"
+BROWSER_CEF_CARGO_VER="$(read_cargo_version "$BROWSER_CEF_CARGO")"
 
 drift=0
 check_one() {
@@ -132,6 +141,8 @@ if [[ "$CHECK" -eq 1 ]]; then
   check_one "crates/dashboard-ui/package-lock.json" "$UI_LOCK_VER"
   check_one "apps/anycode-desktop/Cargo.toml" "$DESKTOP_CARGO_VER"
   check_one "apps/anycode-desktop/tauri.conf.json" "$DESKTOP_TAURI_VER"
+  check_one "crates/account-service/Cargo.toml" "$ACCOUNT_CARGO_VER"
+  check_one "crates/browser-cef/Cargo.toml" "$BROWSER_CEF_CARGO_VER"
   if [[ "$drift" -ne 0 ]]; then
     echo "Run ./scripts/sync-workspace-version.sh to align versions." >&2
     exit 1
@@ -143,5 +154,7 @@ fi
 write_json_version "$UI_PKG" "$VERSION"
 write_npm_lock_version "$UI_LOCK" "$VERSION"
 write_desktop_cargo_version "$VERSION"
+write_package_cargo_version "$ACCOUNT_CARGO" "$VERSION"
+write_package_cargo_version "$BROWSER_CEF_CARGO" "$VERSION"
 write_json_version "$DESKTOP_TAURI" "$VERSION"
-echo "synced workspace version $VERSION to dashboard-ui, package-lock, anycode-desktop Cargo.toml, tauri.conf.json"
+echo "synced workspace version $VERSION to dashboard-ui, package-lock, anycode-desktop, account-service, browser-cef, tauri.conf.json"

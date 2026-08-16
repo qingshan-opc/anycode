@@ -71,8 +71,11 @@ export function HomePage(_props: EmbeddedPageProps = {}) {
       <div className="dw-alert-error">
         <p className="text-sm m-0">{msg.text}</p>
         {msg.showLoopbackHint ? (
-          <p className="text-sm m-0 mt-2">
-            <code className="font-code">http://127.0.0.1:43180</code>
+          <p className="text-sm m-0 mt-2 text-secondary">
+            For shipping builds open the <strong>anyCode.app</strong> Desktop
+            window. Developer-only:{" "}
+            <code className="font-code">anycode-dashboard-serve</code> on{" "}
+            <code className="font-code">127.0.0.1:43180</code>.
           </p>
         ) : null}
       </div>

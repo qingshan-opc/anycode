@@ -49,6 +49,7 @@ export function ConversationWorkspace() {
     prefetchSession,
     startSessionForProject,
     onRenameSession,
+    onArchiveSession,
     onRenameProject,
     onRemoveProject,
     optimisticStreamingSessionId,
@@ -344,6 +345,7 @@ export function ConversationWorkspace() {
                   }
                 }}
                 onRenameSession={onRenameSession}
+                onArchiveSession={onArchiveSession}
                 headerEnd={
                   <ConversationWorkbenchHeaderIcons
                     activeTab={workbenchTab}
@@ -421,6 +423,7 @@ export function ConversationWorkspace() {
                   hideEmptyProjects={listSearch.trim().length > 0}
                   onNewSession={startSessionForProject}
                   onRenameSession={onRenameSession}
+                  onArchiveSession={onArchiveSession}
                   onRenameProject={onRenameProject}
                   onRemoveProject={onRemoveProject}
                   optimisticStreamingSessionId={optimisticStreamingSessionId}

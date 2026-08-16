@@ -45,6 +45,8 @@ struct OpenAiChatRequestBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAiStreamOptions>,
 }
 
@@ -271,6 +273,7 @@ impl LLMClient for OpenAIClient {
             stream: Some(false),
             tools: tools_json,
             tool_choice,
+            parallel_tool_calls: crate::openai_parallel_tool_calls(tools.is_empty(), config),
             stream_options: None,
         };
 
@@ -349,6 +352,7 @@ impl LLMClient for OpenAIClient {
             stream: Some(true),
             tools: tools_json,
             tool_choice,
+            parallel_tool_calls: crate::openai_parallel_tool_calls(tools.is_empty(), config),
             stream_options: Some(OpenAiStreamOptions {
                 include_usage: true,
             }),
@@ -568,5 +572,42 @@ mod tests {
             openai_tool_choice(&messages, false, &config).as_deref(),
             Some("required")
         );
+    }
+
+    #[test]
+    fn request_body_serializes_parallel_tool_calls_when_tools_present() {
+        let cfg = ModelConfig {
+            provider: LLMProvider::OpenAI,
+            model: "gpt-4o".into(),
+            ..Default::default()
+        };
+        let body = OpenAiChatRequestBody {
+            model: "gpt-4o".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            stream: Some(false),
+            tools: Some(vec![serde_json::json!({"type": "function"})]),
+            tool_choice: Some("auto".into()),
+            parallel_tool_calls: crate::openai_parallel_tool_calls(false, &cfg),
+            stream_options: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["parallel_tool_calls"], true);
+
+        let weak = local_config();
+        let body = OpenAiChatRequestBody {
+            model: "qwen3-1b".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            stream: Some(false),
+            tools: Some(vec![serde_json::json!({"type": "function"})]),
+            tool_choice: Some("auto".into()),
+            parallel_tool_calls: crate::openai_parallel_tool_calls(false, &weak),
+            stream_options: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert!(v.get("parallel_tool_calls").is_none());
     }
 }

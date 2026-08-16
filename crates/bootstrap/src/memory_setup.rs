@@ -7,8 +7,9 @@ use anycode_core::{EmbeddingProvider, MemoryPipeline, VectorMemoryBackend};
 #[cfg(feature = "embedding-local")]
 use anycode_memory::FastEmbedEmbeddingProvider;
 use anycode_memory::{
-    FileMemoryStore, HybridMemoryStore, NoopVectorBackend, OpenAiCompatibleEmbeddingProvider,
-    RootReturnMemoryPipeline, SqliteVectorBackend,
+    resolve_lightrag_base_url, FileMemoryStore, HybridMemoryStore, LightRagMemoryStore,
+    NoopVectorBackend, OpenAiCompatibleEmbeddingProvider, RootReturnMemoryPipeline,
+    SqliteVectorBackend,
 };
 use async_trait::async_trait;
 
@@ -126,17 +127,60 @@ fn open_file_memory_store(path: PathBuf) -> anyhow::Result<FileMemoryStore> {
     FileMemoryStore::new(path).map_err(|e| anyhow::anyhow!("file memory store: {e}"))
 }
 
+/// Open LightRAG HTTP store, or fall back to file on sidecar unreachable.
+fn open_lightrag_or_file(
+    memory_path: PathBuf,
+) -> anyhow::Result<(Arc<dyn MemoryStore>, Option<Arc<dyn MemoryPipeline>>)> {
+    let base = resolve_lightrag_base_url();
+    match LightRagMemoryStore::try_open(&base) {
+        Ok(store) => Ok((Arc::new(store), None)),
+        Err(e) => {
+            tracing::warn!(
+                target: "anycode_bootstrap",
+                base_url = %base,
+                error = %e,
+                "memory.backend=lightrag sidecar unreachable; falling back to FileMemoryStore"
+            );
+            let store = open_file_memory_store(memory_path)?;
+            Ok((Arc::new(store), None))
+        }
+    }
+}
+
+/// `plugin:<id>` slot — stub falls back to file until a real plugin registry lands.
+fn open_plugin_memory_or_file(
+    plugin_id: &str,
+    memory_path: PathBuf,
+) -> anyhow::Result<(Arc<dyn MemoryStore>, Option<Arc<dyn MemoryPipeline>>)> {
+    tracing::warn!(
+        target: "anycode_bootstrap",
+        plugin_id,
+        "memory.backend=plugin:{plugin_id} is a stub; falling back to FileMemoryStore"
+    );
+    let store = open_file_memory_store(memory_path)?;
+    Ok((Arc::new(store), None))
+}
+
 pub fn build_memory_layer(
     config: &Config,
     attach: MemoryAttachMode,
 ) -> anyhow::Result<(Arc<dyn MemoryStore>, Option<Arc<dyn MemoryPipeline>>)> {
     let attach = resolve_memory_attach(attach);
-    match effective_memory_backend(config, attach) {
+    let backend = effective_memory_backend(config, attach);
+    if let Some(plugin_id) = backend.strip_prefix("plugin:") {
+        let id = plugin_id.trim();
+        if id.is_empty() {
+            anyhow::bail!("unsupported memory backend: plugin: (missing id)");
+        }
+        return open_plugin_memory_or_file(id, config.memory.path.clone());
+    }
+    match backend {
         "noop" => Ok((Arc::new(NoopMemoryStore), None)),
         "file" => {
             let store = open_file_memory_store(config.memory.path.clone())?;
             Ok((Arc::new(store), None))
         }
+        "lightrag" => open_lightrag_or_file(config.memory.path.clone()),
         "hybrid" => {
             let hot_db = sibling_hot_db_path(&config.memory.path);
             let store = HybridMemoryStore::new(hot_db, config.memory.path.clone())

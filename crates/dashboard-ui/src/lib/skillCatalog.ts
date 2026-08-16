@@ -59,6 +59,7 @@ export const SKILL_NAMES_ZH: Record<string, string> = {
   "anycode-pdf": "PDF 撰写",
   "anycode-docx": "Word 撰写",
   "anycode-xlsx": "Excel 表格",
+  "anycode-video": "短视频 / HTML Video",
   docx: "Word 文档",
   pdf: "PDF 文档",
   pptx: "PPT 演示",

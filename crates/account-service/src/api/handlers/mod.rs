@@ -940,8 +940,8 @@ pub async fn gateway_authorize(
         return json_error(StatusCode::FORBIDDEN, "hosted models not enabled for plan")
             .into_response();
     }
-    // 额度制：余额（分）必须为正；按 token 实扣，无过期时间。
-    if ent.credit_balance_fen <= 0 {
+    // Credit is the paid path. Free/trial orgs still spend leftover token_limit.
+    if ent.credit_balance_fen <= 0 && ent.tokens_used >= ent.token_limit {
         return json_error(
             StatusCode::PAYMENT_REQUIRED,
             "credit balance exhausted — top up to continue",

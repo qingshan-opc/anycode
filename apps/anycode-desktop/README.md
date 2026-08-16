@@ -28,19 +28,13 @@ cd apps/anycode-desktop
 cargo tauri dev
 ```
 
-The dev shell starts the in-process Workbench API at `127.0.0.1:43180` (API only). The UI loads from the app bundle, not from that URL in a browser.
+The dev shell starts the in-process Workbench API on an **ephemeral** loopback port (`port: 0` at bind time — see stderr `workbench API listening on http://127.0.0.1:<port>/`). The UI loads from bundled assets inside the Tauri webview, not from that URL in Chrome/Safari.
 
 ## Embedded dashboard
 
-On launch, the app starts **anycode-dashboard** in-process at `127.0.0.1:43180` for `/api/*`, SSE, and WebSockets (see `src/dashboard_backend.rs`). The Workbench UI is loaded from bundled `dashboard-ui` assets inside the Tauri webview — **do not** open `http://127.0.0.1:43180/` in Chrome/Safari (that URL is API-only). No `anycode dashboard` subprocess.
+On launch, the app starts **anycode-dashboard** in-process on loopback for `/api/*`, SSE, and WebSockets (see `src/dashboard_backend.rs`). The Workbench UI is loaded from bundled `dashboard-ui` assets inside the Tauri webview — **Chrome/Safari is not the product**; do not treat `http://127.0.0.1:43180/` as the install path (that fixed port is for `anycode-dashboard-serve` dev/E2E only). No `anycode dashboard` subprocess.
 
-Optional WeChat bridge on the same machine uses **`anycode-daemon wechat-bridge`** (not bundled in the app by default):
-
-```bash
-ANYCODE_DESKTOP_WECHAT=1 cargo tauri dev
-```
-
-Headless channels/cron on servers: install `anycode-daemon` separately.
+Headless cron on servers: install `anycode-daemon` (scheduler only) separately. IM bridges are not a product surface.
 
 ## Release build (local, signed DMG)
 

@@ -4,6 +4,7 @@ pub mod approval_ipc;
 pub mod cancel_ipc;
 pub mod host_guard;
 pub mod question_ipc;
+pub mod skill_app_ipc;
 
 #[cfg(test)]
 mod test_util;

@@ -37,9 +37,11 @@ curl -fsSL --proto '=https' --tlsv1.2 \
 
 ## After install
 
-1. Open anyCode or visit `http://127.0.0.1:43180`
+1. Launch **anyCode** from Applications (or Launchpad)
 2. Complete the **setup wizard** (`/setup`) if prompted
 3. Send a test chat message
+
+> **Developers:** `http://127.0.0.1:43180` is for `anycode-dashboard-serve` browser E2E only. The shipping product is **anyCode.app**; the embedded API uses an ephemeral loopback port, not a fixed 43180.
 
 ## Build from source (developers)
 

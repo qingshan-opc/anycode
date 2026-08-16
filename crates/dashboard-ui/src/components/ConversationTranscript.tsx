@@ -17,7 +17,7 @@ import {
 import { TranscriptMarkdown } from "@/components/TranscriptMarkdown";
 import { ToolTraceCluster } from "@/components/chat/ToolTraceCluster";
 import { TaskReceiptCard } from "@/components/chat/TaskReceiptCard";
-import { isStatusMessage } from "@/lib/agentActivitySummary";
+import { briefThinkingSummary, isStatusMessage } from "@/lib/agentActivitySummary";
 import { isTaskSummaryReceipt } from "@/lib/taskSummaryReceipt";
 import {
   CollapsiblePanel,
@@ -33,8 +33,10 @@ import {
   latestWorkSummary,
 } from "@/lib/workLogGrouping";
 import {
+  isInternalProgressDiagnostic,
   isProgressBlock,
   isStaticProgressStatusLine,
+  isWaterfallProseBlock,
   progressDiscovery,
   progressNext,
   progressSummary,
@@ -63,6 +65,7 @@ import {
 import { humanizeTranscriptError } from "@/lib/transcriptError";
 import { useSmoothText } from "@/hooks/useSmoothText";
 import { resolveCanonicalTranscriptBlocks, hasTurnStreamActivity } from "@/lib/liveTranscript";
+import { blocksToTurns, type ConversationTurn } from "@/lib/conversationTranscriptGrouping";
 import { findActiveToolInExecutionLog, findActiveToolInReplies } from "@/lib/transcriptGrouping";
 import { AskUserQuestionInbox } from "@/components/AskUserQuestionInbox";
 import { TurnRecapHeader } from "@/components/TurnRecapHeader";
@@ -105,12 +108,6 @@ interface Props {
   selectedToolId?: string | null;
   onSelectTool?: (tool: TranscriptBlock) => void;
 }
-
-type ConversationTurn = {
-  id: string;
-  user: TranscriptBlock;
-  replies: TranscriptBlock[];
-};
 
 const VIRTUAL_TURN_THRESHOLD = 30;
 const COMPACT_TURN_ESTIMATE_PX = 220;
@@ -777,13 +774,20 @@ function ConversationTurnView({
               block.meta?.source === "thinking_delta" ||
               block.meta?.source === "llm_start"))
         ) {
-          const lineLive = Boolean(isLast && isRunning && block.meta?.live);
+          // Cursor waterfall: prior thinking/narration stays fully visible when
+          // later tool pills arrive — never collapse into a one-line chevron.
+          const waterfall = isWaterfallProseBlock(block);
+          const lineLive = Boolean(
+            isLast && isRunning && block.meta?.live && (waterfall ? segmentExpanded : true),
+          );
           return (
             <MessageRow key={block.id} align="left">
               <TimelineProgressLine
                 block={block}
                 live={lineLive}
-                expanded={segmentExpanded}
+                expanded={waterfall || segmentExpanded}
+                forceStatic={waterfall}
+                waterfall={waterfall}
                 sessionId={sessionId}
               />
             </MessageRow>
@@ -820,6 +824,7 @@ function ConversationTurnView({
                   live={lineLive}
                   expanded
                   forceStatic
+                  waterfall={isWaterfallProseBlock(block) || Boolean(block.meta?.narration)}
                   sessionId={sessionId}
                 />
               </MessageRow>
@@ -1031,6 +1036,7 @@ function TimelineProgressLine({
   live,
   expanded: expandedProp,
   forceStatic = false,
+  waterfall = false,
   sessionId = null,
 }: {
   block: TranscriptBlock;
@@ -1039,6 +1045,8 @@ function TimelineProgressLine({
   expanded: boolean;
   /** Always inline text — no fold chevron (mid-turn / live status). */
   forceStatic?: boolean;
+  /** Cursor-style retained prose between tool pills. */
+  waterfall?: boolean;
   sessionId?: string | null;
 }) {
   const t = useT();
@@ -1048,23 +1056,48 @@ function TimelineProgressLine({
   const summary = progressSummary(block, sanitizeAssistantDisplay(block.body, locale));
   const next = progressNext(block);
   const finding = progressDiscovery(block);
-  const body =
-    !summary && !next && !finding
-      ? sanitizeAssistantDisplay(block.body, locale).trim()
-      : "";
-  if (!summary && !next && !finding && !body) return null;
+  const rawBody = sanitizeAssistantDisplay(block.body, locale).trim();
+  const diagnosticOnly =
+    isInternalProgressDiagnostic(rawBody) && !summary && !next && !finding;
+  const body = !summary && !next && !finding ? rawBody : "";
+  const empty = !diagnosticOnly && !summary && !next && !finding && !body;
 
   const preview = summary || body || finding || next || "";
   const mdBody = summary || body;
+  const isThinking = block.meta?.source === "thinking_delta";
+  // Waterfall / thinking: short blurb only — no expand chevron, keep large type.
+  const useBrief = waterfall || isThinking;
+  const briefSource = (mdBody || preview).replace(/\s+/g, " ").trim();
+  const briefText = useBrief ? briefThinkingSummary(briefSource, isThinking ? 88 : 110) : "";
+  const lineClass = [
+    "agent-work-line",
+    forceStatic || isStaticProgressStatusLine(block) ? "agent-work-line--static" : "",
+    waterfall || isThinking ? "agent-work-line--waterfall" : "",
+    useBrief ? "agent-work-line--brief" : "",
+    live ? "agent-work-line--live" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   useEffect(() => {
     // New accordion target clears manual pin.
     setUserPinned(null);
-  }, [expandedProp]);
+  }, [expandedProp, block.id]);
+
+  if (diagnosticOnly || empty) {
+    return null;
+  }
 
   if (forceStatic || isStaticProgressStatusLine(block)) {
+    if (useBrief && briefText) {
+      return (
+        <div className={lineClass}>
+          <p className="agent-work-line__text m-0">{briefText}</p>
+        </div>
+      );
+    }
     return (
-      <div className={`agent-work-line agent-work-line--static ${live ? "agent-work-line--live" : ""}`}>
+      <div className={lineClass}>
         {mdBody ? (
           <TranscriptMarkdown text={mdBody} live={live} className="agent-work-line__text" sessionId={sessionId} />
         ) : (
@@ -1072,13 +1105,13 @@ function TimelineProgressLine({
         )}
         {finding ? (
           <p className="m-0 mt-1 agent-work-line__meta">
-            <span className="font-medium">{t("conversations.progressDiscoveryPrefix")}</span>
+            <span>{t("conversations.progressDiscoveryPrefix")}</span>
             {finding}
           </p>
         ) : null}
         {next ? (
           <p className="m-0 mt-1 agent-work-line__meta">
-            <span className="font-medium">{t("conversations.progressNextPrefix")}</span>
+            <span>{t("conversations.progressNextPrefix")}</span>
             {next}
           </p>
         ) : null}
@@ -1102,7 +1135,7 @@ function TimelineProgressLine({
   }
 
   return (
-    <div className={`agent-work-line ${live ? "agent-work-line--live" : ""}`}>
+    <div className={lineClass}>
       {!expandedProp || userPinned ? (
         <button
           type="button"
@@ -1124,13 +1157,13 @@ function TimelineProgressLine({
       ) : null}
       {finding ? (
         <p className="m-0 mt-1 agent-work-line__meta">
-          <span className="font-medium">{t("conversations.progressDiscoveryPrefix")}</span>
+          <span>{t("conversations.progressDiscoveryPrefix")}</span>
           {finding}
         </p>
       ) : null}
       {next ? (
         <p className="m-0 mt-1 agent-work-line__meta">
-          <span className="font-medium">{t("conversations.progressNextPrefix")}</span>
+          <span>{t("conversations.progressNextPrefix")}</span>
           {next}
         </p>
       ) : null}
@@ -1525,37 +1558,6 @@ function ExecutionLogLink({ sessionId }: { sessionId: string }) {
       </Link>
     </div>
   );
-}
-
-function blocksToTurns(blocks: TranscriptBlock[]): ConversationTurn[] {
-  const turns: ConversationTurn[] = [];
-  let current: ConversationTurn | null = null;
-
-  for (const block of blocks) {
-    if (block.block_type === "user_message") {
-      if (current) turns.push(current);
-      current = { id: block.id, user: block, replies: [] };
-      continue;
-    }
-    if (!current) continue;
-    if (isReplyBlock(block.block_type)) {
-      current.replies.push(block);
-    }
-  }
-  if (current) turns.push(current);
-  return turns;
-}
-
-function isReplyBlock(blockType: string): boolean {
-  return [
-    "assistant_message",
-    "session_error",
-    "tool_call",
-    "tool_result",
-    "system_notice",
-    "deliverable",
-    "progress_update",
-  ].includes(blockType);
 }
 
 function deliverablePropsFromBlock(block: TranscriptBlock): DeliverableCardProps | null {

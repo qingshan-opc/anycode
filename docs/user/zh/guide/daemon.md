@@ -44,7 +44,7 @@ anycode-daemon scheduler
 | Linux 服务器 / NAS | **`anycode-daemon`** 跑调度 |
 | 仅定时任务 | `anycode-daemon scheduler`（或保持桌面应用运行） |
 
-旧版 HTTP `anycode daemon`（POST `/v1/tasks`）已移除 — 见 [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/003-http-daemon-deprecated.md)。
+旧版 HTTP `anycode daemon`（POST `/v1/tasks`）已移除 — 见 [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/018-http-daemon-deprecated.md)。
 
 ## 相关
 

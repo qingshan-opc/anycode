@@ -194,6 +194,7 @@ export function ConversationThread({
   selectedToolId,
   onSelectTool,
   onRenameSession,
+  onArchiveSession,
 }: {
   session: SessionWithProject | null;
   onFollowUpStarted?: (sessionId: string) => void;
@@ -216,6 +217,7 @@ export function ConversationThread({
   selectedToolId?: string | null;
   onSelectTool?: (tool: import("@/api/types").TranscriptBlock) => void;
   onRenameSession?: (sessionId: string, title: string) => void | Promise<void>;
+  onArchiveSession?: (sessionId: string) => void;
 }) {
   const t = useT();
   const locale = useLocale();
@@ -328,7 +330,11 @@ export function ConversationThread({
               </button>
             </div>
             <div className="conv-thread-header__center">
-              <SessionTitleMenu session={session} onRename={onRenameSession} />
+              <SessionTitleMenu
+                session={session}
+                onRename={onRenameSession}
+                onArchive={onArchiveSession}
+              />
             </div>
             <div className="conv-thread-header__side conv-thread-header__side--end">
               {headerEnd}

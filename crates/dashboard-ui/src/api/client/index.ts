@@ -10,6 +10,7 @@ import { setupClient } from "./setup";
 import { workbenchClient } from "./workbench";
 import { lanClient } from "./lan";
 import { cloudA2aClient } from "./cloudA2a";
+import { skillAppsClient } from "./skillApps";
 
 export type {
   ArtifactListOpts,
@@ -33,4 +34,5 @@ export const api = {
   ...workbenchClient,
   ...lanClient,
   ...cloudA2aClient,
+  ...skillAppsClient,
 };

@@ -28,6 +28,32 @@ export async function openLocalPath(path: string): Promise<void> {
   throw new Error("not_desktop");
 }
 
+export type OpenWithApp = {
+  name: string;
+  id: string;
+  is_default: boolean;
+};
+
+/** List apps that can open this path (desktop only). */
+export async function listOpenWithApps(path: string): Promise<OpenWithApp[]> {
+  const target = path.trim();
+  if (!target) return [];
+  if (!isTauriDesktop()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<OpenWithApp[]>("list_open_with_apps", { path: target });
+}
+
+/** Open path with a specific app id from {@link listOpenWithApps}. */
+export async function openPathWithApp(path: string, appId: string): Promise<void> {
+  const target = path.trim();
+  if (!target) return;
+  if (!isTauriDesktop()) {
+    throw new Error("not_desktop");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_path_with_app", { path: target, appId });
+}
+
 /** Open a URL in the system browser (Tauri) or a new tab (web). */
 export async function openExternal(url: string): Promise<void> {
   const target = url.trim();

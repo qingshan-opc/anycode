@@ -13,7 +13,7 @@ anyCode 0.3 initially shipped a **local Workbench `/account` shell** plus a head
 3. **Hybrid models**: Free tier remains BYOK; paid tiers unlock **anyCode-hosted inference** via a model gateway with quota metering.
 4. **Real subscription billing** (Stripe; WeChat Pay later).
 
-[ADR 003](003-http-daemon-deprecated.md) deprecates an in-CLI HTTP task daemon. A **separate cloud model-gateway service** is not that daemon: it proxies LLM inference only; Agent tool execution stays local.
+[ADR 003](018-http-daemon-deprecated.md) deprecates an in-CLI HTTP task daemon. A **separate cloud model-gateway service** is not that daemon: it proxies LLM inference only; Agent tool execution stays local.
 
 ## Decision
 
@@ -41,4 +41,4 @@ anyCode 0.3 initially shipped a **local Workbench `/account` shell** plus a head
 
 - [digital-workbench-api.md](../workbench/digital-workbench-api.md)
 - [roadmap.md](../roadmap.md) §3.5 (updated)
-- [003-http-daemon-deprecated.md](003-http-daemon-deprecated.md) — still no in-CLI task HTTP API
+- [018-http-daemon-deprecated.md](018-http-daemon-deprecated.md) — still no in-CLI task HTTP API

@@ -3,8 +3,12 @@ import {
   type BrowserAutoOpenCtx,
 } from "../panels/BrowserPanel.autoOpen";
 import { usePlanAutoOpen, type PlanAutoOpenCtx } from "../panels/PlanTreePanel.autoOpen";
+import {
+  useSkillAppAutoOpen,
+  type SkillAppAutoOpenCtx,
+} from "../panels/SkillAppPanel.autoOpen";
 
-export type WorkbenchAutoOpenCtx = BrowserAutoOpenCtx & PlanAutoOpenCtx;
+export type WorkbenchAutoOpenCtx = BrowserAutoOpenCtx & PlanAutoOpenCtx & SkillAppAutoOpenCtx;
 
 /**
  * Composes every panel's auto-open hook. Hooks are called in a fixed order by
@@ -14,4 +18,5 @@ export type WorkbenchAutoOpenCtx = BrowserAutoOpenCtx & PlanAutoOpenCtx;
 export function useWorkbenchAutoOpen(ctx: WorkbenchAutoOpenCtx): void {
   useBrowserAutoOpen(ctx);
   usePlanAutoOpen(ctx);
+  useSkillAppAutoOpen(ctx);
 }

@@ -66,9 +66,11 @@ Switch **中文 / English** and light/dark theme in the top bar. **Docs** and **
 
 | Symptom | Try |
 |---------|-----|
-| Page won't load | Ensure anyCode is running; check port 43180 |
+| Page won't load | Ensure **anyCode.app** is running (or `anycode-daemon` on headless servers) |
 | Empty lists | Complete `/setup`, then add a project or session |
 | Jobs never run | Keep app/daemon running; check Automations run log |
+
+> **Developers:** fixed port `43180` applies to `anycode-dashboard-serve` only, not the desktop app bundle.
 
 More: [Common issues](./troubleshooting).
 

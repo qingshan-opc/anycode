@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { PolicySummaryPanel } from "@/components/PolicySummary";
+import { SecuritySandboxPanel } from "@/components/settings/SecuritySandboxPanel";
 import { ToolGovernancePanel } from "@/components/settings/ToolGovernancePanel";
 import { TokenPanel } from "@/components/TokenPanel";
 
@@ -14,6 +15,7 @@ export function SettingsSecuritySection() {
   return (
     <>
       <PolicySummaryPanel policy={policies.data?.policy} />
+      <SecuritySandboxPanel />
       <ToolGovernancePanel governance={toolGovernance.data} />
       <TokenPanel />
     </>

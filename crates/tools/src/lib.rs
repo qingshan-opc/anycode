@@ -48,7 +48,7 @@ mod mcp_oauth_login;
 #[cfg(feature = "tools-mcp")]
 mod mcp_oauth_store;
 #[cfg(feature = "tools-mcp")]
-mod mcp_proxied_tool;
+pub mod mcp_proxied_tool;
 #[cfg(feature = "tools-mcp")]
 mod mcp_read_timeout;
 #[cfg(feature = "tools-mcp")]
@@ -67,6 +67,8 @@ mod plan_write;
 mod platform_tools;
 pub mod session_store;
 mod shell_exec;
+mod skill_app_host;
+mod skill_app_tools;
 mod todo_write;
 mod tool_input_coerce;
 mod web_fetch;
@@ -132,13 +134,19 @@ pub use services::{
 pub use session_store::{
     resolve_session_key, SessionPlanStore, SessionTodoStore, EPHEMERAL_SESSION_KEY,
 };
+pub use skill_app_host::{
+    SkillAppHost, SkillAppHostArc, SkillAppHostError, SkillAppPresentRequest,
+    SkillAppPresentResponse,
+};
 pub use skills::{
     default_skill_roots, ensure_office_starter_skills, install_skill, install_starter_skills,
-    normalize_skill_category, parse_skill_manifest_file, parse_skill_manifest_text,
-    resolve_capabilities, resolve_skills_starter_dir, truncate_skill_output, vet_skill_dir,
-    SelectedSkill, SkillCatalog, SkillInstallResult, SkillManifest, SkillMatchStatus, SkillMeta,
-    SkillResolution, SkillResolutionContext, SkillVetReport, SkillsGovernance,
-    MAX_SKILL_OUTPUT_BYTES, OFFICE_STARTER_SKILL_IDS,
+    load_skill_surface, normalize_skill_category, parse_skill_manifest_file,
+    parse_skill_manifest_text, parse_surface_yaml, resolve_capabilities,
+    resolve_skills_starter_dir, skill_ui_dir, truncate_skill_output, vet_skill_dir, SelectedSkill,
+    SkillAppLifecycle, SkillAppSlot, SkillCatalog, SkillInstallResult, SkillManifest,
+    SkillMatchStatus, SkillMeta, SkillResolution, SkillResolutionContext, SkillSurface,
+    SkillSurfacePermissions, SkillVetReport, SkillsGovernance, VisualBrief, MAX_SKILL_OUTPUT_BYTES,
+    OFFICE_STARTER_SKILL_IDS,
 };
 pub use tool_input_coerce::coerce_tool_input;
 pub use verification::{discover_candidates, ValidationContext, ValidatorRegistry};

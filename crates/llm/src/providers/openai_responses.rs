@@ -125,6 +125,9 @@ fn build_bodies(
         base["tools"] = json!(responses_tools_from_schemas(tools));
         base["tool_choice"] = json!("auto");
     }
+    if let Some(flag) = crate::openai_parallel_tool_calls(tools.is_empty(), config) {
+        base["parallel_tool_calls"] = json!(flag);
+    }
     apply_reasoning_fields(provider_label, config, &mut base);
 
     let mut full = base.clone();
@@ -592,5 +595,51 @@ mod tests {
         let c = OpenAiResponsesClient::new("k".into(), None)
             .with_base_url("https://example.com/v1/responses".into());
         assert_eq!(c.base_url, "https://example.com/v1/responses");
+    }
+
+    fn user_hi() -> Message {
+        Message {
+            id: Uuid::new_v4(),
+            role: MessageRole::User,
+            content: MessageContent::Text("hi".into()),
+            timestamp: chrono::Utc::now(),
+            metadata: Default::default(),
+        }
+    }
+
+    fn read_tool() -> ToolSchema {
+        ToolSchema {
+            name: "FileRead".into(),
+            description: "read".into(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    #[test]
+    fn responses_body_sets_parallel_tool_calls_when_tools_present() {
+        let client = OpenAiResponsesClient::new("k".into(), Some("deepseek-v4-flash".into()));
+        let cfg = ModelConfig {
+            provider: LLMProvider::Custom("deepseek".into()),
+            model: "deepseek-v4-flash".into(),
+            ..Default::default()
+        };
+        let messages = vec![user_hi()];
+        let (full, chained) =
+            build_bodies(&client, &messages, &[read_tool()], &cfg, "deepseek", false).unwrap();
+        assert_eq!(full["parallel_tool_calls"], true);
+        assert!(chained.is_none());
+
+        let (empty, _) = build_bodies(&client, &messages, &[], &cfg, "deepseek", false).unwrap();
+        assert!(empty.get("parallel_tool_calls").is_none());
+
+        let weak = ModelConfig {
+            provider: LLMProvider::OpenAI,
+            model: "qwen3-1b".into(),
+            base_url: Some("http://127.0.0.1:47100/v1".into()),
+            ..Default::default()
+        };
+        let (weak_body, _) =
+            build_bodies(&client, &messages, &[read_tool()], &weak, "openai", false).unwrap();
+        assert!(weak_body.get("parallel_tool_calls").is_none());
     }
 }

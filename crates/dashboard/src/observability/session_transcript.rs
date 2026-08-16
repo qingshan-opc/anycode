@@ -1,4 +1,8 @@
 //! Normalized session transcript blocks from index events + execution trace.
+//!
+//! **Canonical path:** when `chat_turn_events` has rows, [`try_canonical_transcript`] builds blocks
+//! from persisted chat events (preferred for Workbench UI). The index-event + execution-log tail
+//! assembly below remains as fallback for legacy sessions — do not add new features there.
 
 use super::execution_log::{output_log_path, read_execution_log};
 use super::session_trace::session_trace;
@@ -51,6 +55,7 @@ pub async fn session_transcript(
     let transcript = if should_use_index_only(&session, &index_events) {
         assemble_transcript(&session, session_id, index_events, Vec::new())?
     } else {
+        // DEPRECATED fallback: legacy sessions without `chat_turn_events` — index events + log tail.
         let task_ids = collect_task_ids(&session, &index_events);
         let task_anchors = task_time_anchors(&session, &index_events, &task_ids);
         let session_for_logs = session.clone();

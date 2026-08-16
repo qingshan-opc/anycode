@@ -1,0 +1,9 @@
+{
+  "name": "anycode-video-render",
+  "private": true,
+  "type": "module",
+  "description": "Local deps for anycode-video MP4 export (Playwright Chromium recorder)",
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

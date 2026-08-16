@@ -24,7 +24,9 @@ pub use checkpoint::append_compaction_checkpoint;
 pub use hooks::{
     CompactionHooks, CompactionPostContext, CompactionPreContext, DefaultCompactionHooks,
 };
-pub use microcompact::{apply_microcompact, default_keep_recent};
+pub use microcompact::{
+    apply_microcompact, apply_microcompact_keep_latest_turn, default_keep_recent,
+};
 pub use policy::CompactPolicy;
 pub use post_compact::{
     inject_file_read_snippets, inject_file_snippets_from_state, run_post_compact_cleanup,

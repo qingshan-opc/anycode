@@ -32,6 +32,7 @@ mod plan_tree_context;
 mod progress_update;
 mod provider_errors;
 mod receipt;
+mod sandbox_escape_nudge;
 mod session;
 mod session_activity;
 mod session_notify;
@@ -42,6 +43,7 @@ mod tool_gating;
 mod tool_invocation;
 mod tool_output_sanitize;
 mod tool_result_injection;
+mod tool_result_render;
 mod tool_surface;
 
 mod runtime_options;

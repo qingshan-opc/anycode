@@ -21,7 +21,7 @@ This page merges the former Chinese-only **MVP**, **tools-parity**, **roadmap-st
 - **Approval / sandbox** (`SecurityLayer` and config).  
 - At least one practical **tool-calling** path for **z.ai (OpenAI-compatible)** and **Anthropic**.  
 - **Execution logs** under **`~/.anycode/tasks/<id>/output.log`** and **summary** when not TUI-only output.  
-- **CLI**: **`run`**, **`repl`**, **`tui`**, channel bridges, **`scheduler`**, etc. (**HTTP `daemon`** was removed — see [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/003-http-daemon-deprecated.md) and [HTTP daemon (removed)](./cli-daemon).)
+- **CLI**: **`run`**, **`repl`**, **`tui`**, channel bridges, **`scheduler`**, etc. (**HTTP `daemon`** was removed — see [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/018-http-daemon-deprecated.md) and [HTTP daemon (removed)](./cli-daemon).)
 
 **Out of MVP** (separate milestones; does not block an MVP release)
 

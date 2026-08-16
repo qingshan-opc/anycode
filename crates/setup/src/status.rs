@@ -50,6 +50,7 @@ fn workspace_ready() -> bool {
     workspace_root().join("projects").is_dir()
 }
 
+#[allow(dead_code)] // retained for optional wizard steps / Settings reuse
 fn memory_configured(cfg: &Value) -> bool {
     cfg.get("memory")
         .and_then(|m| m.get("backend"))
@@ -57,6 +58,7 @@ fn memory_configured(cfg: &Value) -> bool {
         .is_some_and(|s| !s.trim().is_empty())
 }
 
+#[allow(dead_code)]
 fn starter_skills_installed() -> bool {
     dirs::home_dir()
         .map(|h| h.join(".anycode/skills"))
@@ -72,44 +74,23 @@ pub fn build_setup_status(
     config: Option<&Value>,
     config_path: &Path,
     setup_completed_at: Option<&str>,
-    projects_count: i64,
+    _projects_count: i64,
 ) -> SetupStatus {
     let cfg = config.cloned().unwrap_or(Value::Object(Default::default()));
     let llm_ok = has_usable_model_config(&cfg);
     let ws_ok = workspace_ready();
-    let mem_ok = memory_configured(&cfg);
-    let skills_ok = starter_skills_installed();
-    let projects_ok = projects_count > 0;
 
+    // Wizard UI is welcome → model → done. Keep API status aligned to that
+    // surface; Memory / Skills / Projects remain Settings concerns.
     let steps = vec![
         SetupStepStatus {
             id: SetupStepId::Workspace,
             complete: ws_ok,
-            optional: false,
+            optional: true,
         },
         SetupStepStatus {
             id: SetupStepId::Llm,
             complete: llm_ok,
-            optional: false,
-        },
-        SetupStepStatus {
-            id: SetupStepId::LlmTest,
-            complete: llm_ok,
-            optional: false,
-        },
-        SetupStepStatus {
-            id: SetupStepId::Memory,
-            complete: mem_ok,
-            optional: false,
-        },
-        SetupStepStatus {
-            id: SetupStepId::Skills,
-            complete: skills_ok,
-            optional: true,
-        },
-        SetupStepStatus {
-            id: SetupStepId::Projects,
-            complete: projects_ok,
             optional: false,
         },
         SetupStepStatus {

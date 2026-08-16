@@ -29,13 +29,27 @@ pub async fn get_models_registry() -> impl IntoResponse {
         }
     };
     let view = anycode_llm::RegistryView::from_config(&cfg);
+    let cloud_linked = anycode_llm::read_cloud_access_token()
+        .filter(|s| !s.trim().is_empty())
+        .is_some();
+    let mut filtered_ids = Vec::new();
     let items: Vec<_> = view
         .items
         .into_iter()
         .filter(|item| {
             let provider = item.get("provider").and_then(|v| v.as_str()).unwrap_or("");
             let model = item.get("model").and_then(|v| v.as_str()).unwrap_or("");
-            !is_mock_llm_profile(provider, model)
+            if is_mock_llm_profile(provider, model) {
+                return false;
+            }
+            // Hide hosted cloud models until the device is linked (read-time only).
+            if !cloud_linked && is_cloud_registry_item(item) {
+                if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                    filtered_ids.push(id.to_string());
+                }
+                return false;
+            }
+            true
         })
         .map(|mut item| {
             // Decorate with lifecycle tier so pickers can hide outdated models
@@ -61,9 +75,22 @@ pub async fn get_models_registry() -> impl IntoResponse {
             item
         })
         .collect();
+
+    let mut active = view.active;
+    for id in &filtered_ids {
+        let keys: Vec<String> = active
+            .iter()
+            .filter(|(_, mid)| *mid == id)
+            .map(|(cap, _)| cap.clone())
+            .collect();
+        for cap in keys {
+            active.remove(&cap);
+        }
+    }
+
     Json(json!({
         "config_present": view.config_present,
-        "active": view.active,
+        "active": active,
         "items": items,
         "routing": cfg.get("routing").cloned().unwrap_or(json!({})),
         "model_fallback": view.model_fallback,
@@ -73,6 +100,15 @@ pub async fn get_models_registry() -> impl IntoResponse {
         }
     }))
     .into_response()
+}
+
+fn is_cloud_registry_item(item: &serde_json::Value) -> bool {
+    let source = item.get("source").and_then(|v| v.as_str()).unwrap_or("");
+    if source.eq_ignore_ascii_case("cloud") {
+        return true;
+    }
+    let provider = item.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+    anycode_llm::normalize_provider_id(provider) == "anycode_cloud"
 }
 
 #[derive(Deserialize)]

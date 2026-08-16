@@ -1,33 +1,25 @@
 # 讲解图信息密度（anycode-ppt）
 
-**页数不限**（≥2 页即可）。按叙事选模板，同一模板可多次使用。
+**页数不限**（≥2）。按题目推断大纲，**禁止**为凑 12 个旧模板硬凑页数。
 
-每页 **content** 类型 slide 须至少有 **一类主视觉** 或 **`<img>` 插图**，禁止「只有标题」空页。
+每页 **content** 须至少有 **一类主视觉**；禁止「只有标题」空页。
 
-## 主视觉类名（validate 会检查）
+## 主视觉（validate 认以下任一）
 
-| 类名 | 用途 |
+| 形态 | 说明 |
 |------|------|
-| `.ladder` | 流程/阶段梯子 |
-| `.layer-stack` / `.layer-stack-4` | 分层架构 |
-| `.agent-cycle` | 五步环状循环 |
-| `.trio` | 三列卡片 |
-| `.metrics` | KPI 数字块 |
-| `.timeline` | 横向路线图 |
-| `.checklist` | 行动清单 |
-| `.quote` | 金句/结论 |
-| `.duo` | 双卡对比 |
-| `.diagram-box` | SVG/图示框 |
-| `<img src="...">` | 插图/截图 |
+| `<svg` | 原创图示、星空、架构、动效 |
+| `<canvas` | 粒子 / 轨道 / 银河等 |
+| `echarts` / `#chart` / `class="chart"` | 本地 ECharts |
+| `<img` | 插图 / 截图 |
+| 旧组件 class | `.ladder` `.layer-stack` `.agent-cycle` `.duo` `.trio` `.metrics` `.timeline` `.checklist` `.quote` `.diagram-box`（可选参考） |
 
-## 页型选用原则
+## 页型
 
-- **cover / closing**：可选；长 deck 可多个 section 分段
-- **section**：议程 ≥2 项即可
-- **content**：按 `components.md` 选模板
-- 有现成架构图/产品截图 → `diagram-image.html`
+- cover / section / closing：**可选**，不必每份 deck 都有齐全一套
+- content：按叙事需要；鼓励原创排版，不必套模板 class
 
 ## 验收
 
-- 每 content 页：主视觉类 **或** `<img>` + 具体名词
+- 每 content 页有主视觉
 - `run slides/` → validate 全绿 + 生成 `index.html`

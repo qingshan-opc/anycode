@@ -2218,6 +2218,11 @@
     @apply fixed z-[300] min-w-[13rem] rounded-2xl border border-outline-variant bg-surface-container-lowest shadow-xl py-1.5;
   }
 
+  html.dw-tauri .dw-project-menu,
+  html.dw-tauri .dw-project-menu button {
+    -webkit-app-region: no-drag;
+  }
+
   .dw-project-menu__item {
     @apply w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-on-surface border-0 bg-transparent cursor-pointer text-left hover:bg-surface-container-low;
   }
@@ -3222,6 +3227,20 @@ html[data-skin="mono"] .accent-text {
   background: var(--color-surface-container-low);
 }
 
+.dw-file-ctx-submenu__list {
+  margin: 0.15rem 0 0.25rem 0.5rem;
+  padding-left: 0.35rem;
+  border-left: 1px solid var(--border, var(--color-outline-variant));
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.dw-file-ctx-submenu__hint {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.75rem;
+  color: var(--color-secondary, var(--color-on-surface-variant));
+}
+
 .deliverable-compact-card {
   display: flex;
   align-items: center;
@@ -3536,6 +3555,93 @@ html[data-skin="mono"] .accent-text {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
+.html-immersive {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #111213;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.html-immersive__stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+.html-immersive__scaler {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center center;
+  background: #111;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  will-change: transform;
+}
+
+.html-immersive__iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #111;
+  display: block;
+}
+
+.html-immersive__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  font-size: 12px;
+}
+
+.html-immersive__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.html-immersive__btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.html-immersive__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.html-immersive__count {
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.html-immersive__spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.html-immersive__bar .dw-btn-ghost,
+.html-immersive__bar .dw-btn-secondary {
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.html-immersive__bar a {
+  color: inherit;
+}
+
 .deliverable-preview-dialog {
   background: #ffffff;
 }
@@ -3592,9 +3698,9 @@ html:not(.dark) .dw-hero-composer__toolbar {
 .tool-strip-step-thinking-preview {
   margin: 0;
   padding: 0 0.75rem 0.5rem 2.25rem;
-  font-size: 0.75rem;
-  color: var(--secondary, var(--color-secondary));
-  line-height: 1.4;
+  font-size: 0.875rem;
+  color: color-mix(in srgb, var(--on-surface, var(--color-on-surface)) 78%, var(--secondary, var(--color-secondary)));
+  line-height: 1.55;
 }
 
 .tool-strip-step-thinking-text {
@@ -3602,6 +3708,14 @@ html:not(.dark) .dw-hero-composer__toolbar {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+/* Expanded / streaming thinking: readable body, allow wrap */
+.tool-strip-step-thinking--open .tool-strip-step-thinking-text,
+.tool-strip-step-thinking--streaming .tool-strip-step-thinking-text {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
 }
 
 .transcript-expand-icon {
@@ -3653,6 +3767,26 @@ html:not(.dark) .dw-hero-composer__toolbar {
   gap: 0.25rem;
 }
 
+.agent-trace-meta__pill {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  padding: 0.15rem 0.35rem 0.15rem 0.1rem;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-trace-meta__pill:hover {
+  background: color-mix(in srgb, var(--surface-container-high, var(--color-surface-container-high)) 55%, transparent);
+}
+
 .agent-trace-meta__line {
   font-size: 0.8125rem;
   line-height: 1.45;
@@ -3678,6 +3812,19 @@ html:not(.dark) .dw-hero-composer__toolbar {
   padding: 0;
   font-size: 0.8125rem;
   color: var(--secondary, var(--color-secondary));
+}
+
+/* Settled thinking still surfaces a short preview (Codex/Claude), not only the count. */
+.tool-strip-step-thinking--settled .tool-strip-step-thinking-preview {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 1.5rem;
+  padding-bottom: 0.25rem;
+  font-size: 0.8125rem;
 }
 
 .task-receipt-card {
@@ -3925,29 +4072,62 @@ button.tool-strip-step-toggle {
 }
 
 .agent-work-line__text {
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--on-surface, var(--color-on-surface));
-}
-
-.agent-work-line__text.dw-transcript-markdown,
-.agent-work-line__text .dw-transcript-markdown {
-  font-size: inherit;
-}
-
-.agent-work-line__meta {
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
   color: var(--secondary, var(--color-secondary));
 }
 
+.agent-work-line__text.dw-transcript-markdown,
+.agent-work-line__text .dw-transcript-markdown,
+.conv-thread-body .agent-work-line__text.dw-transcript-markdown,
+.conv-thread-body .agent-work-line__text .dw-transcript-markdown {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--secondary, var(--color-secondary));
+}
+
+.conv-thread-body .agent-work-line__text.dw-transcript-markdown p,
+.conv-thread-body .agent-work-line__text .dw-transcript-markdown p {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.agent-work-line__meta {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--secondary, var(--color-secondary));
+}
+
 .agent-work-line--live:last-child {
-  color: var(--on-surface, var(--color-on-surface));
+  color: var(--secondary, var(--color-secondary));
 }
 
 .agent-work-line--static {
   padding-left: 0;
   border-left: none;
+}
+
+/* Cursor waterfall: short thinking blurb, large readable type, no chevron. */
+.agent-work-line--waterfall {
+  padding: 0.15rem 0 0.35rem;
+  max-width: var(--conv-content-max);
+}
+
+.agent-work-line--waterfall .agent-work-line__text,
+.conv-thread-body .agent-work-line--waterfall .agent-work-line__text.dw-transcript-markdown,
+.conv-thread-body .agent-work-line--waterfall .agent-work-line__text .dw-transcript-markdown {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--on-surface, var(--color-on-surface));
+}
+
+.agent-work-line--brief .agent-work-line__text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.agent-work-line--waterfall .agent-work-line__text p + p {
+  margin-top: 0.5rem;
 }
 
 .agent-narration-fold {

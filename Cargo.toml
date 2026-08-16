@@ -9,7 +9,6 @@ members = [
     "crates/llm",
     "crates/security",
     "crates/memory",
-    "crates/experience",
     "crates/locale",
     "crates/dashboard",
     "crates/setup",
@@ -19,7 +18,7 @@ members = [
     "crates/dashboard-ipc",
     "crates/relay-gateway",
 ]
-exclude = ["crates/account-service"]
+exclude = ["crates/account-service", "crates/experience"]
 resolver = "2"
 
 [workspace.package]

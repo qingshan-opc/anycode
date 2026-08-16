@@ -251,8 +251,8 @@ fn resolve_cwd(
 
 /// `dangerouslyDisableSandbox` 是否被部署方允许生效。该入参来自模型，
 /// 模型自身不能解除自己的沙箱 —— 只有进程启动方显式放开才生效：
-/// `ANYCODE_ALLOW_SANDBOX_DISABLE`（专门的沙箱逃逸开关）或
-/// `ANYCODE_IGNORE_APPROVAL`（操作员已选择全局绕过审批）。
+/// `ANYCODE_ALLOW_SANDBOX_DISABLE`（专门的沙箱逃逸开关）。
+/// `ANYCODE_IGNORE_APPROVAL` 不再兼作沙箱逃逸（M1c）。
 fn sandbox_escape_allowed() -> bool {
     fn truthy(key: &str) -> bool {
         matches!(
@@ -260,7 +260,7 @@ fn sandbox_escape_allowed() -> bool {
             Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON")
         )
     }
-    truthy("ANYCODE_ALLOW_SANDBOX_DISABLE") || truthy("ANYCODE_IGNORE_APPROVAL")
+    truthy("ANYCODE_ALLOW_SANDBOX_DISABLE")
 }
 
 /// Strip a trailing shell `&` and detect long-running server/watch commands that must not block.
@@ -380,7 +380,7 @@ impl Tool for BashTool {
                 },
                 "dangerouslyDisableSandbox": {
                     "type": "boolean",
-                    "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing. NOTE: honored only when the process operator explicitly allows sandbox escape (ANYCODE_ALLOW_SANDBOX_DISABLE or ANYCODE_IGNORE_APPROVAL); otherwise the request is ignored and the command runs sandboxed."
+                    "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing. NOTE: honored only when ANYCODE_ALLOW_SANDBOX_DISABLE is set; otherwise the request is ignored and the command runs sandboxed."
                 }
             },
             "required": ["command"]
@@ -776,13 +776,9 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_escape_request_ignored_without_operator_opt_in() {
-        // 模型请求 dangerouslyDisableSandbox，但未设 ANYCODE_ALLOW_SANDBOX_DISABLE /
-        // ANYCODE_IGNORE_APPROVAL：标志必须被忽略（sandbox 策略照常约束 cwd），
-        // 且结果中告知 sandbox_escape_ignored。
-        // 注意：若外部环境恰好设置了上述变量，本测试不适用，直接跳过。
-        if std::env::var("ANYCODE_ALLOW_SANDBOX_DISABLE").is_ok()
-            || std::env::var("ANYCODE_IGNORE_APPROVAL").is_ok()
-        {
+        // 模型请求 dangerouslyDisableSandbox，但未设 ANYCODE_ALLOW_SANDBOX_DISABLE：
+        // 标志必须被忽略（sandbox 策略照常约束 cwd）。
+        if std::env::var("ANYCODE_ALLOW_SANDBOX_DISABLE").is_ok() {
             return;
         }
         let tool = BashTool::new(true, services());
@@ -810,9 +806,7 @@ mod tests {
 
     #[tokio::test]
     async fn foreground_echo_marks_sandbox_escape_ignored() {
-        if std::env::var("ANYCODE_ALLOW_SANDBOX_DISABLE").is_ok()
-            || std::env::var("ANYCODE_IGNORE_APPROVAL").is_ok()
-        {
+        if std::env::var("ANYCODE_ALLOW_SANDBOX_DISABLE").is_ok() {
             return;
         }
         let tool = BashTool::new(false, services());

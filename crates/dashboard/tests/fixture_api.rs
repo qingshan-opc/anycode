@@ -763,6 +763,72 @@ async fn project_rename_updates_name() {
 }
 
 #[tokio::test]
+async fn session_archive_hides_from_list() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join("session-archive.db");
+    let app = app_for_test(&db).await.unwrap();
+    let root = dir.path().join("archive-proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let project = post_json(
+        app.clone(),
+        "/api/projects",
+        json!({
+            "root_path": root.display().to_string(),
+            "name": "Archive proj",
+            "create_root": true
+        }),
+    )
+    .await;
+    let project_id = project["project"]["id"].as_str().unwrap();
+    let keep = post_json(
+        app.clone(),
+        "/api/sessions",
+        json!({
+            "project_id": project_id,
+            "kind": "repl",
+            "title": "keep",
+            "prompt_preview": "hi"
+        }),
+    )
+    .await;
+    let hide = post_json(
+        app.clone(),
+        "/api/sessions",
+        json!({
+            "project_id": project_id,
+            "kind": "repl",
+            "title": "hide",
+            "prompt_preview": "bye"
+        }),
+    )
+    .await;
+    let keep_id = keep["session"]["id"].as_str().unwrap();
+    let hide_id = hide["session"]["id"].as_str().unwrap();
+
+    let archived = patch_json(
+        app.clone(),
+        &format!("/api/sessions/{hide_id}"),
+        json!({ "archived": true }),
+    )
+    .await;
+    assert_eq!(archived["ok"], true);
+    assert_eq!(archived["archived"], true);
+
+    let listed = get_json(app.clone(), "/api/sessions?limit=50").await;
+    let ids: Vec<&str> = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["id"].as_str())
+        .collect();
+    assert!(ids.contains(&keep_id));
+    assert!(!ids.contains(&hide_id));
+
+    let detail = get_json(app, &format!("/api/sessions/{hide_id}")).await;
+    assert_eq!(detail["session"]["id"], hide_id);
+}
+
+#[tokio::test]
 async fn session_message_rejects_invalid_skills() {
     let dir = tempdir().unwrap();
     let db = dir.path().join("message_skills.db");
@@ -1410,4 +1476,78 @@ async fn session_plan_tree_api_empty_then_upsert() {
     let filled = get_json(app, &format!("/api/sessions/{session_id}/plan-tree")).await;
     assert_eq!(filled["tree"]["roots"][0]["title"], "Root");
     assert_eq!(filled["tree"]["roots"][0]["status"], "in_progress");
+}
+
+#[tokio::test]
+async fn graph_run_rejects_empty_body_and_empty_plan_tree() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("graph_api.db");
+    let app = app_for_test(&db_path).await.unwrap();
+    let project = post_json(
+        app.clone(),
+        "/api/projects",
+        json!({
+            "root_path": dir.path().join("wd").display().to_string(),
+            "name": "GraphApi",
+            "create_root": true,
+        }),
+    )
+    .await;
+    let project_id = project["project"]["id"].as_str().unwrap();
+    let session = post_json(
+        app.clone(),
+        "/api/sessions",
+        json!({
+            "project_id": project_id,
+            "kind": "run",
+            "title": "graph api",
+        }),
+    )
+    .await;
+    let session_id = session["session"]["id"].as_str().unwrap();
+
+    let (status, value) = post_json_status(
+        app.clone(),
+        &format!("/api/sessions/{session_id}/graph/run"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("provide workflow"),
+        "{value}"
+    );
+
+    let (status, value) = post_json_status(
+        app.clone(),
+        &format!("/api/sessions/{session_id}/graph/run"),
+        json!({ "from_plan_tree": true }),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("plan tree is empty"),
+        "{value}"
+    );
+
+    let (status, value) = post_json_status(
+        app,
+        &format!("/api/sessions/{session_id}/delegate"),
+        json!({ "agent_type": "goal", "prompt": "nope" }),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("explore, plan, or general-purpose"),
+        "{value}"
+    );
 }

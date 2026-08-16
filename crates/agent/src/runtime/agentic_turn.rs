@@ -1,4 +1,8 @@
-//! Shared agentic loop helpers (Template Method + Bridge for `execute_task` / `execute_turn`).
+//! Shared agentic loop kernel for Workbench chat and cron/headless tasks.
+//!
+//! `execute_turn_from_messages` (embedded chat) and `execute_task` (scheduler / nested agents) both
+//! call [`AgentRuntime::run_turn_tool_dispatch_kernel`] after each assistant hop that emits
+//! tool_calls. Cancel helpers live in `agentic_loop`; batch execution lives in `tool_dispatch`.
 
 use super::agentic_loop::{nested_coop_cancelled, opt_coop_cancelled, task_cancelled_failure};
 use super::discoverable_verification::SessionVerificationState;
@@ -31,6 +35,10 @@ pub(super) struct TurnToolState {
     pub progress_seq: u32,
     /// 申报点验收去重键(path:bytes)——同一版本只验一次,修复重报会再验。
     pub checked_deliverables: std::collections::HashSet<String>,
+    /// Consecutive `path escapes sandbox` failures this turn (same fingerprint).
+    pub sandbox_escape_streak: usize,
+    /// Fingerprint of the last sandbox-escape error (error text prefix / path).
+    pub last_sandbox_escape_key: Option<String>,
 }
 
 pub(super) enum TurnToolCancel<'a> {
@@ -112,6 +120,20 @@ impl MessageAppendSink<'_> {
         match self {
             Self::Vec(v) => (*v).clone(),
             Self::Shared(m) => m.lock().await.clone(),
+        }
+    }
+
+    /// In-place mutation of the live history (microcompact after a tool hop).
+    pub(super) async fn apply_mut<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut Vec<Message>),
+    {
+        match self {
+            Self::Vec(v) => f(v),
+            Self::Shared(m) => {
+                let mut g = m.lock().await;
+                f(&mut g);
+            }
         }
     }
 }
@@ -212,4 +234,57 @@ pub(super) enum TurnToolBatchOutcome {
     Cancelled(TurnToolCancelOutcome),
     MaxToolCalls,
     BudgetExceeded,
+}
+
+/// Parameters for the shared post-assistant tool dispatch hop (chat + cron).
+pub(super) struct TurnToolDispatchKernel<'a> {
+    pub tool_ctx: TurnToolCtx<'a>,
+    pub cancel: TurnToolCancel<'a>,
+    pub turn_tool_calls: Vec<ToolCall>,
+    pub record_evidence: bool,
+    pub cancel_outcome: TurnToolCancelOutcome,
+}
+
+impl AgentRuntime {
+    /// Shared tool-loop kernel: log `[turn_end]` and run `dispatch_turn_tool_calls`.
+    pub(super) async fn run_turn_tool_dispatch_kernel(
+        &self,
+        logger: &RunLogger,
+        state: &mut TurnToolState,
+        sink: &mut MessageAppendSink<'_>,
+        kernel: TurnToolDispatchKernel<'_>,
+    ) -> Result<TurnToolBatchOutcome, CoreError> {
+        logger.line(
+            kernel.tool_ctx.task_id,
+            &format!(
+                "[turn_end] turn={} tool_calls={}",
+                kernel.tool_ctx.turn,
+                kernel.turn_tool_calls.len()
+            ),
+        );
+        let outcome = self
+            .dispatch_turn_tool_calls(
+                logger,
+                &kernel.tool_ctx,
+                state,
+                &kernel.cancel,
+                sink,
+                kernel.turn_tool_calls,
+                kernel.record_evidence,
+                kernel.cancel_outcome,
+            )
+            .await?;
+        let task_id = kernel.tool_ctx.task_id;
+        sink.apply_mut(|msgs| {
+            let cleared = crate::compact::apply_microcompact_keep_latest_turn(msgs);
+            if cleared > 0 {
+                logger.line(
+                    task_id,
+                    &format!("[microcompact] cleared={cleared} keep=latest_turn"),
+                );
+            }
+        })
+        .await;
+        Ok(outcome)
+    }
 }

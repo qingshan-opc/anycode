@@ -116,22 +116,34 @@ fn default_max_raw_bytes() -> u64 {
     DEFAULT_MAX_RAW_BYTES
 }
 
-/// Binary file preview/download for deliverable cards (images, PDF, video).
-pub async fn raw_project_fs(
-    State(state): State<AppState>,
-    Path(project_id): Path<String>,
-    Query(q): Query<FsRawQuery>,
-) -> impl IntoResponse {
-    let root = match project_root_path(&state, &project_id).await {
+fn raw_content_type(mime: &str) -> String {
+    if mime.eq_ignore_ascii_case("text/html") || mime.starts_with("text/html;") {
+        if mime.to_ascii_lowercase().contains("charset=") {
+            mime.to_string()
+        } else {
+            "text/html; charset=utf-8".into()
+        }
+    } else {
+        mime.to_string()
+    }
+}
+
+async fn serve_raw_project_file(
+    state: &AppState,
+    project_id: &str,
+    rel: &str,
+    max_bytes: u64,
+) -> axum::response::Response {
+    let root = match project_root_path(state, project_id).await {
         Ok(r) => r,
         Err(resp) => {
             return (resp.0, Json(json!({ "error": resp.1 }))).into_response();
         }
     };
-    match read_raw_file(&root, &q.path, q.max_bytes) {
+    match read_raw_file(&root, rel, max_bytes) {
         Ok((bytes, mime, _rel)) => {
             let mut headers = HeaderMap::new();
-            if let Ok(val) = HeaderValue::from_str(&mime) {
+            if let Ok(val) = HeaderValue::from_str(&raw_content_type(&mime)) {
                 headers.insert(header::CONTENT_TYPE, val);
             }
             headers.insert(
@@ -152,6 +164,24 @@ pub async fn raw_project_fs(
             (code, Json(json!({ "error": msg }))).into_response()
         }
     }
+}
+
+/// Binary file preview/download for deliverable cards (images, PDF, video).
+pub async fn raw_project_fs(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    Query(q): Query<FsRawQuery>,
+) -> impl IntoResponse {
+    serve_raw_project_file(&state, &project_id, &q.path, q.max_bytes).await
+}
+
+/// Path-style raw file so HTML relative URLs (`01-cover.html`, `./assets/x.css`)
+/// resolve under the same directory instead of `/api/projects/.../01-cover.html`.
+pub async fn raw_project_fs_by_path(
+    State(state): State<AppState>,
+    Path((project_id, rel)): Path<(String, String)>,
+) -> impl IntoResponse {
+    serve_raw_project_file(&state, &project_id, &rel, DEFAULT_MAX_RAW_BYTES).await
 }
 
 /// Create a terminal tab inside a conversation's group.

@@ -98,6 +98,25 @@ pub async fn build_tools_setup(
         Arc::new(ts)
     };
 
+    #[cfg(feature = "tools-mcp")]
+    {
+        use std::collections::HashSet;
+        anycode_tools::mcp_proxied_tool::install_mcp_governance(
+            anycode_tools::mcp_proxied_tool::McpGovernanceRuntime {
+                strict: config.mcp.governance.strict,
+                max_calls_per_server: config.mcp.governance.max_calls_per_server,
+                allowed_tools: config
+                    .mcp
+                    .governance
+                    .allowed_tools
+                    .iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<HashSet<_>>(),
+            },
+        );
+    }
+
     let claude_rules = CompiledClaudePermissionRules::compile(
         &config.security.mcp_tool_deny_rules,
         &config.security.always_allow_rules,

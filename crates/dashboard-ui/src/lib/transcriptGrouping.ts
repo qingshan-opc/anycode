@@ -99,12 +99,13 @@ function makeToolCluster(
   };
 }
 
-function pushThinkingSnippet(processSnippets: string[], snippet: string) {
+function pushThinkingSnippet(processSnippets: string[], snippet: string): boolean {
   const trimmed = snippet.trim();
-  if (!trimmed) return;
+  if (!trimmed) return false;
   const last = processSnippets[processSnippets.length - 1];
-  if (last === trimmed) return;
+  if (last === trimmed) return false;
   processSnippets.push(trimmed);
+  return true;
 }
 
 /**
@@ -359,23 +360,34 @@ function groupFlatTurnReplies(replies: TranscriptBlock[]): TurnReplyItem[] {
     if (isIntermediateAssistantNotice(block)) {
       const snippet = block.body?.trim() ?? "";
       const source = block.meta?.source;
-      // Keep user-facing mid-turn narration on the timeline (above tools).
-      // Only transport noise (llm_start / empty / thinking_delta) folds into
-      // the following tool cluster's thinking strip.
-      if (source === "intermediate_assistant" && snippet.length > 0) {
+      // Cursor waterfall: keep thinking / mid-turn narration as timeline prose
+      // that stays above the following tool pill. Only empty transport notices
+      // (llm_start) fold into the cluster chrome.
+      if (
+        (source === "intermediate_assistant" || source === "thinking_delta") &&
+        snippet.length > 0
+      ) {
         flushTools();
         out.push({ kind: "block", block });
         continue;
       }
       if (snippet) {
-        pushThinkingSnippet(processSnippets, snippet);
+        if (pushThinkingSnippet(processSnippets, snippet)) {
+          processCount += 1;
+        }
       } else {
         processCount += 1;
       }
       continue;
     }
 
-    if (isProgressAssistant(block)) {
+    if (block.block_type === "progress_update") {
+      // Heuristic progress_update is not a timeline hero — skip so tool clusters
+      // stay contiguous under assistant narration (Cursor/Codex style).
+      continue;
+    }
+
+    if (isNarrationAssistant(block)) {
       flushTools();
       out.push({ kind: "block", block });
       continue;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useT } from "@/i18n/context";
 
 type MenuState = {
@@ -8,7 +9,8 @@ type MenuState = {
 };
 
 type Props = {
-  onRename: (sessionId: string, title: string) => void;
+  onRename?: (sessionId: string, title: string) => void;
+  onArchive?: (sessionId: string) => void;
   onHandoffToColleague?: (sessionId: string) => void;
   children: (handlers: {
     onContextMenu: (sessionId: string, event: React.MouseEvent) => void;
@@ -18,7 +20,12 @@ type Props = {
   }) => React.ReactNode;
 };
 
-export function SessionListContextShell({ onRename, onHandoffToColleague, children }: Props) {
+export function SessionListContextShell({
+  onRename,
+  onArchive,
+  onHandoffToColleague,
+  children,
+}: Props) {
   const t = useT();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
@@ -48,7 +55,17 @@ export function SessionListContextShell({ onRename, onHandoffToColleague, childr
   const onContextMenu = (sessionId: string, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    setMenu({ sessionId, x: event.clientX, y: event.clientY });
+    const menuWidth = 176;
+    const menuHeight = 120;
+    let x = event.clientX;
+    let y = event.clientY;
+    if (x + menuWidth > window.innerWidth - 8) {
+      x = Math.max(8, window.innerWidth - menuWidth - 8);
+    }
+    if (y + menuHeight > window.innerHeight - 8) {
+      y = Math.max(8, window.innerHeight - menuHeight - 8);
+    }
+    setMenu({ sessionId, x, y });
   };
 
   return (
@@ -57,44 +74,75 @@ export function SessionListContextShell({ onRename, onHandoffToColleague, childr
         onContextMenu,
         renamingSessionId,
         onRenameSave: (sessionId, title) => {
-          onRename(sessionId, title);
+          onRename?.(sessionId, title);
           setRenamingSessionId(null);
         },
         onRenameCancel: () => setRenamingSessionId(null),
       })}
-      {menu && (
-        <div
-          ref={menuRef}
-          className="fixed z-[100] min-w-[10rem] rounded-lg border border-outline-variant bg-surface-container-lowest shadow-lg py-1"
-          style={{ left: menu.x, top: menu.y }}
-          role="menu"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            className="w-full text-left px-3 py-2 text-sm border-0 bg-transparent hover:bg-surface-container-low cursor-pointer"
-            onClick={() => {
-              setRenamingSessionId(menu.sessionId);
-              setMenu(null);
-            }}
+      {menu &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="dw-project-menu dw-no-drag"
+            style={{ left: menu.x, top: menu.y }}
+            role="menu"
           >
-            {t("conversations.renameSession")}
-          </button>
-          {onHandoffToColleague ? (
-            <button
-              type="button"
-              role="menuitem"
-              className="w-full text-left px-3 py-2 text-sm border-0 bg-transparent hover:bg-surface-container-low cursor-pointer"
-              onClick={() => {
-                onHandoffToColleague(menu.sessionId);
-                setMenu(null);
-              }}
-            >
-              {t("conversations.handoffToColleague")}
-            </button>
-          ) : null}
-        </div>
-      )}
+            {onRename ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="dw-project-menu__item"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setRenamingSessionId(menu.sessionId);
+                  setMenu(null);
+                }}
+              >
+                <span className="dw-project-menu__label">
+                  {t("conversations.renameSession")}
+                </span>
+              </button>
+            ) : null}
+            {onArchive ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="dw-project-menu__item"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const sessionId = menu.sessionId;
+                  setMenu(null);
+                  onArchive(sessionId);
+                }}
+              >
+                <span className="dw-project-menu__label">
+                  {t("conversations.archiveSession")}
+                </span>
+              </button>
+            ) : null}
+            {onHandoffToColleague ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="dw-project-menu__item"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const sessionId = menu.sessionId;
+                  setMenu(null);
+                  onHandoffToColleague(sessionId);
+                }}
+              >
+                <span className="dw-project-menu__label">
+                  {t("conversations.handoffToColleague")}
+                </span>
+              </button>
+            ) : null}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

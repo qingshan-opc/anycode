@@ -258,12 +258,37 @@ export function formatAgentActivityRecap(
   return formatAgentActivityLine(steps, t, { includeDuration: false, preferCounts: true });
 }
 
-export function truncateThinkingPreview(text: string, max = 120): string {
+export function truncateThinkingPreview(text: string, max = 100): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   if (oneLine.length <= max) {
     return oneLine;
   }
   return `${oneLine.slice(0, max - 1)}…`;
+}
+
+/**
+ * One-line thinking/narration blurb for the Cursor-style waterfall.
+ * Prefers the first sentence when the body continues; otherwise truncates hard.
+ */
+export function briefThinkingSummary(text: string, max = 96): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "";
+
+  // First sentence (CJK / Latin punctuation). Chinese often continues
+  // immediately after 。 — do not require a trailing space.
+  const sentence = oneLine.match(/^(.+?[。！？.!?])/);
+  if (sentence) {
+    const candidate = sentence[1]!.trim();
+    const rest = oneLine.slice(candidate.length).trim();
+    if (rest.length > 0 && candidate.length >= 4) {
+      return candidate.length <= max
+        ? candidate
+        : truncateThinkingPreview(candidate, max);
+    }
+  }
+
+  if (oneLine.length <= max) return oneLine;
+  return truncateThinkingPreview(oneLine, max);
 }
 
 export function isStatusMessage(block: TranscriptBlock): boolean {

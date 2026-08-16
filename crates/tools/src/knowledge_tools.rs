@@ -40,6 +40,14 @@ impl Tool for KnowledgeSearchTool {
         "Search the current project's indexed knowledge base (configured paths in Digital Workbench). \
          Returns snippets from docs/, references/, and other indexed folders."
     }
+    fn api_tool_description(&self) -> String {
+        format!(
+            "{}\n\n\
+            Project-local retrieval over indexed folders.\n\
+            - Can be batched with other read-only tools (Grep/Glob/FileRead/WebSearch) in the same turn.",
+            self.description()
+        )
+    }
     fn schema(&self) -> serde_json::Value {
         json!({
             "type": "object",

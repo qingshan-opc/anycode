@@ -481,6 +481,8 @@ struct ZaiRequestBody {
     tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
     /// GLM：与官方 SDK 默认一致；关闭设 `ANYCODE_ZAI_THINKING=0`。
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<Value>,
@@ -1136,6 +1138,7 @@ impl LLMClient for ZaiClient {
             stream: Some(false),
             tools: tools_json,
             tool_choice,
+            parallel_tool_calls: crate::openai_parallel_tool_calls(tools.is_empty(), config),
             thinking: openai_compatible_thinking_body(&provider_label, config),
             reasoning_effort: openai_compatible_reasoning_effort(&provider_label, config),
         };
@@ -1313,7 +1316,7 @@ impl LLMClient for ZaiClient {
         };
 
         let provider_label = provider_label_from_config(config);
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "messages": openai_messages,
             "temperature": config.temperature,
@@ -1325,6 +1328,11 @@ impl LLMClient for ZaiClient {
             "reasoning_effort": openai_compatible_reasoning_effort(&provider_label, config),
             "stream_options": { "include_usage": true },
         });
+        if let Some(flag) = crate::openai_parallel_tool_calls(tools.is_empty(), config) {
+            body.as_object_mut()
+                .expect("stream request object")
+                .insert("parallel_tool_calls".into(), json!(flag));
+        }
 
         let base_url = config
             .base_url
@@ -1523,6 +1531,50 @@ mod tests {
             obj.get("reasoning_content").and_then(|v| v.as_str()),
             Some("think step")
         );
+    }
+
+    #[test]
+    fn request_body_serializes_parallel_tool_calls_when_tools_present() {
+        let cfg = ModelConfig {
+            provider: LLMProvider::Custom("zai".into()),
+            model: "glm-4.6".into(),
+            ..Default::default()
+        };
+        let body = ZaiRequestBody {
+            model: "glm-4.6".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            stream: Some(false),
+            tools: Some(vec![json!({"type": "function"})]),
+            tool_choice: Some("auto".into()),
+            parallel_tool_calls: crate::openai_parallel_tool_calls(false, &cfg),
+            thinking: None,
+            reasoning_effort: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["parallel_tool_calls"], true);
+
+        let weak = ModelConfig {
+            provider: LLMProvider::Local,
+            model: "qwen3-1b".into(),
+            base_url: Some("http://127.0.0.1:11434/v1/chat/completions".into()),
+            ..Default::default()
+        };
+        let body = ZaiRequestBody {
+            model: "qwen3-1b".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            stream: Some(false),
+            tools: Some(vec![json!({"type": "function"})]),
+            tool_choice: Some("auto".into()),
+            parallel_tool_calls: crate::openai_parallel_tool_calls(false, &weak),
+            thinking: None,
+            reasoning_effort: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert!(v.get("parallel_tool_calls").is_none());
     }
 
     #[test]

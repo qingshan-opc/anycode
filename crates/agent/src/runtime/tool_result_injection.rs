@@ -1,10 +1,11 @@
 //! Shared tool_result sanitize/truncate/message build for execute_task and execute_turn.
 
-use super::artifacts::truncate_text;
+use super::artifacts::{truncate_text, truncate_text_keep_tail};
 use super::limits::{TOOL_INPUT_LOG_MAX_BYTES, TOOL_RESULT_MAX_BYTES};
 use super::live_trace_emit;
 use super::logging::RunLogger;
 use super::tool_output_sanitize;
+use super::tool_result_render;
 use anycode_core::prelude::*;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -20,13 +21,9 @@ pub(super) fn prepare_tool_result_message(
     tool_result: &ToolOutput,
     logger: &RunLogger,
 ) -> PreparedToolResult {
-    let tool_text = if let Some(err) = tool_result.error.clone() {
-        format!("ERROR: {}\nRESULT: {}", err, tool_result.result)
-    } else {
-        format!("{}", tool_result.result)
-    };
+    let tool_text = tool_result_render::render_tool_result_for_model(&tool_call.name, tool_result);
     let (tool_text, sanitize_report) = tool_output_sanitize::sanitize_tool_output(&tool_text);
-    let (tool_text, truncated) = truncate_text(tool_text, TOOL_RESULT_MAX_BYTES);
+    let (tool_text, truncated) = truncate_text_keep_tail(tool_text, TOOL_RESULT_MAX_BYTES);
     if truncated {
         logger.line(
             task_id,

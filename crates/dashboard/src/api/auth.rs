@@ -40,12 +40,61 @@ pub fn cookie_from_request(parts: &axum::http::request::Parts) -> Option<String>
     cookie_value(parts, SESSION_COOKIE)
 }
 
-/// Loopback-trusted access: CI test bypass, or the in-process embedded Desktop
-/// shell. Packaged Desktop serves its own UI over the `tauri://` origin and
-/// talks to this loopback API; it is a trusted local process, so it does not
-/// need a cross-origin session cookie.
-fn loopback_trusted_access(host: &str, test_bypass: bool, embedded: bool) -> bool {
-    is_loopback_host(host) && (test_bypass || embedded)
+/// True when the request carries a Workbench session cookie or API Bearer token.
+/// Used for sensitive fields (e.g. cloud `access_token`) that must not be handed
+/// to every loopback process merely because the bind host is 127.0.0.1.
+#[allow(dead_code)]
+pub fn request_has_local_credential(state: &AppState, headers: &axum::http::HeaderMap) -> bool {
+    if let Some(cookies) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        if cookies.split(';').any(|part| {
+            part.trim()
+                .split_once('=')
+                .is_some_and(|(k, v)| k == SESSION_COOKIE && state.sessions.resolve(v).is_some())
+        }) {
+            return true;
+        }
+    }
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    // validate_token is async — callers that need a sync check use cookie only
+    // or the async helper below. Keep a cheap non-empty Bearer presence gate here
+    // and let `request_may_read_cloud_token` do the real validation.
+    !auth.is_empty() && auth.to_ascii_lowercase().starts_with("bearer ")
+}
+
+/// Async credential check for returning cloud JWT material.
+pub async fn request_may_read_cloud_token(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    if let Some(cookies) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        if cookies.split(';').any(|part| {
+            part.trim()
+                .split_once('=')
+                .is_some_and(|(k, v)| k == SESSION_COOKIE && state.sessions.resolve(v).is_some())
+        }) {
+            return true;
+        }
+    }
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    crate::tokens::validate_token(&state.db, auth)
+        .await
+        .unwrap_or(false)
+}
+
+/// Loopback-trusted access for CI (`test_bypass`) only.
+///
+/// Packaged Desktop must use the `dw_session` cookie from
+/// `/api/auth/desktop-bootstrap` — embedding alone is **not** enough to skip
+/// auth (otherwise any process that can hit the ephemeral loopback port is the
+/// workbench owner).
+fn loopback_trusted_access(host: &str, test_bypass: bool, _embedded: bool) -> bool {
+    is_loopback_host(host) && test_bypass
 }
 
 pub(crate) fn embedded_desktop() -> bool {
@@ -283,10 +332,8 @@ fn is_public_path(path: &str) -> bool {
             | "/cloud/link/poll"
             | "/api/cloud/link/poll"
             | "/cloud/unlink"
-            | "/api/cloud/unlink"
-    ) || path.starts_with("/cloud/upstream/")
-        || path.starts_with("/api/cloud/upstream/")
-        || path.starts_with("/setup/")
+            | "/api/cloud/unlink" // `/api/cloud/upstream/*` requires a local session / API token (not public).
+    ) || path.starts_with("/setup/")
         || path.starts_with("/api/setup/")
         || path == "/bootstrap"
         || path == "/api/bootstrap"
@@ -303,9 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn cloud_upstream_proxy_is_public() {
-        assert!(is_public_path("/api/cloud/upstream/api/v1/account/bundle"));
-        assert!(is_public_path("/cloud/upstream/api/v1/auth/me"));
+    fn cloud_upstream_proxy_requires_auth() {
+        assert!(!is_public_path("/api/cloud/upstream/api/v1/account/bundle"));
+        assert!(!is_public_path("/cloud/upstream/api/v1/auth/me"));
         assert!(!is_public_path("/api/cloud/sync-models"));
     }
 

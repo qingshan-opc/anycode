@@ -50,6 +50,9 @@ pub const TOOL_CONFIG: &str = "Config";
 pub const TOOL_SEND_USER_MESSAGE: &str = "SendUserMessage";
 pub const TOOL_BRIEF: &str = "Brief";
 pub const TOOL_ASK_USER_QUESTION: &str = "AskUserQuestion";
+pub const TOOL_SKILL_APP_PRESENT: &str = "SkillAppPresent";
+pub const TOOL_SKILL_APP_PUSH: &str = "SkillAppPush";
+pub const TOOL_SKILL_APP_READ: &str = "SkillAppRead";
 pub const TOOL_REPL: &str = "REPL";
 pub const TOOL_KNOWLEDGE_SEARCH: &str = "KnowledgeSearch";
 pub const TOOL_SPEECH_TO_TEXT: &str = "SpeechToText";
@@ -97,8 +100,8 @@ pub const DEFAULT_TOOL_IDS: &[&str] = &[
     TOOL_TASK_GET,
     TOOL_TASK_STOP,
     TOOL_TASK_OUTPUT,
-    TOOL_TEAM_CREATE,
-    TOOL_TEAM_DELETE,
+    // TeamCreate / TeamDelete: kept in TOOL_CATALOG + orchestration.rs but not
+    // on the default model surface (graph / optional registration only).
     TOOL_CRON_CREATE,
     TOOL_CRON_UPDATE,
     TOOL_CRON_DELETE,
@@ -119,6 +122,9 @@ pub const DEFAULT_TOOL_IDS: &[&str] = &[
     TOOL_SEND_USER_MESSAGE,
     TOOL_BRIEF,
     TOOL_ASK_USER_QUESTION,
+    TOOL_SKILL_APP_PRESENT,
+    TOOL_SKILL_APP_PUSH,
+    TOOL_SKILL_APP_READ,
     TOOL_REPL,
     TOOL_KNOWLEDGE_SEARCH,
     TOOL_SPEECH_TO_TEXT,
@@ -154,8 +160,6 @@ pub const SECURITY_SENSITIVE_TOOL_IDS: &[&str] = &[
     TOOL_TASK_CREATE,
     TOOL_TASK_UPDATE,
     TOOL_TASK_STOP,
-    TOOL_TEAM_CREATE,
-    TOOL_TEAM_DELETE,
     TOOL_CRON_CREATE,
     TOOL_CRON_UPDATE,
     TOOL_CRON_DELETE,
@@ -511,6 +515,30 @@ pub const TOOL_CATALOG: &[ToolCatalogEntry] = &[
         ALL_AGENTS,
         true,
         "standard",
+    ),
+    tool_entry(
+        TOOL_SKILL_APP_PRESENT,
+        "ui",
+        "low",
+        ALL_AGENTS,
+        false,
+        "minimal",
+    ),
+    tool_entry(
+        TOOL_SKILL_APP_PUSH,
+        "ui",
+        "low",
+        ALL_AGENTS,
+        false,
+        "minimal",
+    ),
+    tool_entry(
+        TOOL_SKILL_APP_READ,
+        "ui",
+        "low",
+        ALL_AGENTS,
+        false,
+        "minimal",
     ),
     tool_entry(TOOL_REPL, "shell", "critical", ALL_AGENTS, true, "full"),
     tool_entry(

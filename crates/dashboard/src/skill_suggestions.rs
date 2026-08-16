@@ -9,6 +9,7 @@ pub const STARTER_SKILL_IDS: &[&str] = &[
     "anycode-docx",
     "anycode-xlsx",
     "anycode-pdf",
+    "anycode-video",
     "internal-comms",
     "doc-summary",
     "content-repurpose",

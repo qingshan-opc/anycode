@@ -85,8 +85,12 @@ fn helper_path() -> PathBuf {
     nested
 }
 
-/// Default on for sharp native preview. Set ANYCODE_CEF_EMBED=0 to force
-/// JPEG screencast instead (kill-switch).
+/// Default on for sharp native preview.
+///
+/// Kill-switch / JPEG fallback: set `ANYCODE_CEF_EMBED=0` (also `false`/`off`/`no`)
+/// before launch to skip in-process CEF and prefer the JPEG screencast path in
+/// the Browser panel. There is no Workbench settings toggle yet — env (or the
+/// crash-guard auto-disable) is the supported way to prefer JPEG.
 fn cef_embed_env_enabled() -> bool {
     !matches!(
         std::env::var("ANYCODE_CEF_EMBED")

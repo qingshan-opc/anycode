@@ -11,6 +11,7 @@ import { AuthProvider } from "./auth/context";
 import { AccountCloudProvider } from "./hooks/useAccountCloud";
 import { SseProvider } from "./context/SseContext";
 import { isTauriDesktop, initDesktopWindowDrag } from "./lib/desktopShell";
+import { initSuppressNativeContextMenu } from "./lib/suppressNativeContextMenu";
 import "./index.css";
 
 /** Tauri serves `index.html` at `/index.html`; TanStack Router expects `/`. */
@@ -28,6 +29,8 @@ normalizeSpaPathname();
 initDensity();
 applySkin(getSkin());
 setTheme(getTheme());
+
+initSuppressNativeContextMenu();
 
 if (isTauriDesktop()) {
   document.documentElement.classList.add("dw-tauri");

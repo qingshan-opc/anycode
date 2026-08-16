@@ -38,7 +38,11 @@ import {
   resolveShellSessionId,
   writePinnedSessionId,
 } from "@/lib/activeSessionStorage";
-import { prefetchSessionConversation } from "@/lib/sessionQuery";
+import {
+  omitSessionFromSessionsCache,
+  prefetchSessionConversation,
+  type SessionsListCache,
+} from "@/lib/sessionQuery";
 
 export type QuickChip = {
   id: string;
@@ -85,6 +89,7 @@ type ConversationShellContextValue = {
   isOptimisticStreaming: boolean;
   optimisticStreamingSessionId: string | null;
   onRenameSession: (sessionId: string, title: string) => void;
+  onArchiveSession: (sessionId: string) => void;
   onRenameProject: (projectId: string, name: string) => void;
   onRemoveProject: (projectId: string) => void;
   markSessionStreaming: (sessionId: string) => void;
@@ -201,6 +206,9 @@ function useConversationShellState(): ConversationShellContextValue {
   const [pinnedSessionId, setPinnedSessionId] = useState<string | null>(() =>
     readPinnedSessionId(),
   );
+  const [locallyArchivedSessionIds, setLocallyArchivedSessionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const globalSseLive = useSseStatus() === "live";
   const { counts: pendingCounts, pendingTotal, isLoading: pendingCountsLoading } =
     usePendingApprovalCounts();
@@ -268,7 +276,11 @@ function useConversationShellState(): ConversationShellContextValue {
     refetchIntervalInBackground: false,
   });
 
-  const sidebarRows = sidebarSessions.data?.sessions ?? [];
+  const sidebarRows = useMemo(() => {
+    const list = sidebarSessions.data?.sessions ?? [];
+    if (locallyArchivedSessionIds.size === 0) return list;
+    return list.filter((session) => !locallyArchivedSessionIds.has(session.id));
+  }, [locallyArchivedSessionIds, sidebarSessions.data?.sessions]);
 
   const selectSession = useCallback(
     (sessionId: string | null) => {
@@ -329,11 +341,15 @@ function useConversationShellState(): ConversationShellContextValue {
 
   const rows = useMemo(() => {
     const base = sessions.data?.sessions ?? [];
+    const visible =
+      locallyArchivedSessionIds.size === 0
+        ? base
+        : base.filter((session) => !locallyArchivedSessionIds.has(session.id));
     if (active === "needs_approval") {
-      return base.filter((s) => s.status === "running" && (pendingCounts.get(s.id) ?? 0) > 0);
+      return visible.filter((s) => s.status === "running" && (pendingCounts.get(s.id) ?? 0) > 0);
     }
-    return base;
-  }, [active, pendingCounts, sessions.data?.sessions]);
+    return visible;
+  }, [active, locallyArchivedSessionIds, pendingCounts, sessions.data?.sessions]);
 
   const filteredRows = useMemo(() => {
     const q = listSearch.trim().toLowerCase();
@@ -732,6 +748,64 @@ function useConversationShellState(): ConversationShellContextValue {
     [queryClient],
   );
 
+  const archiveSession = useCallback(
+    (sessionId: string) => {
+      const row =
+        sidebarRows.find((s) => s.id === sessionId) ?? rows.find((s) => s.id === sessionId);
+      const snapshots = queryClient.getQueriesData<SessionsListCache>({
+        queryKey: ["all-sessions"],
+      });
+      setLocallyArchivedSessionIds((prev) => {
+        const next = new Set(prev);
+        next.add(sessionId);
+        return next;
+      });
+      queryClient.setQueriesData<SessionsListCache>(
+        { queryKey: ["all-sessions"] },
+        (prev) => omitSessionFromSessionsCache(prev, sessionId),
+      );
+      if (pendingSessionMeta?.id === sessionId) {
+        setPendingSessionMeta(null);
+        setPendingSessionId(null);
+      }
+      if (pinnedSessionId === sessionId) {
+        setPinnedSessionId(null);
+        writePinnedSessionId(null);
+      }
+      if (displaySessionId === sessionId) {
+        goHome(row?.project_id);
+      }
+      void (async () => {
+        try {
+          await api.archiveSession(sessionId);
+          await queryClient.invalidateQueries({ queryKey: ["all-sessions"] });
+          await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+          await queryClient.invalidateQueries({ queryKey: ["session-facets"] });
+          await queryClient.refetchQueries({ queryKey: ["all-sessions"] });
+        } catch (err) {
+          setLocallyArchivedSessionIds((prev) => {
+            const next = new Set(prev);
+            next.delete(sessionId);
+            return next;
+          });
+          for (const [key, data] of snapshots) {
+            queryClient.setQueryData(key, data);
+          }
+          window.alert(err instanceof Error ? err.message : "Failed to archive session");
+        }
+      })();
+    },
+    [
+      displaySessionId,
+      goHome,
+      pendingSessionMeta?.id,
+      pinnedSessionId,
+      queryClient,
+      rows,
+      sidebarRows,
+    ],
+  );
+
   return {
     projectId,
     setProjectId,
@@ -771,6 +845,7 @@ function useConversationShellState(): ConversationShellContextValue {
     isOptimisticStreaming,
     optimisticStreamingSessionId,
     onRenameSession: renameSession,
+    onArchiveSession: archiveSession,
     onRenameProject: renameProject,
     onRemoveProject: removeProject,
     markSessionStreaming,

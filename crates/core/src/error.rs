@@ -45,6 +45,12 @@ impl CoreError {
                 Self::LLMError(s) if s.as_str() == NESTED_TASK_COOPERATIVE_CANCEL_ERROR
             )
     }
+
+    /// Alias for [`is_cooperative_cancel`](Self::is_cooperative_cancel).
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.is_cooperative_cancel()
+    }
 }
 
 /// When [`anyhow::Error`] was built with `From<CoreError>` (e.g. `map_err(anyhow::Error::from)`), detects cooperative cancel.
@@ -67,8 +73,11 @@ mod tests {
     }
 
     #[test]
-    fn anyhow_error_is_cooperative_cancel_downcasts() {
-        let e = anyhow::Error::from(CoreError::CooperativeCancel);
-        assert!(anyhow_error_is_cooperative_cancel(&e));
+    fn is_cancelled_alias_matches_cooperative_cancel() {
+        assert!(CoreError::CooperativeCancel.is_cancelled());
+        assert!(
+            CoreError::LLMError(NESTED_TASK_COOPERATIVE_CANCEL_ERROR.to_string()).is_cancelled()
+        );
+        assert!(!CoreError::LLMError("other".into()).is_cancelled());
     }
 }

@@ -57,8 +57,10 @@ export const ToolTraceCluster = memo(function ToolTraceCluster({
   variant = "nested",
 }: Props) {
   const t = useT();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const anyFailed = steps.some(toolStepFailed);
-  const streaming = toolTraceStreaming(steps, processMessageCount, isRunning);
+  const thinkingSignal = Math.max(processMessageCount, processSnippets.length);
+  const streaming = toolTraceStreaming(steps, thinkingSignal, isRunning);
 
   const summary = useMemo(() => {
     const count = countLogicalToolSteps(
@@ -120,11 +122,11 @@ export const ToolTraceCluster = memo(function ToolTraceCluster({
       ? "tool-strip--running"
       : "tool-strip--done";
 
-  // Streaming cluster: step rows while live. Settled clusters stay a summary
-  // line unless the parent asks for history detail (showSettledSteps).
+  // Streaming: step rows while live. Settled: Cursor pill summary; expand on click
+  // or when parent asks for history detail (showSettledSteps).
   const showStepDetails = streaming
     ? forceExpanded !== false
-    : Boolean(showSettledSteps);
+    : Boolean(showSettledSteps || historyOpen);
 
   if (variant === "flat") {
     if (steps.length === 0) return null;
@@ -147,16 +149,26 @@ export const ToolTraceCluster = memo(function ToolTraceCluster({
   if (streaming) {
     const showThinkingHeader = toolTraceShowThinkingHeader(
       steps,
-      processMessageCount,
+      thinkingSignal,
       isRunning,
     );
+    const anyToolRunning = steps.some(toolStepRunning);
+    // Codex/Cursor: reasoning/prose first, tool cards under it — never claim a
+    // finished tool is still "running" just because the tip cluster is live.
     return (
       <div className="flex flex-col gap-1.5 w-full max-w-[var(--conv-content-max)]">
         {!suppressActivityLine && steps.length > 0 && (
           <AgentActivityLine steps={steps} suppressDuration />
         )}
         <div className={`tool-strip tool-strip-streaming ${stripClass}`}>
-          {steps.length > 0 && (
+          {showThinkingHeader && (
+            <ThinkingTraceFold
+              count={thinkingSignal}
+              snippets={processSnippets}
+              loading
+            />
+          )}
+          {anyToolRunning && (
             <div className="tool-strip-summary" role="status">
               <Icon name="progress_activity" size={14} className="text-primary animate-spin" />
               <span>
@@ -168,13 +180,6 @@ export const ToolTraceCluster = memo(function ToolTraceCluster({
                   : t("conversations.agentWorking")}
               </span>
             </div>
-          )}
-          {showThinkingHeader && (
-            <ThinkingTraceFold
-              count={processMessageCount}
-              snippets={processSnippets}
-              loading
-            />
           )}
           {showStepDetails &&
             steps.map((step) => (
@@ -192,29 +197,41 @@ export const ToolTraceCluster = memo(function ToolTraceCluster({
     );
   }
 
-  const showThinkingFold =
-    processSnippets.length > 0 || processMessageCount > 0;
+  const showThinkingFold = thinkingSignal > 0 && processSnippets.length > 0;
 
   return (
     <div className="agent-trace-meta w-full max-w-[var(--conv-content-max)]">
       {showThinkingFold && (
         <ThinkingTraceFold
-          count={processMessageCount}
+          count={thinkingSignal}
           snippets={processSnippets}
           loading={false}
           settled
         />
       )}
       {toolUsageLine && (
-        <p className="agent-trace-meta__line m-0" data-testid="tool-usage-summary">
-          {toolUsageLine}
-          {summary.totalDuration ? (
-            <span className="agent-trace-meta__meta"> · {summary.totalDuration}</span>
-          ) : null}
-          {summary.lastLabel ? (
-            <span className="agent-trace-meta__meta"> · {summary.lastLabel}</span>
-          ) : null}
-        </p>
+        <button
+          type="button"
+          className={`agent-trace-meta__pill ${historyOpen || showSettledSteps ? "agent-trace-meta__pill--open" : ""}`}
+          data-testid="tool-usage-summary"
+          aria-expanded={showStepDetails}
+          onClick={() => setHistoryOpen((v) => !v)}
+        >
+          <Icon
+            name={showStepDetails ? "expand_more" : "chevron_right"}
+            size={16}
+            className="transcript-expand-icon shrink-0"
+          />
+          <span className="agent-trace-meta__line m-0">
+            {toolUsageLine}
+            {summary.totalDuration ? (
+              <span className="agent-trace-meta__meta"> · {summary.totalDuration}</span>
+            ) : null}
+            {summary.lastLabel ? (
+              <span className="agent-trace-meta__meta"> · {summary.lastLabel}</span>
+            ) : null}
+          </span>
+        </button>
       )}
       {showStepDetails && steps.length > 0 && (
         <div className={`tool-strip tool-strip-settled ${stripClass}`}>
@@ -284,10 +301,20 @@ function ThinkingTraceFold({
       ? t("conversations.thinkingBrief")
       : t("conversations.thinkingDone").replace("{n}", String(count));
 
-  const showPreview = !settled && !open && previewText.length > 0;
+  // Settled folds still show a one-line preview so long context isn't trapped
+  // behind "已思考 N 步" with the real text only in the composer pill.
+  const showCollapsedPreview = !open && !loading && previewText.length > 0;
+
+  const thinkingStateClass = open
+    ? "tool-strip-step-thinking--open"
+    : loading && snippets.length > 0 && !settled
+      ? "tool-strip-step-thinking--streaming"
+      : "";
 
   return (
-    <div className={`tool-strip-step tool-strip-step-thinking ${settled ? "tool-strip-step-thinking--settled" : ""}`}>
+    <div
+      className={`tool-strip-step tool-strip-step-thinking ${settled ? "tool-strip-step-thinking--settled" : ""} ${thinkingStateClass}`.trim()}
+    >
       <button
         type="button"
         className="tool-strip-step-toggle"
@@ -296,7 +323,7 @@ function ThinkingTraceFold({
             setOpen((v) => !v);
           }
         }}
-        aria-expanded={open || showPreview}
+        aria-expanded={open || showCollapsedPreview}
         aria-label={open ? t("conversations.thinkingCollapse") : t("conversations.thinkingExpand")}
         disabled={loading || snippets.length === 0}
       >
@@ -309,7 +336,7 @@ function ThinkingTraceFold({
         )}
         <span>{label}</span>
       </button>
-      {showPreview && (
+      {showCollapsedPreview && (
         <p className="tool-strip-step-thinking-preview tool-strip-step-thinking-text">{previewText}</p>
       )}
       {open && !loading && snippets.length > 0 && (

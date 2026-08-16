@@ -140,7 +140,10 @@ pub async fn memory_center_snapshot() -> Result<Value> {
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .collect::<Vec<_>>();
     let sync = anycode_memory::load_sync_state(&base);
+    let lightrag_url = anycode_memory::resolve_lightrag_base_url();
+    let lightrag_reachable = anycode_memory::probe_lightrag_reachable(&lightrag_url).is_ok();
     Ok(serde_json::json!({
+        "backend": config.memory.backend,
         "sync_mode": if sync.enabled { "encrypted_sync" } else { "local_only" },
         "preferences": preferences,
         "project_facts": facts,
@@ -160,6 +163,10 @@ pub async fn memory_center_snapshot() -> Result<Value> {
             "duplicates_merged": preview.duplicates_merged,
         },
         "dream_history": dream_log,
+        "lightrag": {
+            "url": lightrag_url,
+            "reachable": lightrag_reachable,
+        },
         "e2ee": {
             "sync_enabled": sync.enabled,
             "device_id": sync.device_id,

@@ -50,6 +50,63 @@ cd "${ANYCODE_WORKING_DIR:-.}"
 echo "TODO: implement {id}; args: $*"
 "#;
 
+const SURFACE_YAML: &str = r#"id: {id}-app
+title: {id}
+entry: index.html
+slots: [dock, conversation]
+default_slot: dock
+lifecycle: session
+permissions:
+  host_api: [state, brief.submit, agent.prompt]
+  network: false
+"#;
+
+const UI_INDEX: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{id}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; }
+    button { margin-right: 8px; padding: 8px 12px; }
+  </style>
+</head>
+<body>
+  <h1>{id}</h1>
+  <p>Skill App stub — replace with your visual workbench.</p>
+  <button type="button" id="lock">Lock brief</button>
+  <pre id="status"></pre>
+  <script>
+    window.anycode = (function () {
+      let seq = 0; const pending = new Map();
+      window.addEventListener("message", (ev) => {
+        const d = ev.data; if (!d || d.id == null || !pending.has(d.id)) return;
+        const { resolve, reject } = pending.get(d.id); pending.delete(d.id);
+        if (d.error) reject(new Error(d.error.message)); else resolve(d.result);
+      });
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = ++seq; pending.set(id, { resolve, reject });
+          parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      }
+      return {
+        ready: () => call("anycode.ready"),
+        state: { get: () => call("anycode.state.get"), set: (p) => call("anycode.state.set", p) },
+        brief: { submit: (b) => call("anycode.brief.submit", b) },
+        agent: { prompt: (p) => call("anycode.agent.prompt", p), onPush: () => {} },
+      };
+    })();
+    document.getElementById("lock").onclick = async () => {
+      await anycode.ready();
+      await anycode.brief.submit({ skill_id: "{id}", schema: "visual-brief/v1", templates: ["default"] });
+      document.getElementById("status").textContent = "brief locked";
+    };
+  </script>
+</body>
+</html>
+"#;
+
 /// Create `<skills_root>/<id>/` with the standard skeleton. Refuses to
 /// overwrite an existing skill directory.
 pub fn scaffold_skill_dir(skills_root: &Path, id: &str, description: &str) -> Result<PathBuf> {
@@ -84,6 +141,13 @@ pub fn scaffold_skill_dir(skills_root: &Path, id: &str, description: &str) -> Re
         fs::set_permissions(&run_path, fs::Permissions::from_mode(0o755))
             .with_context(|| format!("chmod +x {}", run_path.display()))?;
     }
+    // Optional Skill App stub (ADR 020) — authors can delete ui/ if unused.
+    let ui = dir.join("ui");
+    fs::create_dir_all(&ui).with_context(|| format!("create {}", ui.display()))?;
+    fs::write(ui.join("surface.yaml"), SURFACE_YAML.replace("{id}", id))
+        .with_context(|| format!("write {}", ui.join("surface.yaml").display()))?;
+    fs::write(ui.join("index.html"), UI_INDEX.replace("{id}", id))
+        .with_context(|| format!("write {}", ui.join("index.html").display()))?;
     Ok(dir)
 }
 

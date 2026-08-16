@@ -165,7 +165,6 @@ pub async fn start_project_conversation(
             if agent_type.as_deref().is_some() && agent_type.as_deref() != Some(session_agent) {
                 if agent_ephemeral {
                     // 仅本次任务: 不写库; runtime 按请求 agent 自重建.
-                    state.web_chat.evict(&session_id).await;
                     state.chat_runtime.evict(&session_id).await;
                 } else {
                     if let Err(e) = state
@@ -179,7 +178,6 @@ pub async fn start_project_conversation(
                         )
                             .into_response();
                     }
-                    state.web_chat.evict(&session_id).await;
                     state.chat_runtime.evict(&session_id).await;
                 }
             }

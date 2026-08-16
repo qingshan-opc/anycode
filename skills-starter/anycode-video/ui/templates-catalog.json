@@ -1,0 +1,398 @@
+[
+  {
+    "id": "frame-bold-poster",
+    "name": "Bold Poster",
+    "name_zh": "大胆海报帧",
+    "desc": "A 1970s European editorial poster, in motion. A red rule draws across under a mono kicker, a giant Shrikhand figure rotates and drops in, a ",
+    "group": "title",
+    "duration_sec": 4,
+    "min_sec": 4,
+    "max_sec": 6,
+    "thumb": "t-poster",
+    "tags": [
+      "poster",
+      "editorial",
+      "bold",
+      "serif",
+      "red"
+    ]
+  },
+  {
+    "id": "frame-bold-signal",
+    "name": "Bold Signal",
+    "name_zh": "大胆信号卡帧",
+    "desc": "Bold colored card on a dark gradient — a big section number rolls in, a nav breadcrumb fades, a vibrant orange card slides in from the right",
+    "group": "title",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 6,
+    "thumb": "t-signal",
+    "tags": [
+      "bold",
+      "card",
+      "dark",
+      "orange",
+      "section"
+    ]
+  },
+  {
+    "id": "frame-build-minimal",
+    "name": "Build Minimal",
+    "name_zh": "奢华极简留白帧",
+    "desc": "Luxury-minimal whitespace hero — a single word reveals letter by letter in ultra-thin Inter, a warm-gold hairline extends, thin indicators r",
+    "group": "promo",
+    "duration_sec": 4,
+    "min_sec": 4,
+    "max_sec": 7,
+    "thumb": "t-minimal",
+    "tags": [
+      "minimal",
+      "luxury",
+      "whitespace",
+      "hero",
+      "gold"
+    ]
+  },
+  {
+    "id": "frame-creative-voltage",
+    "name": "Creative Voltage",
+    "name_zh": "创意电压分屏帧",
+    "desc": "Electric-blue / dark offset split with a hand-drawn script accent — panels slide in offset, a display title rises with one electric outlined",
+    "group": "cinematic",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 6,
+    "thumb": "t-voltage",
+    "tags": [
+      "split-panel",
+      "electric",
+      "script",
+      "retro-modern",
+      "voltage"
+    ]
+  },
+  {
+    "id": "frame-data-chart-nyt",
+    "name": "NYT Data Chart",
+    "name_zh": "NYT 风数据图表帧",
+    "desc": "New York Times-style animated data chart with counter animation and editorial typography.",
+    "group": "data",
+    "duration_sec": 8,
+    "min_sec": 5,
+    "max_sec": 20,
+    "thumb": "t-nyt",
+    "tags": [
+      "chart",
+      "bar",
+      "data",
+      "nyt",
+      "journalism"
+    ]
+  },
+  {
+    "id": "frame-decision-tree",
+    "name": "Decision Tree",
+    "name_zh": "Decision Tree",
+    "desc": "Animated flowchart with branching paths",
+    "group": "data",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-tree",
+    "tags": [
+      "explainer",
+      "flowchart",
+      "decision",
+      "branching",
+      "diagram"
+    ]
+  },
+  {
+    "id": "frame-electric-studio",
+    "name": "Electric Studio",
+    "name_zh": "电光工作室分屏帧",
+    "desc": "Two-panel vertical split with a quote as the hero — white top and electric-blue bottom panels open from the center, a black accent bar grows",
+    "group": "cinematic",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 6,
+    "thumb": "t-electric",
+    "tags": [
+      "split-panel",
+      "quote",
+      "blue",
+      "high-contrast",
+      "studio"
+    ]
+  },
+  {
+    "id": "frame-glitch-title",
+    "name": "Glitch Title",
+    "name_zh": "故障艺术标题帧",
+    "desc": "Cyberpunk-style glitch title with RGB shift, scanline, and chromatic aberration effects.",
+    "group": "title",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 8,
+    "thumb": "t-glitch",
+    "tags": [
+      "title",
+      "glitch",
+      "cyberpunk",
+      "rgb-shift",
+      "tech"
+    ]
+  },
+  {
+    "id": "frame-kinetic-type",
+    "name": "Kinetic Type",
+    "name_zh": "Kinetic Type",
+    "desc": "Bold kinetic typography promo",
+    "group": "title",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-kinetic",
+    "tags": [
+      "kinetic",
+      "typography",
+      "promo",
+      "bold",
+      "motion-text"
+    ]
+  },
+  {
+    "id": "frame-light-leak-cinema",
+    "name": "Light Leak Cinema",
+    "name_zh": "胶片漏光电影帧",
+    "desc": "Cinematic light leak frame — film grain, lens flare, and editorial 35mm warmth over a hero shot.",
+    "group": "cinematic",
+    "duration_sec": 6,
+    "min_sec": 4,
+    "max_sec": 10,
+    "thumb": "t-cinema",
+    "tags": [
+      "cinema",
+      "light-leak",
+      "film",
+      "35mm",
+      "grain"
+    ]
+  },
+  {
+    "id": "frame-liquid-bg-hero",
+    "name": "Liquid Background Hero",
+    "name_zh": "流体背景 Hero 帧",
+    "desc": "Hero card over a flowing liquid mesh-gradient background — magazine-style cover with editorial typography.",
+    "group": "cinematic",
+    "duration_sec": 6,
+    "min_sec": 4,
+    "max_sec": 12,
+    "thumb": "t-liquid",
+    "tags": [
+      "hero",
+      "liquid",
+      "gradient",
+      "mesh",
+      "editorial"
+    ]
+  },
+  {
+    "id": "frame-logo-outro",
+    "name": "Logo Outro Frame",
+    "name_zh": "品牌 Logo 收尾帧",
+    "desc": "Segmented logo assembly + glow bloom + tagline reveal — perfect for video outros and brand closing frames.",
+    "group": "title",
+    "duration_sec": 5,
+    "min_sec": 3,
+    "max_sec": 10,
+    "thumb": "t-logo",
+    "tags": [
+      "logo",
+      "outro",
+      "branding",
+      "end-card",
+      "frame"
+    ]
+  },
+  {
+    "id": "frame-nyt-graph",
+    "name": "NYT Graph",
+    "name_zh": "NYT Graph",
+    "desc": "Animated data chart in print editorial style",
+    "group": "data",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-nyt",
+    "tags": [
+      "data",
+      "chart",
+      "editorial",
+      "nyt",
+      "line-graph"
+    ]
+  },
+  {
+    "id": "frame-pentagram-stat",
+    "name": "Pentagram Stat",
+    "name_zh": "瑞士网格数据帧",
+    "desc": "Swiss-grid statistic anchor — a giant number bleeds off the edge while grid rules sweep in, a bar chart grows, and a black data bar slides u",
+    "group": "data",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 6,
+    "thumb": "t-stat",
+    "tags": [
+      "stat",
+      "swiss-grid",
+      "editorial",
+      "data",
+      "pentagram"
+    ]
+  },
+  {
+    "id": "frame-play-mode",
+    "name": "Play Mode",
+    "name_zh": "Play Mode",
+    "desc": "Playful elastic animations",
+    "group": "promo",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-play",
+    "tags": [
+      "playful",
+      "elastic",
+      "fun",
+      "bouncy",
+      "social"
+    ]
+  },
+  {
+    "id": "frame-product-promo",
+    "name": "Product Promo",
+    "name_zh": "Product Promo",
+    "desc": "Multi-scene product showcase with SVG assets",
+    "group": "promo",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-promo",
+    "tags": [
+      "product",
+      "promo",
+      "multi-scene",
+      "showcase",
+      "svg"
+    ]
+  },
+  {
+    "id": "frame-product-promo-30s",
+    "name": "Product Promo · 30s",
+    "name_zh": "Product Promo · 30s",
+    "desc": "Multi-scene 30-second product promo: problem-type intro, brand reveal, benefits flowchart, product surfaces, value pillars, foundation, CTA ",
+    "group": "data",
+    "duration_sec": 4,
+    "min_sec": 25,
+    "max_sec": 35,
+    "thumb": "t-promo",
+    "tags": [
+      "product",
+      "promo",
+      "multi-scene",
+      "30s",
+      "benefits"
+    ]
+  },
+  {
+    "id": "frame-swiss-grid",
+    "name": "Swiss Grid",
+    "name_zh": "Swiss Grid",
+    "desc": "Structured grid layout",
+    "group": "data",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-swiss",
+    "tags": [
+      "swiss",
+      "grid",
+      "minimal",
+      "corporate",
+      "typography"
+    ]
+  },
+  {
+    "id": "frame-takram-organic",
+    "name": "Takram Organic",
+    "name_zh": "东方柔和有机帧",
+    "desc": "Soft-tech radial node graph as art — a frosted rounded card holds the message while curved links draw and eight nodes pop outward around an ",
+    "group": "data",
+    "duration_sec": 4,
+    "min_sec": 4,
+    "max_sec": 7,
+    "thumb": "t-organic",
+    "tags": [
+      "organic",
+      "soft-tech",
+      "radial",
+      "node-graph",
+      "takram"
+    ]
+  },
+  {
+    "id": "frame-vignelli",
+    "name": "Vignelli",
+    "name_zh": "Vignelli",
+    "desc": "Bold typography with red accents",
+    "group": "data",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-vignelli",
+    "tags": [
+      "vignelli",
+      "red",
+      "bold",
+      "portrait",
+      "9:16"
+    ]
+  },
+  {
+    "id": "frame-warm-grain",
+    "name": "Warm Grain",
+    "name_zh": "Warm Grain",
+    "desc": "Cream aesthetic with grain texture",
+    "group": "cinematic",
+    "duration_sec": 4,
+    "min_sec": 3,
+    "max_sec": 30,
+    "thumb": "t-grain",
+    "tags": [
+      "lifestyle",
+      "warm",
+      "grain",
+      "cream",
+      "editorial"
+    ]
+  },
+  {
+    "id": "vfx-text-cursor",
+    "name": "Text + Cursor VFX",
+    "name_zh": "VFX 文字光标",
+    "desc": "Typewriter text effect with blinking terminal cursor — perfect for code-style reveals or tech demos.",
+    "group": "title",
+    "duration_sec": 5,
+    "min_sec": 3,
+    "max_sec": 10,
+    "thumb": "t-cursor",
+    "tags": [
+      "text",
+      "typewriter",
+      "cursor",
+      "terminal",
+      "code"
+    ]
+  }
+]

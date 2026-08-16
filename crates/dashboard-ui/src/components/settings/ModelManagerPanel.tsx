@@ -13,6 +13,7 @@ import { Icon } from "@/components/Icon";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useT } from "@/i18n/context";
+import { useAccountCloud } from "@/hooks/useAccountCloud";
 
 type ModelTab = "active" | "routing" | "connection" | "library";
 
@@ -45,6 +46,12 @@ function isMockModelProfile(provider: string, model: string): boolean {
   const p = provider.trim().toLowerCase();
   const m = model.trim().toLowerCase();
   return p === "mock" || m === "mock" || m.startsWith("mock/");
+}
+
+function isCloudConfiguredModel(item: ConfiguredModel): boolean {
+  if (item.source === "cloud") return true;
+  const provider = item.provider.trim().toLowerCase().replace(/-/g, "_");
+  return provider === "anycode_cloud" || provider === "anycodecloud";
 }
 
 function GlobalChatSummary({
@@ -87,6 +94,7 @@ function GlobalChatSummary({
 export function ModelManagerPanel() {
   const t = useT();
   const qc = useQueryClient();
+  const { cloudLinked } = useAccountCloud();
   const [activeTab, setActiveTab] = useState<ModelTab>("active");
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<ConfiguredModel | null>(null);
@@ -109,8 +117,12 @@ export function ModelManagerPanel() {
   const items: ConfiguredModel[] = useMemo(() => {
     const fromRegistry = registryQuery.data?.items ?? [];
     const source = fromRegistry.length > 0 ? fromRegistry : maskToConfigured(llm.data?.registry?.items ?? []);
-    return source.filter((item) => !isMockModelProfile(item.provider, item.model));
-  }, [registryQuery.data?.items, llm.data?.registry?.items]);
+    return source.filter((item) => {
+      if (isMockModelProfile(item.provider, item.model)) return false;
+      if (!cloudLinked && isCloudConfiguredModel(item)) return false;
+      return true;
+    });
+  }, [registryQuery.data?.items, llm.data?.registry?.items, cloudLinked]);
 
   const existingPresetIds = useMemo(
     () => new Set(items.map((i) => i.id)),

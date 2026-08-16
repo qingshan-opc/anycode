@@ -5,14 +5,14 @@ import { useDeliverableProject } from "@/components/deliverables/DeliverableProj
 import { useClipboard } from "@/hooks/useClipboard";
 import { useT } from "@/i18n/context";
 import { resolveDeliverableAbsPath } from "@/lib/deliverablePath";
-import { openExternal, openLocalPath, revealInFileManager } from "@/lib/openExternal";
-import { extension } from "@/lib/pathUtils";
-import { projectFsRawUrl } from "@/lib/projectFsUrl";
+import { openLocalPath, revealInFileManager } from "@/lib/openExternal";
 
 type Props = {
   path: string;
   projectId?: string;
   projectRoot?: string | null;
+  /** Open this file instead of `path` (e.g. deck index.html). */
+  openPath?: string;
   downloadUrl?: string;
   downloadName?: string;
   copyImageUrl?: string;
@@ -21,8 +21,9 @@ type Props = {
 
 export function DeliverableFileActions({
   path,
-  projectId: projectIdProp,
+  projectId: _projectIdProp,
   projectRoot: projectRootProp,
+  openPath,
   downloadUrl,
   downloadName,
   copyImageUrl,
@@ -30,25 +31,19 @@ export function DeliverableFileActions({
 }: Props) {
   const t = useT();
   const ctx = useDeliverableProject();
-  const projectId = projectIdProp ?? ctx.projectId;
   const projectRoot = projectRootProp ?? ctx.projectRoot;
   const { copy, copyImage, copied, copiedImage } = useClipboard();
   const absPath = resolveDeliverableAbsPath(path, projectRoot);
-  const ext = extension(path);
-  const isHtml = ext === "html" || ext === "htm";
+  const absOpenPath = resolveDeliverableAbsPath(openPath?.trim() || path, projectRoot);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const onOpen = useCallback(() => {
     void (async () => {
       try {
-        if (isHtml && projectId) {
-          await openExternal(projectFsRawUrl(projectId, path));
-          return;
-        }
-        await openLocalPath(absPath);
+        await openLocalPath(absOpenPath);
       } catch (err) {
         try {
-          await revealInFileManager(absPath);
+          await revealInFileManager(absOpenPath);
         } catch {
           window.alert(
             err instanceof Error ? err.message : t("conversations.openInFinderFailed"),
@@ -56,7 +51,7 @@ export function DeliverableFileActions({
         }
       }
     })();
-  }, [absPath, isHtml, path, projectId, t]);
+  }, [absOpenPath, t]);
 
   const onReveal = useCallback(() => {
     void revealInFileManager(absPath).catch((err) => {
@@ -114,9 +109,11 @@ export function DeliverableFileActions({
         <DeliverableContextMenu
           x={menu.x}
           y={menu.y}
+          absPath={absOpenPath}
           onClose={() => setMenu(null)}
           onReveal={onReveal}
           onCopyPath={onCopyPath}
+          onOpen={onOpen}
         />
       ) : null}
     </div>

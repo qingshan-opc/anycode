@@ -11,7 +11,9 @@ import { useMemo } from "react";
 import { useProjectFsRead } from "../hooks/useProjectFileTree";
 import { kindForPath } from "@/lib/artifactKind";
 import { basename } from "@/lib/pathUtils";
+import { isHtmlPath } from "@/lib/htmlSlideDeck";
 import { selectDeliverableViewer } from "@/lib/selectDeliverableViewer";
+import { HtmlImmersiveViewer } from "@/components/deliverables/viewers/HtmlImmersiveViewer";
 import { useT } from "@/i18n/context";
 
 hljs.registerLanguage("rust", rust);
@@ -26,6 +28,8 @@ hljs.registerLanguage("markdown", markdown);
 type Props = {
   projectId: string;
   filePath: string | null;
+  onToggleFiles?: () => void;
+  filesVisible?: boolean;
 };
 
 function langFromMime(mime: string, path: string): string {
@@ -61,7 +65,12 @@ function isMarkdown(path: string | null): boolean {
   return Boolean(path && /\.mdx?$/i.test(path));
 }
 
-export function FilePreview({ projectId, filePath }: Props) {
+export function FilePreview({
+  projectId,
+  filePath,
+  onToggleFiles,
+  filesVisible = false,
+}: Props) {
   const t = useT();
   const fileKind = filePath ? kindForPath(filePath) : "file";
   const fileName = filePath ? basename(filePath) : "";
@@ -97,10 +106,20 @@ export function FilePreview({ projectId, filePath }: Props) {
   }
 
   if (useViewer) {
+    if (filePath && isHtmlPath(filePath)) {
+      return (
+        <HtmlImmersiveViewer
+          path={filePath}
+          projectId={projectId}
+          onShowFiles={onToggleFiles}
+          filesVisible={filesVisible}
+        />
+      );
+    }
     return (
       <div className="flex flex-col min-h-0 h-full border-t border-outline-variant/60 p-3 bg-white">
         {selectDeliverableViewer({
-          path: filePath,
+          path: filePath!,
           title: fileName,
           projectId,
           variant: "full",

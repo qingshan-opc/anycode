@@ -96,7 +96,7 @@ docs/
 | [000](adr/000-runtime-orchestration.md) | `AgentRuntime` 编排权威 |
 | [001](adr/001-memory-pipeline-and-store.md) | Memory pipeline / store |
 | [002](adr/002-cli-composition-root.md) | CLI bootstrap 组合根 |
-| [003](adr/003-http-daemon-deprecated.md) | 不恢复 HTTP daemon |
+| [003](adr/018-http-daemon-deprecated.md) | 不恢复 HTTP daemon |
 | [004](adr/004-session-rewind.md) | 会话 rewind（Proposed） |
 | [005](adr/005-repl-clear-vs-transcript.md) | `/clear` vs transcript（Proposed） |
 | [006](adr/006-transcript-virtual-scroll-rfc.md) | 虚拟滚动 RFC（Proposed） |
@@ -104,6 +104,8 @@ docs/
 | [008](adr/008-channel-ask-user-question-phasing.md) | 通道 AskUserQuestion |
 | [009](adr/009-graph-memory-spike.md) | Graph memory spike |
 | [010](adr/010-cooperative-cancel-and-nested-agents.md) | 协作取消 / 嵌套 agent |
+| [015](adr/015-commercial-office-native-ooxml.md) | 商业 Office 原生 OOXML |
+| [020](adr/020-skill-apps.md) | Skill Apps 视觉宿主 / VisualBrief |
 
 ---
 

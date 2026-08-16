@@ -457,15 +457,20 @@ impl Tool for TaskOutputTool {
 
 // --- Team ---
 #[derive(Deserialize)]
+#[allow(dead_code)] // graph-only / optional registration (not in default registry)
 struct TeamIn {
     name: String,
 }
 
+/// Graph / optional surface only — not registered in the default tool registry
+/// (Workbench host-driven delegation supersedes model-facing team tools).
+#[allow(dead_code)]
 pub struct TeamCreateTool {
     services: Arc<ToolServices>,
     policy: SecurityPolicy,
 }
 
+#[allow(dead_code)]
 impl TeamCreateTool {
     pub fn new(services: Arc<ToolServices>) -> Self {
         Self {
@@ -509,11 +514,14 @@ impl Tool for TeamCreateTool {
     }
 }
 
+/// Graph / optional surface only — not registered in the default tool registry.
+#[allow(dead_code)]
 pub struct TeamDeleteTool {
     services: Arc<ToolServices>,
     policy: SecurityPolicy,
 }
 
+#[allow(dead_code)]
 impl TeamDeleteTool {
     pub fn new(services: Arc<ToolServices>) -> Self {
         Self {

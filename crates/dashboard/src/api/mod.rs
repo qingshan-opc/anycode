@@ -128,6 +128,35 @@ pub fn router(state: AppState) -> Router {
             post(handlers::respond_to_question),
         )
         .route(
+            "/skill-apps/catalog",
+            get(crate::skill_apps::list_skill_apps_catalog),
+        )
+        .route(
+            "/skill-apps/pending",
+            get(crate::skill_apps::list_pending_skill_apps),
+        )
+        .route(
+            "/skill-apps/{skill_id}/asset",
+            get(crate::skill_apps::get_skill_app_asset),
+        )
+        .route(
+            "/projects/{project_id}/skill-apps",
+            get(crate::skill_apps::list_project_skill_apps)
+                .put(crate::skill_apps::put_project_skill_app),
+        )
+        .route(
+            "/projects/{project_id}/skill-apps/brief",
+            post(crate::skill_apps::submit_skill_app_brief),
+        )
+        .route(
+            "/projects/{project_id}/skill-apps/{skill_id}",
+            delete(crate::skill_apps::delete_project_skill_app),
+        )
+        .route(
+            "/projects/{project_id}/skill-apps/{skill_id}/state",
+            get(crate::skill_apps::get_skill_app_state).put(crate::skill_apps::put_skill_app_state),
+        )
+        .route(
             "/notifications/recent",
             get(handlers::list_recent_notifications),
         )
@@ -270,6 +299,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/projects/{project_id}/fs/raw",
             get(handlers::raw_project_fs),
+        )
+        .route(
+            "/projects/{project_id}/fs/raw/{*rel}",
+            get(handlers::raw_project_fs_by_path),
         )
         .route(
             "/projects/{project_id}/fs/stat",
@@ -483,6 +516,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(handlers::send_session_message),
         )
         .route(
+            "/sessions/{session_id}/delegate",
+            axum::routing::post(handlers::delegate_session),
+        )
+        .route(
             "/sessions/{session_id}/message-queue",
             get(handlers::list_session_message_queue),
         )
@@ -550,6 +587,10 @@ pub fn router(state: AppState) -> Router {
             "/sessions/{session_id}/plan-tree",
             get(handlers::get_session_plan_tree).delete(handlers::delete_session_plan_tree),
         )
+        .route(
+            "/sessions/{session_id}/graph/run",
+            post(handlers::run_session_graph),
+        )
         .route("/media/status", get(handlers::get_media_status))
         .route("/media/transcribe", post(handlers::transcribe_audio))
         .route("/media/ocr", post(handlers::ocr_images))
@@ -604,7 +645,15 @@ pub fn router(state: AppState) -> Router {
             get(handlers::get_memory_retention_preview).post(handlers::post_memory_retention_apply),
         )
         .route("/settings/memory/center", get(handlers::get_memory_center))
+        .route(
+            "/settings/memory/backend",
+            axum::routing::patch(handlers::patch_memory_backend),
+        )
         .route("/settings/memory/dream", post(handlers::post_memory_dream))
+        .route(
+            "/settings/security",
+            get(handlers::get_security_settings).put(handlers::put_security_settings),
+        )
         .route("/settings/policies", get(handlers::get_policy_summary))
         .route("/settings/data-health", get(handlers::get_data_health))
         .route(

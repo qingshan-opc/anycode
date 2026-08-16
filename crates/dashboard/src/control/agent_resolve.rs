@@ -22,6 +22,23 @@ pub fn resolve_web_chat_agent(agent: Option<&str>) -> String {
     DEFAULT_WEB_CHAT_AGENT.to_string()
 }
 
+/// Normalize delegate / nested-agent ids (`Explore`, `general-purpose`, …).
+pub fn resolve_delegate_agent(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return DEFAULT_WEB_CHAT_AGENT.to_string();
+    }
+    let lower = t.to_ascii_lowercase();
+    match lower.as_str() {
+        "explore" | "explorer" => "explore".to_string(),
+        "plan" | "planner" => "plan".to_string(),
+        "general-purpose" | "general_purpose" | "builder" => "general-purpose".to_string(),
+        "goal" | "goal-runner" => "goal".to_string(),
+        "workspace-assistant" | "channel-ops" | "channel" => "workspace-assistant".to_string(),
+        _ => anycode_agent::normalize_agent_id(t),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,5 +54,12 @@ mod tests {
         assert_eq!(resolve_web_chat_agent(None), DEFAULT_WEB_CHAT_AGENT);
         assert_eq!(resolve_web_chat_agent(Some("")), DEFAULT_WEB_CHAT_AGENT);
         assert_eq!(resolve_web_chat_agent(Some("   ")), DEFAULT_WEB_CHAT_AGENT);
+    }
+
+    #[test]
+    fn delegate_agent_normalizes_claude_casing() {
+        assert_eq!(resolve_delegate_agent("Explore"), "explore");
+        assert_eq!(resolve_delegate_agent("Plan"), "plan");
+        assert_eq!(resolve_delegate_agent("general-purpose"), "general-purpose");
     }
 }

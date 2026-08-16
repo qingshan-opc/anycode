@@ -50,11 +50,21 @@ Expected output: one task run skips approval prompts in current process only.
 |---|---|---|
 | `require_approval` | `true` | Ask before sensitive tools run |
 | `permission_mode` | `"default"` | Shortcut mode (`default` / `auto` / `plan` / `accept_edits` / `bypass`) |
-| `sandbox_mode` | `false` | Path/cwd constraints |
+| `sandbox_mode` | `false` | Path/cwd constraints (shipping default **off**; toggle in Workbench **Settings → Security**) |
 | `mcp_tool_deny_rules` | `[]` | Deny MCP tool calls by rule |
 | `always_allow_rules` | `[]` | Always allow matching rules |
 | `always_ask_rules` | `[]` | Always ask even if approval is off |
 | `defer_mcp_tools` | `false` | Hide MCP tools in first model turn |
+
+### MCP governance (`mcp.governance`)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `strict` | `false` | Require non-empty `allowed_tools` (like `ANYCODE_MCP_STRICT`) |
+| `max_calls_per_server` | unset | Per-process cap per MCP server |
+| `allowed_tools` | `[]` | Allowlist of logical names or `server:tool` pairs |
+
+Environment variables (`ANYCODE_MCP_STRICT`, `ANYCODE_MCP_ALLOWED_TOOLS`, `ANYCODE_MCP_MAX_CALLS_PER_SERVER`) override these fields at runtime.
 
 ## Memory & first-turn tool choice
 

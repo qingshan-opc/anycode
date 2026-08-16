@@ -23,6 +23,7 @@ import {
 import { formatRelativeTime } from "@/utils/formatTime";
 import { useControlCenter } from "@/context/ControlCenterContext";
 import { buildHandoffColleaguesPath } from "@/lib/handoffIntent";
+import { ProjectSkillAppPins } from "@/components/session/ProjectSkillAppPins";
 
 const DEFAULT_EXPANDED_COUNT = 2;
 
@@ -38,6 +39,7 @@ type Props = {
   activeProjectId?: string;
   onSelectProject?: (projectId: string) => void;
   onRenameSession?: (sessionId: string, title: string) => void;
+  onArchiveSession?: (sessionId: string) => void;
   onRenameProject?: (projectId: string, name: string) => void;
   onRemoveProject?: (projectId: string) => void;
   optimisticStreamingSessionId?: string | null;
@@ -76,6 +78,7 @@ export function ProjectGroupedSessionList({
   activeProjectId,
   onSelectProject,
   onRenameSession,
+  onArchiveSession,
   onRenameProject,
   onRemoveProject,
   optimisticStreamingSessionId = null,
@@ -207,18 +210,25 @@ export function ProjectGroupedSessionList({
   function openProjectMenu(projectId: string, event: React.MouseEvent) {
     event.preventDefault();
     event.stopPropagation();
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     const menuWidth = 220;
     const menuHeight = 280;
-    // Anchor under the "…" button, left-aligned (match product mock).
-    let x = rect.left;
-    let y = rect.bottom + 4;
+    // Right-click: cursor; "…" button: under the control (product mock).
+    let x: number;
+    let y: number;
+    if (event.type === "contextmenu") {
+      x = event.clientX;
+      y = event.clientY;
+    } else {
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      x = rect.left;
+      y = rect.bottom + 4;
+    }
     if (x + menuWidth > window.innerWidth - 8) {
       x = Math.max(8, window.innerWidth - menuWidth - 8);
     }
     if (x < 8) x = 8;
     if (y + menuHeight > window.innerHeight - 8) {
-      y = Math.max(8, rect.top - menuHeight - 4);
+      y = Math.max(8, event.clientY - menuHeight - 4);
     }
     setMenu({ projectId, x, y });
   }
@@ -241,7 +251,10 @@ export function ProjectGroupedSessionList({
         const renaming = renamingProjectId === group.id;
         return (
           <section key={group.id} className="dw-project-session-group">
-            <div className="dw-project-session-group__head">
+            <div
+              className="dw-project-session-group__head"
+              onContextMenu={(event) => openProjectMenu(group.id, event)}
+            >
               <div className="dw-project-session-group__toggle">
                 {renaming && onRenameProject ? (
                   <SessionRenameInput
@@ -263,6 +276,7 @@ export function ProjectGroupedSessionList({
                       toggleProject(group.id, index);
                       onSelectProject?.(group.id);
                     }}
+                    onContextMenu={(event) => openProjectMenu(group.id, event)}
                   >
                     <Icon name="folder" size={16} className="shrink-0 text-secondary" />
                     {pinnedSet.has(group.id) && (
@@ -304,6 +318,7 @@ export function ProjectGroupedSessionList({
                 <Icon name="more_horiz" size={16} />
               </button>
             </div>
+            {!collapsed && <ProjectSkillAppPins projectId={group.id} />}
             {!collapsed && (
               <SessionRows
                 sessions={group.sessions}
@@ -312,7 +327,6 @@ export function ProjectGroupedSessionList({
                 pendingCounts={pendingCounts}
                 onPrefetch={onPrefetch}
                 optimisticStreamingSessionId={optimisticStreamingSessionId}
-                onRenameSession={onRenameSession}
                 contextMenu={ctx?.onContextMenu}
                 renamingSessionId={ctx?.renamingSessionId}
                 onRenameSave={ctx?.onRenameSave}
@@ -460,12 +474,16 @@ export function ProjectGroupedSessionList({
     </div>
   );
 
-  if (!onRenameSession) {
+  if (!onRenameSession && !onArchiveSession) {
     return renderGroups();
   }
 
   return (
-    <SessionListContextShell onRename={onRenameSession} onHandoffToColleague={handoffSession}>
+    <SessionListContextShell
+      onRename={onRenameSession}
+      onArchive={onArchiveSession}
+      onHandoffToColleague={handoffSession}
+    >
       {(ctx) => renderGroups(ctx)}
     </SessionListContextShell>
   );
@@ -478,7 +496,6 @@ function SessionRows({
   pendingCounts,
   onPrefetch,
   optimisticStreamingSessionId,
-  onRenameSession,
   contextMenu,
   renamingSessionId,
   onRenameSave,
@@ -490,7 +507,6 @@ function SessionRows({
   pendingCounts?: Map<string, number>;
   onPrefetch?: (sessionId: string, isRunning: boolean) => void;
   optimisticStreamingSessionId?: string | null;
-  onRenameSession?: (sessionId: string, title: string) => void;
   contextMenu?: (sessionId: string, event: React.MouseEvent) => void;
   renamingSessionId?: string | null;
   onRenameSave?: (sessionId: string, title: string) => void;
@@ -524,9 +540,7 @@ function SessionRows({
               type="button"
               onClick={() => onSelect(session.id)}
               onContextMenu={
-                onRenameSession && contextMenu
-                  ? (event) => contextMenu(session.id, event)
-                  : undefined
+                contextMenu ? (event) => contextMenu(session.id, event) : undefined
               }
               onMouseEnter={() => onPrefetch?.(session.id, session.status === "running")}
               onFocus={() => onPrefetch?.(session.id, session.status === "running")}

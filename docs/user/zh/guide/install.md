@@ -37,9 +37,11 @@ curl -fsSL --proto '=https' --tlsv1.2 \
 
 ## 安装后检查
 
-1. 打开 anyCode 或访问 `http://127.0.0.1:43180`
+1. 从启动台或「应用程序」打开 **anyCode**
 2. 若跳转到 **设置向导**（`/setup`），按提示完成模型配置
 3. 发一条测试消息确认对话正常
+
+> **开发者**：浏览器访问 `http://127.0.0.1:43180` 仅适用于 `anycode-dashboard-serve` 本地 E2E；桌面版工作台在 **anyCode.app** 窗口内，API 绑定 ephemeral loopback 端口（非固定 43180）。
 
 ## 从源码构建（开发者）
 

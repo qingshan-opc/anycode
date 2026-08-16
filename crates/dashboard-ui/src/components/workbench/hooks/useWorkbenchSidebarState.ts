@@ -225,6 +225,41 @@ export const workbenchSidebarStore = {
     if (id !== "chat" && !state.tabbedPanels.includes(id)) return;
     update({ conversationTab: id });
   },
+  /**
+   * Collapse the surface `tab` currently lives in: dock-expanded → collapse the
+   * dock; main-area tab → fall back to the chat. No-op when the tab is not
+   * visible. Used by panels that empty themselves out (browser last-tab close).
+   */
+  collapseTab(tab: WorkbenchTab): void {
+    ensureInit();
+    if (state.tabbedPanels.includes(tab)) {
+      if (state.conversationTab === tab) update({ conversationTab: "chat" });
+    } else if (state.expanded && state.activeTab === tab) {
+      update({ expanded: false });
+    }
+  },
+  /**
+   * Fully dismiss a conversation-area tab: remove from `tabbedPanels`, fall back
+   * to chat when it was selected, and do not expand the dock. Distinct from
+   * `collapseTab` (keeps the tab for reopen) and `moveToDock` (reveals dock).
+   */
+  closeConversationTab(tab: WorkbenchTab): void {
+    ensureInit();
+    const wasTabbed = state.tabbedPanels.includes(tab);
+    const wasDock =
+      !wasTabbed && state.expanded && state.activeTab === tab;
+    if (!wasTabbed && !wasDock) {
+      if (state.conversationTab === tab) {
+        update({ conversationTab: "chat" });
+      }
+      return;
+    }
+    update({
+      tabbedPanels: state.tabbedPanels.filter((t) => t !== tab),
+      conversationTab: state.conversationTab === tab ? "chat" : state.conversationTab,
+      expanded: wasDock ? false : state.expanded,
+    });
+  },
   /** Consume (read + clear) a pending focus request for `tab`. */
   consumeFocus(tab: WorkbenchTab): unknown {
     ensureInit();
@@ -276,6 +311,11 @@ export function useWorkbenchSidebarState() {
     (id: ConversationTabId) => workbenchSidebarStore.selectConversationTab(id),
     [],
   );
+  const collapseTab = useCallback((tab: WorkbenchTab) => workbenchSidebarStore.collapseTab(tab), []);
+  const closeConversationTab = useCallback(
+    (tab: WorkbenchTab) => workbenchSidebarStore.closeConversationTab(tab),
+    [],
+  );
 
   return {
     ...snapshot,
@@ -288,6 +328,8 @@ export function useWorkbenchSidebarState() {
     moveToConversationTab,
     moveToDock,
     selectConversationTab,
+    collapseTab,
+    closeConversationTab,
   };
 }
 

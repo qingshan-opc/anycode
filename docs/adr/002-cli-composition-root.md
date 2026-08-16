@@ -2,13 +2,13 @@
 
 ## Status
 
-Superseded — composition root moved to **`crates/bootstrap`** (`initialize_runtime`). The `crates/cli` package was removed; Desktop and `anycode-daemon` share `anycode-bootstrap`. See also [ADR 003](003-http-daemon-deprecated.md).
+Superseded — composition root moved to **`crates/bootstrap`** (`initialize_runtime`). The `crates/cli` package was removed; Desktop and `anycode-daemon` share `anycode-bootstrap`. See also [ADR 003](018-http-daemon-deprecated.md).
 
 ~~Accepted~~
 
 ## Context
 
-The `anycode` CLI crate aggregates configuration, TUI/stream REPL, `run`, channel bridges, and supporting subcommands. A clear boundary prevents business rules from leaking into `anycode_core` and keeps `AgentRuntime` construction centralized. (Historical HTTP daemon wiring was removed; see [ADR 003](003-http-daemon-deprecated.md).)
+The `anycode` CLI crate aggregates configuration, TUI/stream REPL, `run`, channel bridges, and supporting subcommands. A clear boundary prevents business rules from leaking into `anycode_core` and keeps `AgentRuntime` construction centralized. (Historical HTTP daemon wiring was removed; see [ADR 003](018-http-daemon-deprecated.md).)
 
 ## Decision
 

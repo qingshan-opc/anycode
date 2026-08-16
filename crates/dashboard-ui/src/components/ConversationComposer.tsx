@@ -667,7 +667,9 @@ export function ConversationComposer(props: Props) {
       : props.mode === "start"
         ? Boolean(props.hideWaitingIndicator)
         : false;
-  const pending = isStart ? startSession.isPending : sendFollowUp.isPending;
+  const pending = isStart
+    ? startSession.isPending
+    : sendFollowUp.isPending;
   const messageQueue = useQuery({
     queryKey: ["session-message-queue", session?.id],
     queryFn: () => api.sessionMessageQueue(session!.id),
@@ -689,7 +691,10 @@ export function ConversationComposer(props: Props) {
     attachedImages.length > 0 ||
     attachedTextFiles.length > 0;
   const canSend =
-    hasContent && !pending && !stopping && (!isStart ? !waitingForQuestion : true);
+    hasContent &&
+    !pending &&
+    !stopping &&
+    (!isStart ? !waitingForQuestion : true);
   const canPause = !isStart && turnActive && !pending && !stopping;
   const showPauseAction = canPause || stopping || cancelRun.isPending;
 
@@ -861,7 +866,9 @@ export function ConversationComposer(props: Props) {
     submitMessage();
   }
 
-  const error = isStart ? startSession.error : sendFollowUp.error;
+  const error = isStart
+    ? startSession.error
+    : sendFollowUp.error;
 
   function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const menu = showMentionMenu
@@ -1058,16 +1065,16 @@ export function ConversationComposer(props: Props) {
             stopping
               ? t("conversations.composeStopping")
               : grillMode
-                ? t("conversations.grillModePlaceholder")
-                : goalMode
-                  ? t("conversations.goalModePlaceholder")
-                  : planMode
-                    ? t("conversations.planModePlaceholder")
-                    : turnActive
-                      ? t("conversations.composePlaceholderRunning")
-                      : isStart
-                        ? t("conversations.composePlaceholderStart")
-                        : t("conversations.composePlaceholder")
+                  ? t("conversations.grillModePlaceholder")
+                  : goalMode
+                    ? t("conversations.goalModePlaceholder")
+                    : planMode
+                      ? t("conversations.planModePlaceholder")
+                      : turnActive
+                        ? t("conversations.composePlaceholderRunning")
+                        : isStart
+                          ? t("conversations.composePlaceholderStart")
+                          : t("conversations.composePlaceholder")
           }
           value={message}
           onChange={(e) => onMessageChange(e.target.value)}

@@ -38,8 +38,8 @@ describe("toolTraceStreaming", () => {
     expect(toolTraceStreaming([step("1", "start")], 1, true)).toBe(true);
   });
 
-  it("stops streaming after all tools finish even if session is running", () => {
-    expect(toolTraceStreaming([step("1", "fail")], 2, true)).toBe(false);
+  it("keeps streaming after tools finish while tip segment is still active", () => {
+    expect(toolTraceStreaming([step("1", "fail")], 2, true)).toBe(true);
   });
 
   it("streams while waiting for the first tool", () => {
@@ -56,17 +56,18 @@ describe("toolTraceStreaming", () => {
 });
 
 describe("toolTraceShowThinkingHeader", () => {
-  it("shows thinking only before tool steps exist", () => {
+  it("shows thinking while tip is live, including after tools", () => {
     expect(toolTraceShowThinkingHeader([], 2, true)).toBe(true);
-    expect(toolTraceShowThinkingHeader([step("1", "start")], 2, true)).toBe(false);
-    expect(toolTraceShowThinkingHeader([step("1", "fail")], 2, true)).toBe(false);
+    expect(toolTraceShowThinkingHeader([step("1", "start")], 2, true)).toBe(true);
+    expect(toolTraceShowThinkingHeader([step("1", "fail")], 2, true)).toBe(true);
+    expect(toolTraceShowThinkingHeader([step("1", "fail")], 2, false)).toBe(false);
   });
 });
 
 describe("toolClusterSegmentActive", () => {
-  it("deactivates completed clusters while the session keeps running", () => {
+  it("keeps tip cluster live after tools finish while the turn is running", () => {
     expect(toolClusterSegmentActive([step("1", "fail")], true, true, false)).toBe(
-      false,
+      true,
     );
   });
 
@@ -129,6 +130,34 @@ describe("toolClusterSegmentSettled", () => {
             steps: [step("2", "start")],
             processMessageCount: 0,
             processSnippets: [],
+          },
+        ],
+        0,
+      ),
+    ).toBe(true);
+  });
+
+  it("settles when later thinking_delta waterfall prose arrives", () => {
+    expect(
+      toolClusterSegmentSettled(
+        [
+          {
+            kind: "tool_cluster",
+            id: "c1",
+            steps: [step("1", "end")],
+            processMessageCount: 0,
+            processSnippets: [],
+          },
+          {
+            kind: "block",
+            block: {
+              id: "th2",
+              block_type: "system_notice",
+              at: "2026-01-01T00:00:00Z",
+              title: "Thinking",
+              body: "接下来改状态机",
+              meta: { source: "thinking_delta", turn: 2 },
+            },
           },
         ],
         0,

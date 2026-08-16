@@ -1,0 +1,10 @@
+id: ppt-studio
+title: PPT 视觉工作台
+entry: index.html
+slots: [dock, conversation, project]
+default_slot: conversation
+lifecycle: persistent
+icon: dashboard_customize
+permissions:
+  host_api: [state, brief.submit, agent.prompt]
+  network: false

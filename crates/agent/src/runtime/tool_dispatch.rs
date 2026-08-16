@@ -9,6 +9,7 @@ use super::budget::{tick_budget, tool_blocked_under_degrade};
 use super::evidence;
 use super::live_trace_emit::{emit_artifacts_ready, emit_tool_call_progress};
 use super::logging::RunLogger;
+use super::sandbox_escape_nudge;
 use super::session_activity::{ActivityReason, SessionActivityGuard};
 use super::tool_result_injection;
 use super::AgentRuntime;
@@ -81,7 +82,21 @@ pub(super) fn tool_cancel_policy(name: &str) -> ToolCancelPolicy {
 pub(super) fn is_readonly_tool(name: &str) -> bool {
     matches!(
         name,
-        "Glob" | "Grep" | "Read" | "FileRead" | "WebFetch" | "WebSearch" | "SemanticSearch"
+        "Glob"
+            | "Grep"
+            | "Read"
+            | "FileRead"
+            | "WebFetch"
+            | "WebSearch"
+            | "SemanticSearch"
+            | "KnowledgeSearch"
+            | "SkillSearch"
+            | "ToolSearch"
+            | "ListMcpResources"
+            | "ListMcpResourcesTool"
+            | "ReadMcpResource"
+            | "ReadMcpResourceTool"
+            | "ReadMcpResourceDir"
     )
 }
 
@@ -480,10 +495,31 @@ impl AgentRuntime {
         sink: &mut MessageAppendSink<'_>,
         tool_call: &ToolCall,
         tool_idx: usize,
-        tool_result: ToolOutput,
+        mut tool_result: ToolOutput,
         elapsed_ms: u128,
         record_evidence: bool,
     ) {
+        if let Some(err) = tool_result.error.clone() {
+            let prefer_zh = crate::prompt_catalog::active_locale_tag() == Some("zh");
+            if let Some(nudge) = sandbox_escape_nudge::note_sandbox_escape(
+                &mut state.sandbox_escape_streak,
+                &mut state.last_sandbox_escape_key,
+                &err,
+                prefer_zh,
+            ) {
+                sandbox_escape_nudge::append_nudge_to_tool_output(&mut tool_result, nudge);
+                logger.line(
+                    ctx.task_id,
+                    &format!(
+                        "[sandbox_escape_nudge] streak={} tool={}",
+                        state.sandbox_escape_streak, tool_call.name
+                    ),
+                );
+            }
+        } else {
+            state.sandbox_escape_streak = 0;
+            state.last_sandbox_escape_key = None;
+        }
         tool_result_injection::log_tool_call_end(
             logger,
             &ctx.live_trace_tx,
@@ -734,6 +770,11 @@ mod tests {
             },
             ToolCall {
                 id: "3".into(),
+                name: "KnowledgeSearch".into(),
+                input: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "4".into(),
                 name: "Bash".into(),
                 input: serde_json::json!({}),
             },
@@ -741,8 +782,20 @@ mod tests {
         let batches = partition_tool_calls(calls);
         assert_eq!(batches.len(), 2);
         assert!(batches[0].concurrent);
-        assert_eq!(batches[0].calls.len(), 2);
+        assert_eq!(batches[0].calls.len(), 3);
         assert!(!batches[1].concurrent);
+    }
+
+    #[test]
+    fn knowledge_and_mcp_reads_are_readonly() {
+        assert!(is_readonly_tool("KnowledgeSearch"));
+        assert!(is_readonly_tool("SkillSearch"));
+        assert!(is_readonly_tool("ToolSearch"));
+        assert!(is_readonly_tool("ListMcpResourcesTool"));
+        assert!(is_readonly_tool("ReadMcpResourceTool"));
+        assert!(!is_readonly_tool("Bash"));
+        assert!(!is_readonly_tool("Edit"));
+        assert!(!is_readonly_tool("FileWrite"));
     }
 
     #[test]

@@ -58,6 +58,9 @@ pub const TOOL_CONFIG: &str = "Config";
 pub const TOOL_SEND_USER_MESSAGE: &str = "SendUserMessage";
 pub const TOOL_BRIEF: &str = "Brief";
 pub const TOOL_ASK_USER_QUESTION: &str = "AskUserQuestion";
+pub const TOOL_SKILL_APP_PRESENT: &str = "SkillAppPresent";
+pub const TOOL_SKILL_APP_PUSH: &str = "SkillAppPush";
+pub const TOOL_SKILL_APP_READ: &str = "SkillAppRead";
 pub const TOOL_REPL: &str = "REPL";
 pub const TOOL_SPEECH_TO_TEXT: &str = "SpeechToText";
 pub const TOOL_TEXT_TO_SPEECH: &str = "TextToSpeech";
@@ -94,6 +97,7 @@ pub const SUBAGENT_ALL_DISALLOWED_TOOL_IDS: &[&str] = &[
     TOOL_EXIT_PLAN,
     TOOL_TASK_STOP,
     TOOL_ASK_USER_QUESTION,
+    TOOL_SKILL_APP_PRESENT,
     TOOL_ENTER_WORKTREE,
     TOOL_EXIT_WORKTREE,
 ];
@@ -380,8 +384,6 @@ mod workspace_assistant_tools_tests {
             TOOL_TASK_GET,
             TOOL_TASK_STOP,
             TOOL_TASK_OUTPUT,
-            TOOL_TEAM_CREATE,
-            TOOL_TEAM_DELETE,
             TOOL_CRON_CREATE,
             TOOL_CRON_UPDATE,
             TOOL_CRON_DELETE,
@@ -402,6 +404,9 @@ mod workspace_assistant_tools_tests {
             TOOL_SEND_USER_MESSAGE,
             TOOL_BRIEF,
             TOOL_ASK_USER_QUESTION,
+            TOOL_SKILL_APP_PRESENT,
+            TOOL_SKILL_APP_PUSH,
+            TOOL_SKILL_APP_READ,
             TOOL_REPL,
             TOOL_SPEECH_TO_TEXT,
             TOOL_TEXT_TO_SPEECH,
@@ -653,8 +658,17 @@ mod tests {
     }
 
     #[test]
-    fn security_sensitive_tools_are_in_default_registry() {
+    fn team_tools_not_on_default_surface() {
+        assert!(!DEFAULT_TOOL_IDS.contains(&TOOL_TEAM_CREATE));
+        assert!(!DEFAULT_TOOL_IDS.contains(&TOOL_TEAM_DELETE));
+    }
+
+    #[test]
+    fn security_sensitive_tools_on_default_surface_are_in_default_registry() {
         for id in SECURITY_SENSITIVE_TOOL_IDS {
+            if !DEFAULT_TOOL_IDS.contains(id) {
+                continue;
+            }
             assert!(
                 DEFAULT_TOOL_IDS.contains(id),
                 "{id} must be in DEFAULT_TOOL_IDS"

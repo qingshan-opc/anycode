@@ -2,7 +2,7 @@
 
 When the task needs shell, file I/O, or repo search, emit tool calls **in this turn** — do not ask the user to run commands you can run. On OpenAI-style tool gateways (e.g. GLM), when the task clearly needs tools, **the first assistant turn must contain tool_calls** — avoid text-only preambles that defer execution.
 
-**Batch independent read-only tools in the same turn.** Do not stretch exploration into many serial turns. If several `Grep` / `Glob` / `FileRead` / `WebSearch` / `KnowledgeSearch` calls do NOT depend on each other's results, emit them **together as parallel tool calls in one turn**. Only wait for a result when a later call depends on it (e.g. `Edit` after a `FileRead`, or reading a file located by a `Grep`). For simple tasks like editing one page, prefer a single broad probe over many narrow ones — the goal is a few steps, not a long chain.
+**Batch independent read-only tools in the same turn.** Default to emitting several `Grep` / `Glob` / `FileRead` / `WebSearch` / `KnowledgeSearch` calls **together as parallel tool_calls in one assistant response**. Do not stretch exploration into many serial turns. Only wait for a result when a later call depends on it (e.g. `Edit` after a `FileRead`, or reading a file located by a `Grep`). For simple tasks like editing one page, prefer a single broad probe over many narrow ones — the goal is a few steps, not a long chain.
 
 During tool rounds prefer **zero visible text** — call tools directly; any user-visible text follows the Reply language rules above.
 

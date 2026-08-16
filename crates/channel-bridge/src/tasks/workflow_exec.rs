@@ -1,7 +1,9 @@
 //! Workflow execution helpers extracted from `tasks.rs`.
 //!
 //! Live entry: cron jobs with a `workflow` file run this DAG executor from
-//! `crate::scheduler` (ADR 014 §6).
+//! `crate::scheduler` (ADR 014 §6). Workbench / embedded sessions use
+//! [`anycode_agent::GraphEngine`] instead (same topo + `execute_task` model;
+//! ADR 000 §4) so dashboard does not depend on channel-bridge.
 
 use super::tasks_run::{run_goal_task_with_tail, run_single_task_with_tail, RunTaskOptions};
 use super::tasks_sink::ReplSink;

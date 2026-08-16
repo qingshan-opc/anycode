@@ -86,15 +86,47 @@ fn tool_name_for_result_msg(msg: &Message, id_to_name: &HashMap<String, String>)
 /// 清空较早的可压缩 tool_result，保留时间轴上最后 `keep_recent` 条（与 Claude `slice(-keepRecent)` 一致）。
 /// 返回被替换的条数。
 pub fn apply_microcompact(messages: &mut [Message], keep_recent: usize) -> usize {
-    let id_to_name = collect_tool_use_id_to_name(messages);
     let ordered = compactable_tool_use_ids_in_order(messages);
     if ordered.is_empty() {
         return 0;
     }
     let keep_n = keep_recent.max(1);
     let start = ordered.len().saturating_sub(keep_n);
-    let keep_set: HashSet<&str> = ordered[start..].iter().map(|s| s.as_str()).collect();
+    let keep_set: HashSet<String> = ordered[start..].iter().cloned().collect();
+    clear_compactable_except(messages, &keep_set)
+}
 
+/// Live 循环：保留**最近一条带 tool_calls 的 assistant** 对应的全部 tool_result，
+/// 清空更早的可压缩结果。避免 `keep_recent=3` 把刚并行跑完、模型还没看见的结果清掉。
+pub fn apply_microcompact_keep_latest_turn(messages: &mut [Message]) -> usize {
+    let keep_ids = latest_turn_tool_use_ids(messages);
+    if keep_ids.is_empty() {
+        return 0;
+    }
+    clear_compactable_except(messages, &keep_ids)
+}
+
+fn latest_turn_tool_use_ids(msgs: &[Message]) -> HashSet<String> {
+    for msg in msgs.iter().rev() {
+        if msg.role != MessageRole::Assistant {
+            continue;
+        }
+        let Some(raw) = msg.metadata.get(ANYCODE_TOOL_CALLS_METADATA_KEY) else {
+            continue;
+        };
+        let Ok(calls) = serde_json::from_value::<Vec<ToolCall>>(raw.clone()) else {
+            continue;
+        };
+        if calls.is_empty() {
+            continue;
+        }
+        return calls.into_iter().map(|c| c.id).collect();
+    }
+    HashSet::new()
+}
+
+fn clear_compactable_except(messages: &mut [Message], keep_ids: &HashSet<String>) -> usize {
+    let id_to_name = collect_tool_use_id_to_name(messages);
     let mut cleared = 0usize;
     for msg in messages.iter_mut() {
         if msg.role != MessageRole::Tool {
@@ -114,7 +146,7 @@ pub fn apply_microcompact(messages: &mut [Message], keep_recent: usize) -> usize
         else {
             continue;
         };
-        if keep_set.contains(tool_use_id.as_str()) {
+        if keep_ids.contains(tool_use_id) {
             continue;
         }
         if content == CLEARED_TOOL_RESULT_PLACEHOLDER {
@@ -216,5 +248,57 @@ mod tests {
         assert_eq!(c("a"), CLEARED_TOOL_RESULT_PLACEHOLDER);
         assert_eq!(c("b"), "out2");
         assert_eq!(c("c"), "out3");
+    }
+
+    #[test]
+    fn keep_latest_turn_preserves_full_parallel_batch() {
+        let mut msgs = vec![
+            asst_with_tools(vec![ToolCall {
+                id: "old".into(),
+                name: TOOL_FILE_READ.into(),
+                input: serde_json::json!({}),
+            }]),
+            tool_res("old", TOOL_FILE_READ, "old body"),
+            asst_with_tools(
+                (0..5)
+                    .map(|i| ToolCall {
+                        id: format!("n{i}"),
+                        name: TOOL_FILE_READ.into(),
+                        input: serde_json::json!({}),
+                    })
+                    .collect(),
+            ),
+        ];
+        for i in 0..5 {
+            msgs.push(tool_res(
+                &format!("n{i}"),
+                TOOL_FILE_READ,
+                &format!("body{i}"),
+            ));
+        }
+        let n = apply_microcompact_keep_latest_turn(&mut msgs);
+        assert_eq!(n, 1);
+        let c = |id: &str| {
+            msgs.iter()
+                .find_map(|m| match &m.content {
+                    MessageContent::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } if tool_use_id == id => Some(content.as_str()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(c("old"), CLEARED_TOOL_RESULT_PLACEHOLDER);
+        for i in 0..5 {
+            assert_eq!(c(&format!("n{i}")), format!("body{i}").as_str());
+        }
+    }
+
+    #[test]
+    fn keep_latest_turn_noop_without_tool_calls() {
+        let mut msgs = vec![tool_res("x", TOOL_BASH, "out")];
+        assert_eq!(apply_microcompact_keep_latest_turn(&mut msgs), 0);
     }
 }

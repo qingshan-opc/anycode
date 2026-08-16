@@ -173,7 +173,7 @@ pub fn compose_effective_system_prompt(
             return if skip_plugins {
                 out.join("\n\n")
             } else {
-                append_plugin_overlays(out.join("\n\n"))
+                append_plugin_overlays(out.join("\n\n"), Some(Path::new(cwd)))
             };
         }
     }
@@ -187,12 +187,12 @@ pub fn compose_effective_system_prompt(
     if skip_plugins {
         composed
     } else {
-        append_plugin_overlays(composed)
+        append_plugin_overlays(composed, Some(Path::new(cwd)))
     }
 }
 
-fn append_plugin_overlays(mut prompt: String) -> String {
-    for plugin in crate::plugins::load_builtin_plugins()
+fn append_plugin_overlays(mut prompt: String, workspace: Option<&Path>) -> String {
+    for plugin in crate::plugins::load_plugins(workspace)
         .into_iter()
         .filter(|p| p.enabled)
     {

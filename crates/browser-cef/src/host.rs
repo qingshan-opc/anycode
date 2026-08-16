@@ -35,6 +35,8 @@ struct BrowserTab {
     browser: Browser,
     url: String,
     title: String,
+    /// Hidden placeholder kept alive after the user closes the last visible tab.
+    placeholder: bool,
 }
 
 struct HostState {
@@ -408,6 +410,7 @@ wrap_life_span_handler! {
                     browser,
                     url,
                     title: String::new(),
+                    placeholder: false,
                 });
                 g.active_id = Some(id);
             }
@@ -678,17 +681,63 @@ pub fn show_in_parent(
     let parent = content_view_ptr(ns_window)?;
     let _container = ensure_container(parent, rect)?;
 
-    let has_tabs = {
+    let has_live = {
         let g = state().lock().map_err(|e| e.to_string())?;
-        !g.tabs.is_empty()
+        g.tabs.iter().any(|t| !t.placeholder)
     };
-    if has_tabs {
+    if has_live {
         // Layout / design-mode toggles must never hijack the active tab URL.
         resize(rect)?;
         return Ok(());
     }
 
+    if reactivate_placeholder_tab(url)? {
+        resize(rect)?;
+        return Ok(());
+    }
+
     create_browser_in_container(url)
+}
+
+fn reactivate_placeholder_tab(url: &str) -> Result<bool, String> {
+    let browser = {
+        let mut g = state().lock().map_err(|e| e.to_string())?;
+        let Some(idx) = g.tabs.iter().position(|t| t.placeholder) else {
+            return Ok(false);
+        };
+        let tab_id = g.tabs[idx].id;
+        let tab = &mut g.tabs[idx];
+        tab.placeholder = false;
+        tab.url = if url.trim().is_empty() {
+            "about:blank".into()
+        } else {
+            url.to_string()
+        };
+        tab.title.clear();
+        let browser = tab.browser.clone();
+        g.active_id = Some(tab_id);
+        browser
+    };
+    let start_url = normalize_nav_url(if url.trim().is_empty() {
+        "about:blank"
+    } else {
+        url
+    });
+    if !start_url.is_empty() {
+        if let Some(frame) = browser.main_frame() {
+            frame.load_url(Some(&CefString::from(start_url.as_str())));
+        }
+    }
+    let container = state().lock().ok().map(|g| g.container).unwrap_or(0);
+    if container != 0 {
+        let view = unsafe { &*(container as *const NSView) };
+        view.setHidden(false);
+    }
+    if let Some((tabs, container_id, active_id)) = snapshot_tabs_for_layout() {
+        apply_active_visibility_unlocked(&tabs, container_id, active_id);
+    }
+    schedule_pump_work(0);
+    Ok(true)
 }
 
 pub fn resize(rect: EmbedRect) -> Result<(), String> {
@@ -799,36 +848,29 @@ pub fn close_tab(id: i32) -> Result<(), String> {
     };
     eprintln!("anycode-cef: close_tab({id}) last_tab={last_tab}");
     if last_tab {
-        // Last tab: tear down deterministically. The soft path is provably
-        // stuck for the final browser — DoClose returns 1 (else the whole
-        // Tauri window would close) and CEF then waits for native view
-        // destruction before firing OnBeforeClose, which never happens, so
-        // the tab lived in g.tabs forever.
+        // Last tab: keep the CEF host alive as a hidden placeholder. Force-
+        // closing the final browser races the message pump (EXC_BAD_ACCESS in
+        // do_message_loop_work). Hide the panel and blank the page instead.
+        hide();
         let browser = {
             let mut g = state().lock().map_err(|e| e.to_string())?;
             g.active_id = None;
-            g.tabs.pop().map(|t| t.browser)
+            g.tabs.iter_mut().find(|t| t.id == id).map(|t| {
+                t.placeholder = true;
+                t.url = "about:blank".into();
+                t.title.clear();
+                t.browser.clone()
+            })
         };
+        if let Some(browser) = browser {
+            if let Some(frame) = browser.main_frame() {
+                frame.load_url(Some(&CefString::from("about:blank")));
+            }
+            set_browser_view_hidden(&browser, true);
+        }
         if let Ok(mut pending) = FORCE_CLOSE_AFTER.lock() {
             pending.retain(|(existing, _)| *existing != id);
         }
-        if let Some(browser) = browser {
-            if let Some(host) = browser.host() {
-                // Force close: skips DoClose/beforeunload, guaranteeing browser
-                // destruction. CEF's own teardown removes the browser NSView
-                // from the container — do NOT removeFromSuperview early: in the
-                // layer-backed WKWebView window that can leave CEF touching a
-                // detached view during the next pump (observed as EXC_BAD_ACCESS
-                // inside do_message_loop_work). The late OnBeforeClose is a
-                // no-op (the tab is already gone from g.tabs → position() → None).
-                host.close_browser(1);
-            }
-            if let Ok(mut pending) = PENDING_BROWSER_DROPS.lock() {
-                pending.push(browser);
-            }
-        }
-        // No empty container rect left behind; the next show/new-tab unhides.
-        hide();
         schedule_pump_work(0);
         return Ok(());
     }
@@ -867,6 +909,7 @@ pub fn list_tabs() -> Vec<TabInfo> {
         .map(|g| {
             g.tabs
                 .iter()
+                .filter(|t| !t.placeholder)
                 .map(|t| TabInfo {
                     id: t.id,
                     url: t.url.clone(),
@@ -884,7 +927,10 @@ pub fn list_tabs() -> Vec<TabInfo> {
 
 /// Cheap liveness probe for the pump scheduler (no Vec allocation).
 pub fn has_tabs() -> bool {
-    state().lock().map(|g| !g.tabs.is_empty()).unwrap_or(false)
+    state()
+        .lock()
+        .map(|g| g.tabs.iter().any(|t| !t.placeholder))
+        .unwrap_or(false)
 }
 
 pub fn current_url() -> Option<String> {

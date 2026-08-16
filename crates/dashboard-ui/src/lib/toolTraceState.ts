@@ -17,20 +17,23 @@ export function toolTraceStreaming(
   if (steps.some(toolStepRunning)) {
     return true;
   }
-  return steps.length === 0 && processMessageCount > 0;
+  // Pre-tool wait, or post-tool reasoning while the tip cluster is still live.
+  if (processMessageCount > 0) {
+    return true;
+  }
+  return steps.length === 0;
 }
 
-/** Show the "thinking…" header only before the first tool step lands. */
+/**
+ * Show the thinking fold while the tip cluster is live and we have reasoning
+ * snippets — including *after* tools finish (Codex/Cursor mid-turn).
+ */
 export function toolTraceShowThinkingHeader(
-  steps: ToolStep[],
+  _steps: ToolStep[],
   processMessageCount: number,
   segmentActive: boolean,
 ): boolean {
-  return (
-    toolTraceStreaming(steps, processMessageCount, segmentActive) &&
-    steps.length === 0 &&
-    processMessageCount > 0
-  );
+  return segmentActive && processMessageCount > 0;
 }
 
 /** True when a later assistant reply or tool round has already started. */
@@ -45,11 +48,16 @@ export function toolClusterSegmentSettled(
     }
     if (row.kind === "block") {
       const block = row.block;
+      if (block.block_type === "progress_update") {
+        return true;
+      }
+      // Later waterfall prose (thinking / mid-turn narration) settles the prior
+      // tool pill — Cursor keeps the completed round as a compact record.
       if (
-        block.block_type === "progress_update" ||
-        (block.block_type === "system_notice" &&
-          block.meta?.source === "intermediate_assistant" &&
-          (block.body?.trim()?.length ?? 0) > 0)
+        block.block_type === "system_notice" &&
+        (block.meta?.source === "intermediate_assistant" ||
+          block.meta?.source === "thinking_delta") &&
+        (block.body?.trim()?.length ?? 0) > 0
       ) {
         return true;
       }
@@ -64,9 +72,13 @@ export function toolClusterSegmentSettled(
   return false;
 }
 
-/** Whether this cluster should still receive the session-running flag. */
+/**
+ * Tip cluster on a running turn stays live until a later reply settles it.
+ * Tools finishing mid-turn must not collapse thinking into a one-line summary
+ * (that hid long context in the composer pill only).
+ */
 export function toolClusterSegmentActive(
-  steps: ToolStep[],
+  _steps: ToolStep[],
   sessionRunning: boolean,
   isLastClusterOnLastTurn: boolean,
   settled: boolean,
@@ -74,12 +86,7 @@ export function toolClusterSegmentActive(
   if (!sessionRunning || !isLastClusterOnLastTurn || settled) {
     return false;
   }
-  if (steps.some(toolStepRunning)) {
-    return true;
-  }
-  if (steps.length > 0) {
-    return false;
-  }
+  // Keep the tip live for running tools, pre-tool wait, and post-tool thinking.
   return true;
 }
 

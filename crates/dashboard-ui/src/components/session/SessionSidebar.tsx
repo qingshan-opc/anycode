@@ -32,6 +32,7 @@ export function SessionSidebar() {
     startSessionForProject,
     goHome,
     onRenameSession,
+    onArchiveSession,
     onRenameProject,
     onRemoveProject,
     optimisticStreamingSessionId,
@@ -142,6 +143,7 @@ export function SessionSidebar() {
           activeProjectId={projectId}
           onSelectProject={goHome}
           onRenameSession={onRenameSession}
+          onArchiveSession={onArchiveSession}
           onRenameProject={onRenameProject}
           onRemoveProject={onRemoveProject}
           optimisticStreamingSessionId={optimisticStreamingSessionId}

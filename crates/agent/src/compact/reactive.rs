@@ -50,12 +50,12 @@ pub struct TurnGroup {
 }
 
 impl TurnGroup {
-    /// 粗略 token 估计：字符数 / 4（对齐 Claude 的估算意图，非精确计数）。
+    /// 粗略 token 估计：Unicode 标量 / 4（与 `agentic_loop::estimate_input_tokens_for_messages` 一致）。
     pub fn estimated_tokens(&self) -> u32 {
         let mut chars = 0usize;
         let mut count = |m: &Message| match &m.content {
-            MessageContent::Text(t) => chars += t.len(),
-            MessageContent::ToolResult { content, .. } => chars += content.len(),
+            MessageContent::Text(t) => chars += t.chars().count(),
+            MessageContent::ToolResult { content, .. } => chars += content.chars().count(),
             _ => {}
         };
         if let Some(u) = &self.user {
@@ -65,7 +65,7 @@ impl TurnGroup {
         for t in &self.tools {
             count(t);
         }
-        (chars / 4).max(1) as u32
+        ((chars as u32).saturating_add(3) / 4).max(1)
     }
 
     pub fn messages(&self) -> Vec<Message> {

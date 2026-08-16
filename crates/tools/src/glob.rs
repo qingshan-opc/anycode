@@ -47,7 +47,8 @@ impl Tool for GlobTool {
             File discovery by glob from an optional root (`path`).\n\
             - Use `**` for recursive patterns (e.g. `src/**/*.rs`).\n\
             - Results are capped (truncated=true when over limit); narrow the pattern if needed.\n\
-            - Paths respect sandbox_mode relative to the task working directory.",
+            - Paths respect sandbox_mode relative to the task working directory.\n\
+            - Can be batched with other read-only tools (Grep/FileRead/WebSearch) in the same turn.",
             self.description()
         )
     }

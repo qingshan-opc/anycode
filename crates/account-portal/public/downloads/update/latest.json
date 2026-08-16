@@ -1,0 +1,11 @@
+{
+  "version": "0.42.1",
+  "notes": "",
+  "pub_date": "2026-08-13T11:19:11Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTL0xuWnpnTS9HbXZwemlwK1lxKzZuRVJJUU5YSHRVdjB0Uk5iQTBzT2pSOGZYUjVZWHlyVURNUmk3VmVPWVA2KzJyb1RGWVJYemtNT2U4TTJpVDc1cHgybjFoZXpVTndBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NjE5ODQ3CWZpbGU6YW55Q29kZS5hcHAudGFyLmd6CmxQQWlOVzFEaGpBdW16eE5FSS9LYTIrYlV0K2RXUGluajZTcE5RR1MzalVZUEZEQVhnaGkzbk9uRWJpSWdDTEdnSEtKSjZkenBCNk8rUCtNRFdXQ0J3PT0K",
+      "url": "https://anycode.work/downloads/update/anyCode_0.42.1_aarch64.app.tar.gz"
+    }
+  }
+}

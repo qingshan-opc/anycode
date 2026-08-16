@@ -84,7 +84,7 @@ curl -fsSL --proto '=https' --tlsv1.2 \
   "https://raw.githubusercontent.com/qingjiuzys/anycode/main/scripts/install.sh" | bash -s -- --repo qingjiuzys/anycode
 ```
 
-打开 `http://127.0.0.1:43180/setup` 配置模型，发送「请只回复：OK」验证。
+打开 **anyCode.app**，在设置向导（`/setup`）中配置模型，发送「请只回复：OK」验证。
 
 ---
 

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { MemoryCenterPanel } from "@/components/settings/MemoryCenterPanel";
 import { MemoryRetentionPanel } from "@/components/settings/MemoryRetentionPanel";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { useRuntimeSettings } from "@/hooks/useRuntimeSettings";
@@ -67,6 +68,7 @@ export function SettingsDataSection() {
           </>
         )}
       </SectionCard>
+      <MemoryCenterPanel />
       <MemoryRetentionPanel />
     </>
   );

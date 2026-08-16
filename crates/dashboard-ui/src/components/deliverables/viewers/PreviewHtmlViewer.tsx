@@ -1,7 +1,7 @@
 import { Icon } from "@/components/Icon";
 import { DeliverableCompactShell } from "@/components/deliverables/DeliverableCompactShell";
 import { DeliverableIframePreview } from "@/components/deliverables/DeliverableIframePreview";
-import { DeliverablePanelShell } from "@/components/deliverables/DeliverablePanelShell";
+import { HtmlImmersiveViewer } from "@/components/deliverables/viewers/HtmlImmersiveViewer";
 import { useT } from "@/i18n/context";
 import { resolvePreviewUrl } from "@/lib/previewPath";
 
@@ -68,9 +68,7 @@ export function PreviewHtmlViewer({
   }
 
   return (
-    <DeliverablePanelShell path={path} projectId={projectId} title={title} metaLabel={label}>
-      <DeliverableIframePreview src={previewUrl} title={title} size="dialog" />
-    </DeliverablePanelShell>
+    <HtmlImmersiveViewer path={path} projectId={projectId} />
   );
 }
 

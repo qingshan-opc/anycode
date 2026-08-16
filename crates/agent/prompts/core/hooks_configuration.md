@@ -1,7 +1,8 @@
-# Hooks configuration
+# Hooks configuration (internal)
 
-The runtime may fire lifecycle hooks (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `Stop`, `Notification`) that are configured outside this prompt. Hooks can block, inject extra context, or run side effects.
+anyCode does **not** expose a user-configurable `hooks.json` bus
+(`SessionStart`, `UserPromptSubmit`, `Stop`, `Notification`).
 
-- If a `PreCompact` hook blocks compaction, continue the session uncompacted instead of forcing a summary.
-- Hook-injected context arrives as additional user-role messages; treat it as authoritative input.
-- Do not attempt to call or configure hooks through chat — they are host-side configuration.
+Internal compaction may skip a microcompact pass when a runtime
+`CompactionHooks` implementation blocks it. That is host-internal only —
+do not tell the user to configure hooks through chat.

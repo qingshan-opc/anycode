@@ -1,14 +1,16 @@
 ---
 name: anycode-ppt
 description: >-
-  anyCode editorial HTML slides — COPY fde-editorial templates into an HTML deck
-  + index viewer. No pptx export — required .pptx goes to
-  presentation-commercial-delivery. Use for ppt, slides, 幻灯片, 演示文稿.
+  anyCode HTML slides. User locks a VisualBrief skin (bg/ink/accent/fonts) in the
+  PPT studio. Infer outline and page count from the topic; create original main
+  visuals (SVG, canvas, local ECharts). Do NOT copy all templates or pad to 12
+  pages. Use for ppt, slides, 幻灯片, 演示文稿. No pptx export.
 description_zh: >-
-  anyCode HTML 幻灯片：从 templates/ 复制 FDE Editorial 样式，交付分页 HTML + 浏览器预览，不导出 pptx。
+  anyCode HTML 幻灯片：用户只锁定皮肤（背景/文字/强调色），模型按题目推断页数与大纲，
+  用 SVG / canvas / 本地 ECharts 做原创主视觉。禁止为凑模板硬凑 12 页。不导出 pptx。
 name_zh: anyCode HTML 幻灯片
 category: office
-version: 2.0.0
+version: 3.1.0
 mode: executable
 approval: writes-workspace
 channel_capabilities: [files, artifacts]
@@ -19,58 +21,60 @@ permissions:
   read_dirs: [workspace]
   write_dirs: [workspace]
   network: false
+ui: ui/surface.yaml
 ---
 
 # anycode-ppt
 
-**HTML 幻灯片唯一正确路径** — FDE Editorial 视觉（`#f2f5f0` / `#231f20` / `#1400ff`），交付 **分页 HTML + index.html 预览器**。
+**皮肤锁定 · 创意放开** — 用户在 PPT 视觉工作台选 **风格家族**（Open Design 版式签名或色板）。  
+Agent **按题目推断大纲与页数**；色板家族用原创主视觉，`od-*` 家族锁定视觉签名只填文案。
 
-> 不导出 `.pptx`。HTML 保真、可 diff、浏览器直接演示，比 OOXML 转译更可靠。
+> 不导出 `.pptx`。默认 FDE 三色 **仅当没有 VisualBrief**。有 brief 必须跟 `brief.tokens`。
 
-## 禁止（违反则 validate 失败）
+## 禁止
 
-- **禁止从零写 CSS** / 禁止 `scripts/office/slide-templates/lingqi/` / 禁止企业蓝 `#1B3A5C`、绿 `#00B050`
-- 禁止渐变、阴影、大圆角（>8px）、footer 写 `lingqi`
-- 禁止跳过本 skill 直接用 Write 造 slides
-- **禁止** `presentation-commercial-delivery` / `fill_potx` / 生成 `.pptx`（除非用户**另外**明确要求 pptx）
+- **禁止**为凑组件表硬凑 12 页；**禁止**把全部 `templates/` 当 checklist 拷完
+- **禁止** CDN（`https://…echarts…` 等）；图表用 skill 包内 `vendor/echarts.min.js`
+- **禁止** lingqi 企业蓝 `#1B3A5C` / 绿 `#00B050`、footer 写 `lingqi`
+- **禁止** `presentation-commercial-delivery` / `fill_potx` / 生成 `.pptx`（除非用户另外明确要求）
+- **禁止**在已锁定 `brief.family` 后仍刷 FDE 默认色（除非 family 就是 `fde-editorial`）
+- **禁止**只有标题、没有主视觉的空页
 
 ## 必须工作流
 
-1. **Read** `components.md` + `templates/`（见下方组件表）
-2. **Copy** 最接近的模板 → `slides/NN-name.html`，**只改文案与数据**，保留 `:root` 令牌与 class 名
-3. 页数按内容定（≥2）；选对组件（四层架构 → `layer-stack-4`；Agent 循环 → `agent-cycle`）
-4. `run slides/` — 等价于 design + validate + 生成 `index.html`
-5. 交付物：`slides/*.html` + `index.html` + `slide_manifest.json` + `evidence/*.png`（预览缩略）
+0. **Skill App（LLM 驱动）**：消息里还没有 VisualBrief 时，先调 `SkillAppPresent(skill_id="anycode-ppt", wait="brief")`，等用户选好风格并点「交给 Agent」。  
+   - 消息里已有 `[Host VisualBrief …]` 或工具已返回 `brief`：立刻开跑，不要再 Present，不要回「已锁定」。
+1. **先写大纲**（可写进回复或 `slides/OUTLINE.md`）：按题目决定页数与每页叙事角色。
+   - 短 briefing：约 **5–8** 页
+   - 培训 / 投标 / 研究报告：约 **8–14** 页
+   - 只在叙事需要时加页；同一结构可重复，也可完全不用旧模板
+2. **Read** skill 包：`families.md`、`creative-visuals.md`、可选 `templates/`（参考，非必拷）
+   - 若 `brief.family` 以 `od-` 开头：**锁定视觉签名**（构图/字体/强调色位置），像视频模板一样只填文案，不要套 FDE ladder 通用版式
+3. **Write** `slides/NN-slug.html`：
+   - 画布 1920×1080；每页 `:root` 写 `brief.tokens`（`--bg` `--ink` `--accent` 与字体）
+   - **鼓励**原创 CSS、inline SVG（可动画）、canvas（银河/粒子）、本地 ECharts
+   - `templates/` 仅在版式碰巧合适时复制改写；`od-*` 家族优先用对应 `templates/od-*.html`
+4. 若用到 ECharts：把 `vendor/echarts.min.js` **Copy** 到 `slides/vendor/echarts.min.js`，页面用相对路径引用
+5. `run slides/` — design + validate + 生成无侧栏 `index.html`
+6. 交付：`slides/*.html` + `index.html` + `slide_manifest.json`（+ 可选 evidence）
 
-## 组件表（完整列表见 components.md）
-
-| 场景 | 模板 |
-|------|------|
-| 封面 | `cover.html` |
-| 章节 | `section.html` |
-| 线性流程 | `ladder-flow.html` |
-| 四层架构 | `layer-stack-4.html` |
-| Agent 五步循环 | `agent-cycle.html` |
-| 双卡对比 | `duo-compare.html` |
-| 三列要点 | `trio-cards.html` |
-| KPI 数据 | `metrics-kpi.html` |
-| 金句 / 结论 | `quote-insight.html` |
-| 路线图 | `timeline.html` |
-| 行动清单 | `checklist.html` |
-| 插图页 | `diagram-image.html` |
-| 收尾 | `closing.html` |
+**路径**：skill 说明与 `vendor/` 在 skill 包；`slides/` 写在项目工作区。
 
 ## 视觉契约
 
-- `visual-format.md` + `docs/design/fde-editorial-contract.md`
-- 密度：`diagram-density.md`（content 页需主视觉 class 或 `<img>`）
+| 来源 | 管什么 |
+|------|--------|
+| `families.md` / `brief.tokens` | 背景、文字、强调色、字体 |
+| `od-*` 家族 + `templates/od-*.html` | 锁定版式签名（Open Design） |
+| 模型 | 页数、大纲、排版、主视觉创意（色板家族） |
+| `creative-visuals.md` | SVG / ECharts / canvas 写法与无网约定 |
+| `diagram-density.md` | 每页须有主视觉（禁止空页） |
 
-## 预览与交付
+## 预览
 
-- **`index.html`** — 左侧目录 + iframe 16:9 预览，`←` `→` 翻页，`F` 新标签打开当前页
-- **`evidence/*.png`** — Playwright 截图，供 Workbench 缩略预览，**不是**终稿
-- **终稿** = `slides/` 目录下的 HTML 分页文件
+- **`index.html`** — 无侧栏；1920×1080 contain 缩放；`←` `→` 翻页
+- **终稿** = `slides/` 下 HTML 分页
 
-## DeepSeek 执行要点
+## DeepSeek
 
-Read `../_shared/deepseek-office.md` — **只复制 templates/**，禁止自写 CSS；改完必须 `run slides/`。
+Read `../_shared/deepseek-office.md` — 先大纲再写页；允许自写 CSS/SVG/ECharts；禁止 12 模板全拷；改完必须 `run slides/`。

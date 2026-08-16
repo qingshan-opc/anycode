@@ -3,7 +3,7 @@
 use super::agentic_loop::{coop_flag_wait, nested_coop_cancelled, task_cancelled_failure};
 use super::agentic_turn::{
     MessageAppendSink, NoToolRecovery, TurnToolBatchOutcome, TurnToolCancel, TurnToolCancelOutcome,
-    TurnToolCtx, TurnToolState,
+    TurnToolCtx, TurnToolDispatchKernel, TurnToolState,
 };
 use super::budget::{
     record_llm_usage, tick_budget, token_budget_context_section, RuntimeBudgetState,
@@ -499,15 +499,6 @@ impl AgentRuntime {
                 }
             }
 
-            logger.line(
-                task.id,
-                &format!(
-                    "[turn_end] turn={} tool_calls={}",
-                    turn,
-                    turn_tool_calls.len()
-                ),
-            );
-
             let tool_ctx = TurnToolCtx {
                 task_id: task.id,
                 agent_type: &task.agent_type,
@@ -524,18 +515,22 @@ impl AgentRuntime {
                 budget_state: budget_state.clone(),
                 progress_seq: 0,
                 checked_deliverables: std::collections::HashSet::new(),
+                sandbox_escape_streak: 0,
+                last_sandbox_escape_key: None,
             };
             let mut sink = MessageAppendSink::Vec(&mut messages);
             match self
-                .dispatch_turn_tool_calls(
+                .run_turn_tool_dispatch_kernel(
                     &logger,
-                    &tool_ctx,
                     &mut tool_state,
-                    &TurnToolCancel::Nested(&task.context),
                     &mut sink,
-                    turn_tool_calls,
-                    false,
-                    TurnToolCancelOutcome::TaskCancelled,
+                    TurnToolDispatchKernel {
+                        tool_ctx,
+                        cancel: TurnToolCancel::Nested(&task.context),
+                        turn_tool_calls,
+                        record_evidence: false,
+                        cancel_outcome: TurnToolCancelOutcome::TaskCancelled,
+                    },
                 )
                 .await?
             {

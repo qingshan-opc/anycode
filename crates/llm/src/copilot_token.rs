@@ -26,11 +26,25 @@ struct CopilotTokenApiBody {
     expires_at: serde_json::Value,
 }
 
-pub fn anycode_credentials_dir() -> PathBuf {
-    dirs::home_dir()
+pub fn anycode_home_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("ANYCODE_HOME") {
+        let t = p.trim();
+        if !t.is_empty() {
+            return PathBuf::from(t);
+        }
+    }
+    std::env::var("HOME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".anycode")
-        .join("credentials")
+}
+
+pub fn anycode_credentials_dir() -> PathBuf {
+    anycode_home_dir().join("credentials")
 }
 
 pub fn copilot_token_cache_path() -> PathBuf {

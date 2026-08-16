@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PPT 视觉工作台</title>
+  <style>
+
+    :root {
+      --ui-bg: #eceee8;
+      --ui-ink: #1c1a1b;
+      --ui-muted: #5e5a58;
+      --ui-line: #c9cdc4;
+      --ui-card: #fff;
+      font-family: "IBM Plex Sans", "PingFang SC", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--ui-bg); color: var(--ui-ink); padding: 14px 16px 20px; }
+    h1 { font-size: 1.05rem; margin: 0 0 2px; letter-spacing: -0.03em; }
+    .sub { font-size: 0.75rem; color: var(--ui-muted); margin: 0 0 14px; line-height: 1.45; }
+    h2 { font-size: 0.72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ui-muted); margin: 16px 0 8px; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+    .card {
+      background: var(--ui-card); border: 2px solid transparent; border-radius: 4px;
+      padding: 6px; cursor: pointer; text-align: left; width: 100%;
+      box-shadow: 0 1px 2px rgba(0,0,0,.05); color: inherit; font: inherit;
+    }
+    .card.selected { border-color: #1400ff; box-shadow: 0 0 0 1px #1400ff; }
+    .card .name { font-size: 0.78rem; font-weight: 700; margin-top: 6px; }
+    .card .hint { font-size: 0.65rem; color: var(--ui-muted); margin-top: 2px; line-height: 1.3; }
+    .thumb {
+      aspect-ratio: 16/9; border-radius: 2px; overflow: hidden; position: relative;
+      border: 1px solid rgba(0,0,0,.08);
+    }
+    .thumb * { pointer-events: none; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
+    button.act {
+      border: 0; border-radius: 4px; padding: 8px 14px; background: #1400ff; color: #fff;
+      font-size: 0.85rem; cursor: pointer; font-weight: 700;
+    }
+    button.ghost { background: #231f20; color: #fff; }
+    .status { font-size: 0.75rem; min-height: 1.2em; color: #444; margin-top: 8px; }
+    .preview-wrap {
+      margin-top: 12px; border: 1px solid var(--ui-line); border-radius: 4px; overflow: hidden;
+      background: #111;
+    }
+    .preview-label {
+      font-size: 0.65rem; letter-spacing: .12em; text-transform: uppercase;
+      color: #aaa; padding: 6px 10px; background: #1a1a1a;
+    }
+    #previewSlide { aspect-ratio: 16/9; width: 100%; max-height: 280px; position: relative; overflow: hidden; }
+
+/* —— style family miniatures —— */
+    .f-fde { background: #f2f5f0; color: #231f20; }
+    .f-fde .kicker { position:absolute; left:8%; top:12%; font: 700 7px/1 monospace; color:#1400ff; letter-spacing:.12em; }
+    .f-fde .rule { position:absolute; left:8%; top:22%; width:55%; height:3px; background:#231f20; }
+    .f-fde .ttl { position:absolute; left:8%; top:32%; font: 900 13px/1.15 "Songti SC", serif; width:70%; }
+    .f-fde .acc { position:absolute; left:8%; bottom:18%; width:28%; height:10px; background:#1400ff; }
+
+    .f-apple { background: #000; color: #fff; }
+    .f-apple .ttl { position:absolute; left:10%; top:28%; font: 600 18px/1.05 -apple-system, sans-serif; letter-spacing:-.04em; width:80%; }
+    .f-apple .cap { position:absolute; left:10%; bottom:18%; font: 400 8px/1.3 -apple-system, sans-serif; color:#8e8e93; }
+
+    .f-swiss { background: #fff; color: #111; }
+    .f-swiss .sq { position:absolute; left:8%; top:12%; width:14px; height:14px; background:#e30613; }
+    .f-swiss .ttl { position:absolute; left:8%; top:38%; font: 700 11px/1 Helvetica, Arial, sans-serif; text-transform:uppercase; letter-spacing:.08em; }
+    .f-swiss .cols { position:absolute; left:8%; bottom:14%; right:8%; display:flex; gap:6px; height:28%; }
+    .f-swiss .cols i { flex:1; background:#eee; display:block; }
+
+    .f-night { background: #0e1117; color: #e6edf3; }
+    .f-night .ttl { position:absolute; left:8%; top:16%; font: 500 9px/1.2 ui-monospace, monospace; color:#7ee787; }
+    .f-night .num { position:absolute; left:8%; top:40%; font: 700 16px/1 ui-monospace, monospace; color:#79c0ff; }
+    .f-night .bar { position:absolute; left:8%; bottom:16%; height:6px; width:40%; background:#238636; }
+
+    .f-paper { background: #f4efe6; color: #3b2a22; }
+    .f-paper .q { position:absolute; left:8%; top:8%; font: 400 28px/1 Georgia, serif; color:#8b3a3a; opacity:.45; }
+    .f-paper .ttl { position:absolute; left:8%; top:36%; font: italic 12px/1.25 Georgia, "Noto Serif SC", serif; width:78%; }
+
+    .f-mag { background: #f7f4ee; color: #111; }
+    .f-mag .num { position:absolute; right:4%; top:-6%; font: 900 42px/1 "Arial Black", sans-serif; color:#111; opacity:.12; }
+    .f-mag .strip { position:absolute; left:0; bottom:0; right:0; height:22%; background:#f5c518; }
+    .f-mag .ttl { position:absolute; left:8%; top:28%; font: 900 12px/1.1 sans-serif; width:60%; }
+
+    .f-nord { background: #eceff4; color: #2e3440; }
+    .f-nord .ttl { position:absolute; left:8%; top:22%; font: 700 12px/1.15 sans-serif; }
+    .f-nord .dots { position:absolute; left:8%; bottom:18%; display:flex; gap:4px; }
+    .f-nord .dots i { width:10px; height:10px; border-radius:1px; display:block; }
+    .f-nord .dots i:nth-child(1){background:#5e81ac} .f-nord .dots i:nth-child(2){background:#88c0d0}
+    .f-nord .dots i:nth-child(3){background:#a3be8c}
+
+    .f-ink { background: #fff; color: #000; }
+    .f-ink .band { position:absolute; left:0; top:0; right:0; height:22%; background:#000; }
+    .f-ink .ttl { position:absolute; left:8%; top:40%; font: 800 13px/1.1 Helvetica, sans-serif; }
+
+    .f-coral { background: #faf6f4; color: #231f20; }
+    .f-coral .blk { position:absolute; left:0; top:0; width:18%; height:100%; background:#e8826b; }
+    .f-coral .ttl { position:absolute; left:24%; top:30%; font: 700 12px/1.15 sans-serif; width:68%; }
+
+    .f-blue { background: #0b1c3a; color: #d6e4ff; }
+    .f-blue::before { content:""; position:absolute; inset:8%; border:1px solid rgba(214,228,255,.25); }
+    .f-blue .ttl { position:absolute; left:14%; top:30%; font: 600 11px/1.2 ui-monospace, monospace; color:#7ec8ff; }
+
+    .f-acad { background: #fbfaf7; color: #1a2744; }
+    .f-acad .ttl { position:absolute; left:8%; top:18%; font: 700 11px/1.2 "Palatino", "Noto Serif SC", serif; width:55%; }
+    .f-acad .col { position:absolute; right:8%; top:16%; bottom:16%; width:32%; background:#eef1f6; }
+
+    .f-tokyo { background: #1a1b26; color: #c0caf5; }
+    .f-tokyo .ttl { position:absolute; left:8%; top:26%; font: 600 12px/1.15 sans-serif; }
+    .f-tokyo .g { position:absolute; left:8%; bottom:16%; width:50%; height:8px; background:#7aa2f7; }
+    .f-tokyo .g2 { position:absolute; left:8%; bottom:16%; width:18%; height:8px; background:#bb9af7; margin-left:52%; }
+
+    .f-brutal { background: #fff45c; color: #111; }
+    .f-brutal .box { position:absolute; left:10%; top:18%; right:10%; bottom:18%; border:3px solid #111; }
+    .f-brutal .ttl { position:absolute; left:16%; top:36%; font: 900 13px/1 "Arial Black", sans-serif; }
+
+    .f-xhs { background: #fffdfa; color: #2b2b2b; }
+    .f-xhs .dot { position:absolute; left:8%; top:12%; width:10px; height:10px; background:#fe2c55; border-radius:50%; }
+    .f-xhs .ttl { position:absolute; left:8%; top:34%; font: 700 12px/1.2 "Noto Serif SC", serif; width:78%; }
+
+    .f-vc { background: #fff; color: #0f172a; }
+    .f-vc .num { position:absolute; left:8%; top:12%; font: 800 22px/1 sans-serif; color:#6366f1; }
+    .f-vc .ttl { position:absolute; left:8%; top:48%; font: 600 11px/1.2 sans-serif; width:70%; }
+
+    .f-jp { background: #f6f1e7; color: #1a1a1a; }
+    .f-jp .seal { position:absolute; right:10%; top:14%; width:16px; height:16px; background:#c41e3a; }
+    .f-jp .ttl { position:absolute; left:12%; top:42%; font: 500 11px/1.3 "Noto Serif SC", serif; letter-spacing:.2em; }
+
+    .f-bau { background: #f4f1ea; color: #1a1a1a; }
+    .f-bau .r { position:absolute; left:8%; top:12%; width:22%; height:40%; background:#e30613; }
+    .f-bau .y { position:absolute; left:34%; top:12%; width:22%; height:40%; background:#f5c518; }
+    .f-bau .b { position:absolute; left:60%; top:12%; width:22%; height:40%; background:#0055a5; }
+    .f-bau .ttl { position:absolute; left:8%; bottom:14%; font: 700 10px/1 Helvetica, sans-serif; text-transform:uppercase; letter-spacing:.1em; }
+
+    .f-term { background: #0b120c; color: #b6f5c0; }
+    .f-term .ttl { position:absolute; left:8%; top:22%; font: 500 9px/1.4 ui-monospace, monospace; }
+    .f-term .cur { position:absolute; left:8%; top:58%; width:8px; height:12px; background:#3dff7a; }
+
+
+    .f-od-poster { background:#F5F2EF; color:#1C1410; }
+    .f-od-poster .rule { position:absolute; left:8%; top:18%; width:50%; height:3px; background:#D8000F; }
+    .f-od-poster .fig { position:absolute; right:8%; top:10%; font:900 42px/1 Georgia,serif; color:#D8000F; transform:rotate(-6deg); }
+    .f-od-poster .ttl { position:absolute; left:8%; top:40%; font:900 14px/1 Georgia,serif; width:55%; }
+    .f-od-signal { background:#0e1117; }
+    .f-od-signal .card { position:absolute; right:8%; top:18%; bottom:18%; left:35%; background:#ff7a3d; border-radius:4px; }
+    .f-od-signal .num { position:absolute; right:12%; top:12%; font:900 28px/1 sans-serif; color:#ff7a3d; }
+    .f-od-voltage { background:#0a0f1c; }
+    .f-od-voltage .panel { position:absolute; left:0; top:0; bottom:0; width:48%; background:#1a2744; }
+    .f-od-voltage .ttl { position:absolute; left:12%; top:40%; font:700 14px/1 cursive; color:#5eead4; }
+    .f-od-electric { background:#05060a; }
+    .f-od-electric .top { position:absolute; left:0; right:0; top:0; height:48%; background:#fff; }
+    .f-od-electric .bot { position:absolute; left:0; right:0; bottom:0; height:48%; background:#1d4ed8; }
+    .f-od-electric .ttl { position:absolute; left:10%; top:18%; font:700 11px/1.2 sans-serif; color:#111; width:70%; }
+    .f-od-minimal { background:#faf8f4; }
+    .f-od-minimal .ttl { position:absolute; left:12%; top:42%; font:200 16px/1 Helvetica,sans-serif; color:#222; letter-spacing:.2em; }
+    .f-od-minimal .line { position:absolute; left:12%; top:58%; width:28%; height:1px; background:#c9a227; }
+    .f-od-stat { background:#111; color:#fff; }
+    .f-od-stat .num { position:absolute; left:8%; top:28%; font:900 36px/1 Helvetica,sans-serif; }
+    .f-od-stat .grid { position:absolute; left:8%; right:8%; bottom:16%; height:1px; background:#444; box-shadow:0 -20px 0 #333, 0 -40px 0 #333; }
+    .f-od-vignelli { background:#fff; color:#111; }
+    .f-od-vignelli .ttl { position:absolute; left:8%; top:40%; font:700 12px Helvetica,sans-serif; letter-spacing:.16em; }
+    .f-od-vignelli .bar { position:absolute; left:8%; top:28%; width:18%; height:4px; background:#e30613; }
+      </style>
+</head>
+<body>
+  <h1>PPT 视觉工作台</h1>
+  <p class="sub">选一种风格（点卡片只选中），再点「交给 Agent」。Open Design 锁定版式签名；色板家族只锁颜色，页数与主视觉由模型推断。</p>
+
+  <h2>Open Design</h2>
+  <div class="grid" id="odGrid"></div>
+  <h2>色板家族</h2>
+  <div class="grid" id="familyGrid"></div>
+
+  <div class="preview-wrap">
+    <div class="preview-label" id="previewLabel">预览</div>
+    <div id="previewSlide"></div>
+  </div>
+
+  <div class="row">
+    <button type="button" class="act" id="go" disabled>交给 Agent</button>
+    <button type="button" class="act ghost" id="save">仅保存草稿</button>
+    <button type="button" class="act ghost" id="back">返回会话</button>
+  </div>
+  <div class="status" id="status"></div>
+
+  <script>
+    const FAMILIES = [
+      { id: "od-bold-poster", name: "Bold Poster", hint: "纸白 · 番红大字", cls: "f-od-poster", group: "od",
+        tokens: { bg:"#F5F2EF", ink:"#1C1410", accent:"#D8000F", surface:"#F5F2EF",
+          serif:'Georgia,"Noto Serif SC",serif', sans:'"Space Grotesk",sans-serif' } },
+      { id: "od-bold-signal", name: "Bold Signal", hint: "暗底色块章节", cls: "f-od-signal", group: "od",
+        tokens: { bg:"#0e1117", ink:"#f5f5f7", accent:"#ff7a3d", surface:"#161b22",
+          serif:'"PingFang SC",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "od-creative-voltage", name: "Creative Voltage", hint: "电蓝分屏", cls: "f-od-voltage", group: "od",
+        tokens: { bg:"#0a0f1c", ink:"#e8eefc", accent:"#5eead4", surface:"#1a2744",
+          serif:'cursive', sans:'"PingFang SC",sans-serif' } },
+      { id: "od-electric-studio", name: "Electric Studio", hint: "上下分屏 quote", cls: "f-od-electric", group: "od",
+        tokens: { bg:"#05060a", ink:"#111111", accent:"#1d4ed8", surface:"#ffffff",
+          serif:'"PingFang SC",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "od-build-minimal", name: "Build Minimal", hint: "奢华留白", cls: "f-od-minimal", group: "od",
+        tokens: { bg:"#faf8f4", ink:"#222222", accent:"#c9a227", surface:"#ffffff",
+          serif:'Helvetica,sans-serif', sans:'Helvetica,sans-serif' } },
+      { id: "od-pentagram-stat", name: "Pentagram Stat", hint: "瑞士网格巨数字", cls: "f-od-stat", group: "od",
+        tokens: { bg:"#111111", ink:"#ffffff", accent:"#ffffff", surface:"#1a1a1a",
+          serif:'Helvetica,sans-serif', sans:'Helvetica,sans-serif' } },
+      { id: "od-vignelli", name: "Vignelli", hint: "红强调无衬线", cls: "f-od-vignelli", group: "od",
+        tokens: { bg:"#ffffff", ink:"#111111", accent:"#e30613", surface:"#f5f5f5",
+          serif:'Helvetica,sans-serif', sans:'Helvetica,sans-serif' } },
+      { id: "fde-editorial", name: "FDE 编辑风", hint: "杂志衬线 · 电光蓝", cls: "f-fde",
+        tokens: { bg:"#f2f5f0", ink:"#231f20", accent:"#1400ff", surface:"#ffffff",
+          serif:'"Songti SC","Noto Serif SC",serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "apple-keynote", name: "Apple Keynote", hint: "黑底大字 · WWDC", cls: "f-apple",
+        tokens: { bg:"#000000", ink:"#ffffff", accent:"#0a84ff", surface:"#1c1c1e",
+          serif:'-apple-system,sans-serif', sans:'-apple-system,sans-serif' } },
+      { id: "swiss-grid", name: "瑞士网格", hint: "Helvetica · 信号红", cls: "f-swiss",
+        tokens: { bg:"#ffffff", ink:"#111111", accent:"#e30613", surface:"#f4f4f4",
+          serif:"Helvetica,Arial,sans-serif", sans:"Helvetica,Arial,sans-serif" } },
+      { id: "night-engineering", name: "夜间工程", hint: "终端绿 · 数据", cls: "f-night",
+        tokens: { bg:"#0e1117", ink:"#e6edf3", accent:"#79c0ff", surface:"#161b22",
+          serif:"ui-monospace,monospace", sans:"ui-monospace,monospace" } },
+      { id: "paper-serif", name: "纸本衬线", hint: "奶油纸 · 酒红", cls: "f-paper",
+        tokens: { bg:"#f4efe6", ink:"#3b2a22", accent:"#8b3a3a", surface:"#fffaf3",
+          serif:'Georgia,"Noto Serif SC",serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "magazine-bold", name: "杂志大刊", hint: "超大数字 · 黄条", cls: "f-mag",
+        tokens: { bg:"#f7f4ee", ink:"#111111", accent:"#f5c518", surface:"#ffffff",
+          serif:'"Arial Black",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "nord-frost", name: "Nord 冷色", hint: "北极蓝绿", cls: "f-nord",
+        tokens: { bg:"#eceff4", ink:"#2e3440", accent:"#5e81ac", surface:"#e5e9f0",
+          serif:'"PingFang SC",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "ink-mono", name: "墨黑极简", hint: "高对比黑白", cls: "f-ink",
+        tokens: { bg:"#ffffff", ink:"#000000", accent:"#000000", surface:"#f5f5f5",
+          serif:"Helvetica,sans-serif", sans:"Helvetica,sans-serif" } },
+      { id: "coral-warm", name: "暖珊瑚", hint: "侧栏色块", cls: "f-coral",
+        tokens: { bg:"#faf6f4", ink:"#231f20", accent:"#e8826b", surface:"#ffffff",
+          serif:'"PingFang SC",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "blueprint", name: "蓝图工程", hint: "海军底 · 线框", cls: "f-blue",
+        tokens: { bg:"#0b1c3a", ink:"#d6e4ff", accent:"#7ec8ff", surface:"#12264a",
+          serif:"ui-monospace,monospace", sans:"ui-monospace,monospace" } },
+      { id: "academic", name: "学术论文", hint: "象牙纸 · 双栏", cls: "f-acad",
+        tokens: { bg:"#fbfaf7", ink:"#1a2744", accent:"#1a365d", surface:"#eef1f6",
+          serif:'Palatino,"Noto Serif SC",serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "tokyo-night", name: "Tokyo Night", hint: "暗紫霓虹", cls: "f-tokyo",
+        tokens: { bg:"#1a1b26", ink:"#c0caf5", accent:"#7aa2f7", surface:"#24283b",
+          serif:'"PingFang SC",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "neo-brutalism", name: "新粗野", hint: "厚边 · 明黄", cls: "f-brutal",
+        tokens: { bg:"#fff45c", ink:"#111111", accent:"#111111", surface:"#ffffff",
+          serif:'"Arial Black",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "xiaohongshu", name: "小红书白", hint: "暖红 · 衬线", cls: "f-xhs",
+        tokens: { bg:"#fffdfa", ink:"#2b2b2b", accent:"#fe2c55", surface:"#ffffff",
+          serif:'"Noto Serif SC",serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "pitch-deck-vc", name: "VC 路演", hint: "留白 · 靛蓝", cls: "f-vc",
+        tokens: { bg:"#ffffff", ink:"#0f172a", accent:"#6366f1", surface:"#f8fafc",
+          serif:'"PingFang SC",sans-serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "japanese-minimal", name: "日式极简", hint: "象牙 · 朱红", cls: "f-jp",
+        tokens: { bg:"#f6f1e7", ink:"#1a1a1a", accent:"#c41e3a", surface:"#fffaf3",
+          serif:'"Noto Serif SC",serif', sans:'"PingFang SC",sans-serif' } },
+      { id: "bauhaus", name: "包豪斯", hint: "红黄蓝几何", cls: "f-bau",
+        tokens: { bg:"#f4f1ea", ink:"#1a1a1a", accent:"#e30613", surface:"#ffffff",
+          serif:"Helvetica,Arial,sans-serif", sans:"Helvetica,Arial,sans-serif" } },
+      { id: "terminal-green", name: "绿屏终端", hint: "CRT · 等宽", cls: "f-term",
+        tokens: { bg:"#0b120c", ink:"#b6f5c0", accent:"#3dff7a", surface:"#122016",
+          serif:"ui-monospace,monospace", sans:"ui-monospace,monospace" } },
+    ];
+
+    const FAMILY_THUMB = {
+      "od-bold-poster": '<div class="thumb f-od-poster"><div class="rule"></div><div class="fig">03</div><div class="ttl">Make it loud.</div></div>',
+      "od-bold-signal": '<div class="thumb f-od-signal"><div class="num">01</div><div class="card"></div></div>',
+      "od-creative-voltage": '<div class="thumb f-od-voltage"><div class="panel"></div><div class="ttl">V~</div></div>',
+      "od-electric-studio": '<div class="thumb f-od-electric"><div class="top"></div><div class="bot"></div><div class="ttl">One agent. Every deck.</div></div>',
+      "od-build-minimal": '<div class="thumb f-od-minimal"><div class="ttl">build</div><div class="line"></div></div>',
+      "od-pentagram-stat": '<div class="thumb f-od-stat"><div class="num">42%</div><div class="grid"></div></div>',
+      "od-vignelli": '<div class="thumb f-od-vignelli"><div class="bar"></div><div class="ttl">VIGNELLI</div></div>',
+      "fde-editorial": '<div class="thumb f-fde"><div class="kicker">01 EDITORIAL</div><div class="rule"></div><div class="ttl">行业研究报告</div><div class="acc"></div></div>',
+      "apple-keynote": '<div class="thumb f-apple"><div class="ttl">FDE.</div><div class="cap">A new kind of industry</div></div>',
+      "swiss-grid": '<div class="thumb f-swiss"><div class="sq"></div><div class="ttl">Research</div><div class="cols"><i></i><i></i><i></i></div></div>',
+      "night-engineering": '<div class="thumb f-night"><div class="ttl">$ report --industry fde</div><div class="num">0.42</div><div class="bar"></div></div>',
+      "paper-serif": '<div class="thumb f-paper"><div class="q">“</div><div class="ttl">一种还没有名字的行业</div></div>',
+      "magazine-bold": '<div class="thumb f-mag"><div class="num">01</div><div class="ttl">FDE 特刊</div><div class="strip"></div></div>',
+      "nord-frost": '<div class="thumb f-nord"><div class="ttl">Frost report</div><div class="dots"><i></i><i></i><i></i></div></div>',
+      "ink-mono": '<div class="thumb f-ink"><div class="band"></div><div class="ttl">INDUSTRY NOTE</div></div>',
+      "coral-warm": '<div class="thumb f-coral"><div class="blk"></div><div class="ttl">暖色简报</div></div>',
+      "blueprint": '<div class="thumb f-blue"><div class="ttl">SPEC / FDE</div></div>',
+      "academic": '<div class="thumb f-acad"><div class="ttl">Working paper</div><div class="col"></div></div>',
+      "tokyo-night": '<div class="thumb f-tokyo"><div class="ttl">夜报 · infra</div><div class="g"></div></div>',
+      "neo-brutalism": '<div class="thumb f-brutal"><div class="box"></div><div class="ttl">SHIP IT</div></div>',
+      "xiaohongshu": '<div class="thumb f-xhs"><div class="dot"></div><div class="ttl">一条好看的研究笔记</div></div>',
+      "pitch-deck-vc": '<div class="thumb f-vc"><div class="num">10x</div><div class="ttl">The category is new</div></div>',
+      "japanese-minimal": '<div class="thumb f-jp"><div class="seal"></div><div class="ttl">余白</div></div>',
+      "bauhaus": '<div class="thumb f-bau"><div class="r"></div><div class="y"></div><div class="b"></div><div class="ttl">Form follows</div></div>',
+      "terminal-green": '<div class="thumb f-term"><div class="ttl">root@anycode:~# report</div><div class="cur"></div></div>',
+    };
+
+    window.anycode = (function () {
+      let seq = 0;
+      const pending = new Map();
+      const pushListeners = [];
+      window.addEventListener("message", (ev) => {
+        const d = ev.data;
+        if (!d || typeof d !== "object") return;
+        if (d.method === "anycode.agent.push") {
+          pushListeners.forEach((fn) => fn(d.params));
+          return;
+        }
+        if (d.id != null && pending.has(d.id)) {
+          const { resolve, reject } = pending.get(d.id);
+          pending.delete(d.id);
+          if (d.error) reject(new Error(d.error.message || "bridge error"));
+          else resolve(d.result);
+        }
+      });
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = ++seq;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      }
+      return {
+        ready: () => call("anycode.ready"),
+        state: {
+          get: () => call("anycode.state.get"),
+          set: (patch) => call("anycode.state.set", patch),
+        },
+        brief: { submit: (brief) => call("anycode.brief.submit", brief) },
+        agent: {
+          prompt: (payload) => call("anycode.agent.prompt", payload),
+          onPush: (fn) => { pushListeners.push(fn); },
+        },
+        ui: { backToChat: () => call("anycode.ui.backToChat") },
+      };
+    })();
+
+    let familyId = null;
+    const familyGrid = document.getElementById("familyGrid");
+    const odGrid = document.getElementById("odGrid");
+    const status = document.getElementById("status");
+    let waitBrief = false;
+    let handing = false;
+    let handedOff = false;
+
+    function family() {
+      return FAMILIES.find((f) => f.id === familyId) || null;
+    }
+    function syncGo() {
+      const go = document.getElementById("go");
+      go.disabled = !familyId || handing || handedOff;
+    }
+    function fillGrid(el, items) {
+      el.innerHTML = "";
+      items.forEach((f) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "card" + (f.id === familyId ? " selected" : "");
+        btn.innerHTML = (FAMILY_THUMB[f.id] || "") + '<div class="name">' + f.name + '</div><div class="hint">' + f.hint + "</div>";
+        btn.onclick = () => {
+          familyId = f.id;
+          renderAll();
+        };
+        el.appendChild(btn);
+      });
+    }
+    function renderFamilies() {
+      fillGrid(odGrid, FAMILIES.filter((f) => f.id.startsWith("od-")));
+      fillGrid(familyGrid, FAMILIES.filter((f) => !f.id.startsWith("od-")));
+      syncGo();
+    }
+
+    function renderPreview() {
+      const f = family();
+      if (!f) {
+        document.getElementById("previewLabel").textContent = "预览 · 请选择一种风格";
+        document.getElementById("previewSlide").innerHTML = "";
+        return;
+      }
+      const t = f.tokens;
+      document.getElementById("previewLabel").textContent = "皮肤预览 · " + f.name + " · " + f.id;
+      const el = document.getElementById("previewSlide");
+      el.style.background = t.bg;
+      el.style.color = t.ink;
+      const body =
+        '<div style="font:700 10px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;color:' + t.accent + ';margin-bottom:10px">' + f.id + "</div>" +
+        '<div style="font-family:' + t.serif + ';font-weight:800;font-size:28px;letter-spacing:-.03em;line-height:1.1;margin-bottom:10px">行业研究报告</div>' +
+        '<div style="font-size:13px;opacity:.7;max-width:80%;line-height:1.4">页数与主视觉由 Agent 按题目推断</div>';
+      if (f.id === "apple-keynote") {
+        el.innerHTML = '<div style="position:absolute;inset:18% 10%;font-family:-apple-system,sans-serif"><div style="font-size:42px;font-weight:600;letter-spacing:-.05em">FDE.</div><div style="margin-top:12px;color:#8e8e93;font-size:14px">A new kind of industry</div></div>';
+      } else if (f.id === "swiss-grid") {
+        el.innerHTML = '<div style="position:absolute;left:8%;top:12%;width:28px;height:28px;background:#e30613"></div><div style="position:absolute;left:8%;top:42%;font:700 22px Helvetica,sans-serif;letter-spacing:.08em;text-transform:uppercase">Research</div>';
+      } else if (f.id === "bauhaus") {
+        el.innerHTML = '<div style="position:absolute;left:8%;top:18%;width:18%;height:48%;background:#e30613"></div><div style="position:absolute;left:30%;top:18%;width:18%;height:48%;background:#f5c518"></div><div style="position:absolute;left:52%;top:18%;width:18%;height:48%;background:#0055a5"></div><div style="position:absolute;left:8%;bottom:14%;font:700 16px Helvetica">FORM FOLLOWS FUNCTION</div>';
+      } else if (f.id === "terminal-green") {
+        el.innerHTML = '<div style="position:absolute;inset:16% 8%;font:16px/1.6 ui-monospace,monospace;color:#3dff7a">root@anycode:~# outline<br/># 推断页数 · 原创主视觉</div>';
+      } else if (f.id === "neo-brutalism") {
+        el.innerHTML = '<div style="position:absolute;inset:16% 10%;border:4px solid #111;padding:18px;font:900 26px/1.1 \'Arial Black\',sans-serif">SHIP THE DECK</div>';
+      } else if (f.id === "od-bold-poster") {
+        el.innerHTML = '<div style="position:absolute;left:8%;top:14%;right:8%;height:3px;background:#D8000F"></div><div style="position:absolute;right:10%;top:18%;font:900 72px/1 Georgia;color:#D8000F;transform:rotate(-6deg)">03</div><div style="position:absolute;left:8%;top:42%;font:900 36px/1 Georgia;width:55%">Make it<br>loud.</div>';
+      } else if (f.id === "od-bold-signal") {
+        el.innerHTML = '<div style="position:absolute;right:10%;top:12%;font:900 48px sans-serif;color:#ff7a3d">01</div><div style="position:absolute;left:40%;top:20%;right:8%;bottom:20%;background:#ff7a3d;border-radius:8px"></div>';
+      } else if (f.id === "od-creative-voltage") {
+        el.innerHTML = '<div style="position:absolute;left:0;top:0;bottom:0;width:48%;background:#1a2744"></div><div style="position:absolute;left:14%;top:40%;font:700 32px cursive;color:#5eead4">V~</div>';
+      } else if (f.id === "od-electric-studio") {
+        el.innerHTML = '<div style="position:absolute;left:0;right:0;top:0;height:48%;background:#fff"></div><div style="position:absolute;left:0;right:0;bottom:0;height:48%;background:#1d4ed8"></div><div style="position:absolute;left:10%;top:16%;font:700 22px sans-serif;color:#111">One agent.<br>Every deck.</div>';
+      } else if (f.id === "od-build-minimal") {
+        el.innerHTML = '<div style="position:absolute;left:12%;top:42%;font:200 28px Helvetica;letter-spacing:.25em">build</div><div style="position:absolute;left:12%;top:58%;width:28%;height:1px;background:#c9a227"></div>';
+      } else if (f.id === "od-pentagram-stat") {
+        el.innerHTML = '<div style="position:absolute;left:8%;top:28%;font:900 72px Helvetica">42%</div>';
+      } else if (f.id === "od-vignelli") {
+        el.innerHTML = '<div style="position:absolute;left:8%;top:28%;width:18%;height:6px;background:#e30613"></div><div style="position:absolute;left:8%;top:42%;font:700 22px Helvetica;letter-spacing:.16em">VIGNELLI</div>';
+      } else {
+        el.innerHTML = '<div style="position:absolute;inset:10% 8%;display:flex;flex-direction:column;justify-content:center">' + body +
+          '<div style="margin-top:16px;height:8px;width:28%;background:' + t.accent + '"></div></div>';
+      }
+    }
+
+    function renderAll() {
+      renderFamilies();
+      renderPreview();
+    }
+
+    function snapshot() {
+      return { familyId };
+    }
+
+    function buildBrief() {
+      const f = family();
+      const od = f.id.startsWith("od-");
+      return {
+        skill_id: "anycode-ppt",
+        schema: "visual-brief/v1",
+        family: f.id,
+        templates: od ? [f.id] : [],
+        tokens: f.tokens,
+        density: od ? "signature" : "creative",
+        notes: od
+          ? "Open Design family " + f.id + " (" + f.name + "). Lock visual signature — use templates/" + f.id + ".html as cover/layout reference. Fill content from the user topic; keep composition/fonts/accent discipline. Apply brief.tokens to :root. Do NOT fall back to FDE ladder layouts."
+          : "Skin only (" + f.name + "). Infer outline and page count from the user topic — do NOT copy all 12 templates. Apply brief.tokens to :root. Create original main visuals (SVG / canvas / local ECharts). Never pad to 12 pages.",
+      };
+    }
+
+    document.getElementById("save").onclick = async () => {
+      if (!familyId) {
+        status.textContent = "请先选择一种风格";
+        return;
+      }
+      await anycode.state.set(snapshot());
+      status.textContent = "草稿已保存 · " + family().name;
+    };
+    document.getElementById("go").onclick = () => {
+      void handoff();
+    };
+    document.getElementById("back").onclick = () => {
+      if (anycode.ui && anycode.ui.backToChat) void anycode.ui.backToChat();
+    };
+
+    async function handoff() {
+      if (handing || !familyId) return;
+      handing = true;
+      syncGo();
+      try {
+        const brief = buildBrief();
+        await anycode.state.set(snapshot());
+        await anycode.brief.submit(brief);
+        handedOff = true;
+        waitBrief = false;
+        status.textContent = "已交给 Agent · " + family().name + " · 正在返回会话";
+        if (anycode.ui && anycode.ui.backToChat) {
+          await anycode.ui.backToChat();
+        }
+      } catch (e) {
+        status.textContent = String(e);
+      } finally {
+        handing = false;
+        syncGo();
+      }
+    }
+
+    async function boot() {
+      await anycode.ready();
+      const snap = await anycode.state.get();
+      const st = (snap && snap.state) || {};
+      waitBrief = snap && snap.wait_brief === true;
+      if (st.familyId && FAMILIES.some((f) => f.id === st.familyId)) familyId = st.familyId;
+      status.textContent = waitBrief
+        ? "选好风格后点「交给 Agent」"
+        : snap && snap.brief
+          ? "选好风格后点「交给 Agent」· 上次 " + (snap.brief.family || "")
+          : "先选一种风格，再点「交给 Agent」";
+      renderAll();
+      anycode.agent.onPush((p) => {
+        if (p && p.wait_brief === true) waitBrief = true;
+        status.textContent = "Agent push: " + (p && p.message ? p.message : JSON.stringify(p));
+      });
+    }
+    boot().catch((e) => {
+      status.textContent = String(e);
+    });
+  </script>
+</body>
+</html>

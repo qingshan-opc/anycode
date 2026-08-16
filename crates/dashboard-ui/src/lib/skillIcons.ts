@@ -31,6 +31,7 @@ const SKILL_ICON_BY_ID: Record<string, string> = {
   "anycode-pdf": "description",
   "anycode-docx": "description",
   "anycode-xlsx": "bar_chart",
+  "anycode-video": "movie",
   "video-script": "movie",
   "anycode-release": "build",
   "flutter-bootstrap": "construction",

@@ -1,8 +1,8 @@
-# ADR 009: Graph memory spike
+# ADR 009: Graph memory (LightRAG default)
 
 ## Status
 
-Proposed (spike complete; no runtime integration)
+Accepted (M2 foundation, 2026-08)
 
 ## Context
 
@@ -11,35 +11,46 @@ anyCode memory today is file-backed with optional vector retrieval (`pipeline` /
 provenance for tool outputs but does not model relationships between entities,
 sessions, or channel scopes.
 
-Graph memory would help long-running agents answer questions like “which files did
-we touch for issue X?” or “what did this cron job learn last week?” without stuffing
+Graph memory helps long-running agents answer questions like “which files did we
+touch for issue X?” or “what did this cron job learn last week?” without stuffing
 raw transcripts back into context.
 
-## Decision (spike)
+An earlier spike (2026-05) deferred a custom JSONL edge log. For M2 we adopt an
+external graph-RAG sidecar instead of inventing a first-party graph store.
 
-**Do not integrate graph memory in 2026-05.** Capture the spike constraints below
-so a future slice can start without reopening architecture basics.
+## Decision
 
-### Candidate model
+**LightRAG is the default graph RAG backend** for anyCode when
+`memory.backend=lightrag`.
 
-- **Nodes**: `session`, `task`, `tool_call`, `artifact`, `memory_chunk`, `channel`.
-- **Edges**: `derived_from`, `mentioned_in`, `executed_in`, `notified_via`.
-- **Storage**: append-only JSONL edge log under `~/.anycode/memory/graph.jsonl`
-  mirroring evidence indexing; optional SQLite projection for queries.
+- Runtime talks to a local LightRAG HTTP sidecar (default
+  `http://127.0.0.1:18765`, override `ANYCODE_LIGHTRAG_URL`).
+- `anycode-memory::LightRagMemoryStore` implements `MemoryStore` (`save` /
+  `recall`) over REST (`POST /documents/text`, `POST /query`).
+- Bootstrap probes TCP reachability; on failure it **falls back to
+  `FileMemoryStore`** and logs a warning so chat never crashes.
+- `memory.backend=plugin:<id>` is a reserved MemoryBackendPlugin-style slot
+  (stub → file fallback until a real plugin registry lands).
 
-### Non-goals for v1 graph
+### Deferred
 
-- No automatic entity extraction LLM pass in the hot path.
-- No cross-user shared graph.
-- No replacement for compaction or vector retrieval.
+- Custom append-only JSONL graph (`~/.anycode/memory/graph.jsonl`) and a first-party
+  entity/edge model remain **deferred**. Evidence + audit JSONL stay the local
+  provenance SSOT; LightRAG owns relationship retrieval when enabled.
+- No automatic entity-extraction LLM pass in the agent hot path beyond what the
+  sidecar performs asynchronously.
+- No cross-user shared graph in the Desktop product surface.
 
-### Integration hooks (when implemented)
+### Integration hooks
 
-1. Write edges from existing `tool_audit` + `evidence` append paths.
-2. Expose `anycode memory graph query --json` read-only CLI before agent retrieval.
-3. Gate agent retrieval behind config `memory.graph.enabled` default `false`.
+1. Config: `memory.backend: "lightrag"` (aliases `light-rag`, `graph`).
+2. Composition: `build_memory_layer` in `crates/bootstrap/src/memory_setup.rs`.
+3. Settings UI: Memory Center reads `GET /api/settings/memory/center`.
 
 ## Consequences
 
-- Evidence + audit JSONL remain the production SSOT for May 2026.
-- Graph memory is documented but deferred; avoids half-integrated retrieval paths.
+- Operators must run a LightRAG sidecar for graph recall; otherwise file memory
+  continues to work transparently.
+- JSONL custom graph work is explicitly out of the M2 critical path.
+- Future MemoryBackendPlugin implementations can occupy `plugin:<id>` without
+  changing the `MemoryStore` port.

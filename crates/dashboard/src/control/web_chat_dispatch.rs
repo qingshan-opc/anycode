@@ -98,61 +98,42 @@ pub async fn dispatch_web_chat_prompt(
         crate::control::web_chat_tail::publish_project_chat_event(&state.events, &evt);
     }
 
-    let embedded = crate::control::chat_runtime::ChatRuntimeHost::enabled();
-    let dashboard_url = dashboard_loopback_url(&state.host, state.port);
     let drain = Some(crate::control::message_queue::QueueDrainContext::new(
         Arc::new(state.clone()),
     ));
-    let chat_result = if embedded {
-        state
-            .chat_runtime
-            .send(
-                state.db.clone(),
-                Arc::clone(&state.events),
-                &state.web_chat_tail,
-                session_id,
-                project_id,
-                root,
-                agent_type,
-                prompt,
-                &prompt_for_chat,
-                display_vision_images,
-                model_vision_images,
-                reply_lang,
-                composer_mode,
-                drain,
-            )
-            .await
-            .map_err(|e| {
-                if e.downcast_ref::<crate::control::chat_runtime::ChatSendConflict>()
-                    .is_some()
-                {
-                    (StatusCode::CONFLICT, e.to_string())
-                } else {
-                    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-                }
-            })
-    } else {
-        state
-            .web_chat
-            .send(
-                state.db.clone(),
-                session_id,
-                root,
-                agent_type,
-                &dashboard_url,
-                &prompt_for_chat,
-                model_vision_images,
-                text_files,
-                reply_lang,
-            )
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-    };
+    // Subprocess web chat was removed; always use in-process ChatRuntimeHost.
+    let chat_result = state
+        .chat_runtime
+        .send(
+            state.db.clone(),
+            Arc::clone(&state.events),
+            &state.web_chat_tail,
+            session_id,
+            project_id,
+            root,
+            agent_type,
+            prompt,
+            &prompt_for_chat,
+            display_vision_images,
+            model_vision_images,
+            reply_lang,
+            composer_mode,
+            drain,
+        )
+        .await
+        .map_err(|e| {
+            if e.downcast_ref::<crate::control::chat_runtime::ChatSendConflict>()
+                .is_some()
+            {
+                (StatusCode::CONFLICT, e.to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+        });
 
     match chat_result {
         Ok(chat) => {
-            if !embedded || log_tail_fallback_enabled() {
+            if log_tail_fallback_enabled() {
                 state.web_chat_tail.ensure_tail(
                     Arc::clone(&state.events),
                     session_id,
@@ -164,7 +145,7 @@ pub async fn dispatch_web_chat_prompt(
                 "web_chat": true,
                 "web_chat_log_path": chat.log_path,
                 "web_chat_pid": chat.pid,
-                "embedded_runtime": embedded,
+                "embedded_runtime": true,
             });
             if recycled {
                 meta["recycled"] = json!(true);
@@ -182,7 +163,7 @@ pub async fn dispatch_web_chat_prompt(
                         "web_chat": true,
                         "pid": chat.pid,
                         "recycled": recycled,
-                        "embedded_runtime": embedded,
+                        "embedded_runtime": true,
                     }),
                 },
             )
@@ -214,12 +195,4 @@ pub async fn dispatch_web_chat_prompt(
             Err((status, message))
         }
     }
-}
-
-fn dashboard_loopback_url(host: &str, port: u16) -> String {
-    let host = match host {
-        "0.0.0.0" | "::" => "127.0.0.1",
-        other => other,
-    };
-    format!("http://{host}:{port}")
 }

@@ -4,7 +4,7 @@
 
 ## 通用原则
 
-1. **先 Read 模板，再 Write** — 禁止跳过 `templates/` 自造结构。
+1. **先读 skill 契约，再 Write** — docx/xlsx/pdf 仍优先 Copy 模板；**anycode-ppt** 先大纲再写页，模板可选。
 2. **一步一验证** — 填完源文件后必须跑 skill 的 `run`；失败则修源文件重跑，不要手改终稿。
 3. **终稿清单** — 回复里列绝对路径：必须交付物 + 可选预览物。
 4. **禁止占位** — 无 TBD / lorem / 待填 / xxx；数字要具体。
@@ -14,7 +14,7 @@
 
 | 技能 | 源 | 终稿 | run 后必查 |
 |------|-----|------|-----------|
-| anycode-ppt | 复制 `templates/*.html` | `slides/*.html` + `index.html` | validate 通过、≥2 页 |
+| anycode-ppt | 先大纲；皮肤用 `brief.tokens`；可选参考 `templates/`；允许自写 CSS/SVG/本地 ECharts | `slides/*.html` + `index.html` | validate 通过、≥2 页、**勿硬凑 12** |
 | anycode-docx | 复制 `templates/*.md` | `.docx` + `.preview.html` | Decision/Action 行存在 |
 | anycode-xlsx | 复制 `templates/workbook-*.json` | `.xlsx` | recheck 无公式错误、≥3 sheet |
 | anycode-pdf | 复制 `templates/*.md` | `.pdf` + `.preview.html` | PDF 非空、中文文档用 GB/T 7714 引用格式 |

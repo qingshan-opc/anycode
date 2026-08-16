@@ -8,24 +8,30 @@ use uuid::Uuid;
 /// 云端托管只保留 DeepSeek V4 Flash / Pro。
 pub const ALLOWED_HOSTED_MODEL_IDS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
 
+/// MySQL 5.7 / MariaDB reject `CAST(x AS DOUBLE)` (MySQL 8.0.17+ only).
+/// `DECIMAL + 0e0` yields a DOUBLE that sqlx can decode as `f64`.
+const LIST_MODELS_SQL: &str = r#"
+        SELECT id, provider_id, display_name, context_window,
+               COALESCE(price_per_1m_input_cny, 0) + 0e0
+                 AS price_per_1m_input_cny,
+               COALESCE(price_per_1m_output_cny, 0) + 0e0
+                 AS price_per_1m_output_cny,
+               currency, min_plan
+        FROM cloud_models WHERE enabled = 1 ORDER BY sort_order ASC, display_name ASC
+"#;
+
+const MODEL_PRICE_SQL: &str = r#"
+        SELECT COALESCE(price_per_1m_input_cny, 0) + 0e0 AS pin,
+               COALESCE(price_per_1m_output_cny, 0) + 0e0 AS pout
+        FROM cloud_models WHERE id = ? AND enabled = 1
+"#;
+
 pub fn is_allowed_hosted_model(model_id: &str) -> bool {
     model_id == "auto" || ALLOWED_HOSTED_MODEL_IDS.contains(&model_id)
 }
 
 pub async fn list_models(db: &AccountDb, plan_tier: &str) -> Result<Vec<CloudModelView>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT id, provider_id, display_name, context_window,
-               CAST(COALESCE(price_per_1m_input_cny, 0) AS DOUBLE)
-                 AS price_per_1m_input_cny,
-               CAST(COALESCE(price_per_1m_output_cny, 0) AS DOUBLE)
-                 AS price_per_1m_output_cny,
-               currency, min_plan
-        FROM cloud_models WHERE enabled = 1 ORDER BY sort_order ASC, display_name ASC
-        "#,
-    )
-    .fetch_all(db.pool())
-    .await?;
+    let rows = sqlx::query(LIST_MODELS_SQL).fetch_all(db.pool()).await?;
 
     let mut out: Vec<CloudModelView> = rows
         .into_iter()
@@ -196,12 +202,10 @@ async fn usage_cost_fen(
     prompt_tokens: i64,
     completion_tokens: i64,
 ) -> i64 {
-    let row = sqlx::query(
-        "SELECT CAST(COALESCE(price_per_1m_input_cny, 0) AS DOUBLE) AS pin, CAST(COALESCE(price_per_1m_output_cny, 0) AS DOUBLE) AS pout FROM cloud_models WHERE id = ? AND enabled = 1",
-    )
-    .bind(model_id)
-    .fetch_optional(db.pool())
-    .await;
+    let row = sqlx::query(MODEL_PRICE_SQL)
+        .bind(model_id)
+        .fetch_optional(db.pool())
+        .await;
     let Ok(Some(row)) = row else {
         return 0;
     };
@@ -213,12 +217,11 @@ async fn usage_cost_fen(
 
 /// 额度余额（分）。额度制下这是托管调用的主要门槛；无过期时间。
 pub async fn credit_balance_fen(db: &AccountDb, org_id: &str) -> Result<i64> {
-    let balance: i64 = sqlx::query_scalar(
-        "SELECT credit_balance_fen FROM entitlements WHERE organization_id = ?",
-    )
-    .bind(org_id)
-    .fetch_one(db.pool())
-    .await?;
+    let balance: i64 =
+        sqlx::query_scalar("SELECT credit_balance_fen FROM entitlements WHERE organization_id = ?")
+            .bind(org_id)
+            .fetch_one(db.pool())
+            .await?;
     Ok(balance)
 }
 
@@ -278,5 +281,26 @@ mod tests {
         assert!(!is_allowed_hosted_model("agnes-chat"));
         assert!(!is_allowed_hosted_model("agnes-code"));
         assert!(!is_allowed_hosted_model("agnes-reasoner"));
+    }
+
+    #[test]
+    fn list_models_sql_avoids_mysql8_only_double_cast() {
+        assert!(
+            !LIST_MODELS_SQL.contains("AS DOUBLE"),
+            "CAST(... AS DOUBLE) 500s on production MySQL 5.7"
+        );
+        assert!(
+            !MODEL_PRICE_SQL.contains("AS DOUBLE"),
+            "CAST(... AS DOUBLE) 500s on production MySQL 5.7"
+        );
+        assert!(LIST_MODELS_SQL.contains("+ 0e0"));
+        assert!(MODEL_PRICE_SQL.contains("+ 0e0"));
+    }
+
+    #[test]
+    fn free_plan_sees_min_plan_free_including_v4_pro() {
+        assert!(plan_allows_model("free", "free"));
+        assert!(!plan_allows_model("free", "pro"));
+        assert!(plan_allows_model("pro", "pro"));
     }
 }

@@ -246,7 +246,7 @@ pub struct LLMConfig {
 pub struct MemoryConfig {
     pub path: PathBuf,
     pub auto_save: bool,
-    /// `noop` | `none` | `off` | `file` | `hybrid` | `pipeline`（运行时小写归一）
+    /// `noop` | `file` | `hybrid` | `pipeline` | `lightrag` | `plugin:<id>`（运行时小写归一）
     pub backend: String,
     /// `backend=pipeline` 时使用；其余 backend 忽略。
     pub pipeline: anycode_core::MemoryPipelineSettings,
@@ -313,7 +313,9 @@ pub struct MemoryPipelineConfigFile {
 /// `config.json` 中的 `memory` 段（serde）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfigFile {
-    /// `noop`（或 `none`/`off`）| `file` | `hybrid` | `pipeline`；默认持久化 `file`。
+    /// `noop`（或 `none`/`off`）| `file` | `hybrid` | `pipeline` | `lightrag` | `plugin:<id>`；默认 `file`。
+    /// `lightrag` talks to a local sidecar (`ANYCODE_LIGHTRAG_URL`, default `http://127.0.0.1:18765`);
+    /// unreachable sidecar falls back to file at bootstrap.
     #[serde(default = "default_memory_backend_kind")]
     pub backend: String,
     /// 记忆根目录。默认 `$HOME/.anycode/memory`；**相对路径相对于 `$HOME`**。
@@ -425,6 +427,20 @@ pub struct BrowserConnectorConfigFile {
     pub enabled: bool,
 }
 
+/// MCP governance (`config.json` → `mcp.governance`). Env vars override at runtime.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct McpGovernanceConfigFile {
+    /// Require `allowed_tools` non-empty allowlist (like `ANYCODE_MCP_STRICT`).
+    #[serde(default)]
+    pub strict: bool,
+    /// Per-server call cap for the process (like `ANYCODE_MCP_MAX_CALLS_PER_SERVER`).
+    #[serde(default)]
+    pub max_calls_per_server: Option<usize>,
+    /// Comma-equivalent list of logical tool names / `server:tool` pairs.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+}
+
 /// `config.json` 的 `mcp` 段（`tools-mcp` 特性下合并进运行时 MCP 列表）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpConfigFile {
@@ -433,6 +449,8 @@ pub struct McpConfigFile {
     /// MCP server 声明（stdio / HTTP / SSE）；结构与 `ANYCODE_MCP_SERVERS` JSON 数组项一致。
     #[serde(default)]
     pub servers: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub governance: McpGovernanceConfigFile,
 }
 
 /// 解析后的 MCP 运行时选项。
@@ -440,6 +458,7 @@ pub struct McpConfigFile {
 pub struct McpRuntime {
     pub browser: BrowserConnectorConfigFile,
     pub servers: Vec<serde_json::Value>,
+    pub governance: McpGovernanceConfigFile,
 }
 
 impl From<McpConfigFile> for McpRuntime {
@@ -447,6 +466,7 @@ impl From<McpConfigFile> for McpRuntime {
         Self {
             browser: f.browser,
             servers: f.servers,
+            governance: f.governance,
         }
     }
 }
@@ -561,7 +581,7 @@ impl Default for SkillsConfigFile {
             extra_dirs: vec![],
             allowlist: None,
             run_timeout_ms: default_skill_run_timeout_ms(),
-            minimal_env: false,
+            minimal_env: true,
             expose_on_explore_plan: false,
             registry_url: None,
             agent_allowlists: HashMap::new(),

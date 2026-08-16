@@ -22,11 +22,12 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::info;
 
-/// Injectable hosts for approval and ask-user.
+/// Injectable hosts for approval, ask-user, and Skill Apps.
 #[derive(Default)]
 pub struct RuntimeHosts {
     pub approval_override: Option<Box<dyn ApprovalCallback>>,
     pub ask_user_question_host: Option<Arc<dyn AskUserQuestionHost>>,
+    pub skill_app_host: Option<Arc<dyn anycode_tools::SkillAppHost>>,
 }
 
 /// Shared composition root for dashboard, daemon, and legacy CLI paths.
@@ -228,6 +229,26 @@ pub async fn initialize_runtime(
         tools_setup.tool_services.attach_ask_user_question_host(h);
     }
 
+    let skill_host: Option<Arc<dyn anycode_tools::SkillAppHost>> =
+        hosts.skill_app_host.or_else(|| {
+            let dashboard_session = std::env::var(anycode_dashboard_ipc::approval_ipc::SESSION_ENV)
+                .ok()
+                .filter(|s| !s.is_empty());
+            if dashboard_session.is_some()
+                && anycode_dashboard_ipc::skill_app_ipc::web_skill_apps_enabled()
+            {
+                Some(
+                    Arc::new(crate::workbench::workbench_skill_app::WorkbenchSkillAppHost::new())
+                        as Arc<dyn anycode_tools::SkillAppHost>,
+                )
+            } else {
+                None
+            }
+        });
+    if let Some(h) = skill_host {
+        tools_setup.tool_services.attach_skill_app_host(h);
+    }
+
     build_agents_setup(
         &runtime,
         config,
@@ -253,6 +274,7 @@ pub async fn initialize_runtime_legacy(
         RuntimeHosts {
             approval_override,
             ask_user_question_host: ask_user_question_host_override,
+            ..Default::default()
         },
         memory_attach,
         project_enabled,

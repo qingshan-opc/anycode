@@ -185,7 +185,6 @@ async fn run_inner(
         db,
         events: Arc::clone(&events),
         sessions: SessionStore::default(),
-        web_chat: crate::control::web_chat::WebChatHub,
         web_chat_tail: crate::control::web_chat_tail::WebChatTailHub::default(),
         chat_runtime: crate::control::chat_runtime::ChatRuntimeHost::new()
             .with_session_stores(db_for_state.clone(), Arc::clone(&events)),
@@ -438,7 +437,6 @@ pub async fn app_for_test_custom(db_path: &Path, opts: TestAppOptions) -> Result
         db,
         events: Arc::clone(&events),
         sessions: SessionStore::default(),
-        web_chat: crate::control::web_chat::WebChatHub,
         web_chat_tail: crate::control::web_chat_tail::WebChatTailHub::default(),
         chat_runtime: crate::control::chat_runtime::ChatRuntimeHost::new()
             .with_session_stores(db_for_state.clone(), Arc::clone(&events)),
@@ -505,8 +503,9 @@ mod tests {
         .await
         .unwrap();
 
-        // Embedded desktop trusts the loopback API without a cookie.
-        let loopback_trusted = app
+        // Packaged Desktop no longer trusts loopback alone — API requires the
+        // dw_session cookie minted by /api/auth/desktop-bootstrap.
+        let unauthenticated = app
             .clone()
             .oneshot(
                 axum::http::Request::builder()
@@ -516,7 +515,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(loopback_trusted.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            unauthenticated.status(),
+            axum::http::StatusCode::UNAUTHORIZED
+        );
 
         let boot = app
             .clone()

@@ -42,7 +42,8 @@ tracing = "0.1"
 anycode-apple-media = { path = "../../crates/apple-media" }
 anycode-browser-cef = { path = "../../crates/browser-cef", features = ["host"] }
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = ["NSURL", "NSString", "NSArray", "NSObject"] }
 
 [dev-dependencies]
 tempfile = "3.10"

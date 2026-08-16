@@ -10,9 +10,10 @@ import { useT } from "@/i18n/context";
 type Props = {
   session: SessionWithProject;
   onRename?: (sessionId: string, title: string) => void | Promise<void>;
+  onArchive?: (sessionId: string) => void;
 };
 
-export function SessionTitleMenu({ session, onRename }: Props) {
+export function SessionTitleMenu({ session, onRename, onArchive }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -165,7 +166,7 @@ export function SessionTitleMenu({ session, onRename }: Props) {
           <div
             ref={menuRef}
             id={listId}
-            className="dw-project-menu conv-title-menu__popup"
+            className="dw-project-menu conv-title-menu__popup dw-no-drag"
             style={{ left: menuPos.left, top: menuPos.top, minWidth: "15rem" }}
             role="menu"
           >
@@ -181,6 +182,22 @@ export function SessionTitleMenu({ session, onRename }: Props) {
               >
                 <Icon name="edit" size={16} />
                 <span className="dw-project-menu__label">{t("conversations.renameSession")}</span>
+              </button>
+            ) : null}
+            {onArchive ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="dw-project-menu__item"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setOpen(false);
+                  onArchive(session.id);
+                }}
+              >
+                <Icon name="archive" size={16} />
+                <span className="dw-project-menu__label">{t("conversations.archiveSession")}</span>
               </button>
             ) : null}
             <button

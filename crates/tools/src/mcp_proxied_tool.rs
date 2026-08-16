@@ -8,6 +8,25 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
+/// Runtime MCP governance from `config.json` → `mcp.governance` (installed at bootstrap).
+#[derive(Debug, Clone, Default)]
+pub struct McpGovernanceRuntime {
+    pub strict: bool,
+    pub max_calls_per_server: Option<usize>,
+    pub allowed_tools: HashSet<String>,
+}
+
+static MCP_GOVERNANCE: OnceLock<McpGovernanceRuntime> = OnceLock::new();
+
+/// Called once from bootstrap after config load.
+pub fn install_mcp_governance(governance: McpGovernanceRuntime) {
+    let _ = MCP_GOVERNANCE.set(governance);
+}
+
+fn configured_governance() -> Option<&'static McpGovernanceRuntime> {
+    MCP_GOVERNANCE.get()
+}
+
 static MCP_SERVER_COUNTS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 
 pub struct McpProxiedTool {
@@ -100,10 +119,13 @@ pub(crate) fn mcp_governance_check(
 }
 
 fn mcp_strict_enabled() -> bool {
-    matches!(
+    if matches!(
         std::env::var("ANYCODE_MCP_STRICT").as_deref(),
         Ok("1") | Ok("true") | Ok("yes") | Ok("on")
-    )
+    ) {
+        return true;
+    }
+    configured_governance().is_some_and(|g| g.strict)
 }
 
 fn mcp_max_calls_per_server() -> Option<usize> {
@@ -111,16 +133,30 @@ fn mcp_max_calls_per_server() -> Option<usize> {
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|v| *v > 0)
+        .or_else(|| {
+            configured_governance()
+                .and_then(|g| g.max_calls_per_server)
+                .filter(|v| *v > 0)
+        })
+}
+
+fn mcp_allowed_tools_set() -> HashSet<String> {
+    let from_env = std::env::var("ANYCODE_MCP_ALLOWED_TOOLS").unwrap_or_default();
+    if !from_env.trim().is_empty() {
+        return from_env
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    configured_governance()
+        .map(|g| g.allowed_tools.clone())
+        .unwrap_or_default()
 }
 
 fn mcp_tool_allowed(server: &str, logical_name: &str, mcp_tool_name: &str) -> bool {
-    let allow = std::env::var("ANYCODE_MCP_ALLOWED_TOOLS").unwrap_or_default();
-    let allow: HashSet<String> = allow
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect();
+    let allow = mcp_allowed_tools_set();
     if allow.is_empty() {
         return false;
     }

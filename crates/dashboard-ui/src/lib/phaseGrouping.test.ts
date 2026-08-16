@@ -28,7 +28,7 @@ function toolPair(id: string, key: string): TranscriptBlock[] {
 }
 
 describe("phaseGrouping", () => {
-  it("attaches tool cluster to preceding progress segment", () => {
+  it("keeps tool cluster without progress_update on the timeline", () => {
     const items = groupTurnReplies([
       block("p1", "progress_update", {
         body: "checking tests",
@@ -37,12 +37,15 @@ describe("phaseGrouping", () => {
       block("t1", "tool_call", { meta: { tool_key: "1:1" } }),
       block("t2", "tool_result", { meta: { tool_key: "1:1" } }),
     ]);
+    expect(items.every((i) => i.kind !== "block" || i.block.block_type !== "progress_update")).toBe(
+      true,
+    );
     const segments = groupTurnRepliesByPhase(items);
     expect(segments).toHaveLength(1);
     expect(segments[0]?.toolCluster?.steps).toHaveLength(1);
   });
 
-  it("dedupes narration when progress_update exists for same turn", () => {
+  it("drops progress_update and keeps narration for the same turn", () => {
     const items = groupTurnReplies([
       block("p1", "progress_update", { meta: { turn: 2, phase: "execute" }, body: "plan" }),
       block("n1", "assistant_message", {
@@ -51,7 +54,25 @@ describe("phaseGrouping", () => {
       }),
     ]);
     const deduped = dedupeNarrationWithProgress(items);
-    expect(deduped.filter((i) => i.kind === "block")).toHaveLength(1);
+    const blocks = deduped.filter((i) => i.kind === "block");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.kind === "block" && blocks[0].block.id).toBe("n1");
+  });
+
+  it("does not split tool clusters across progress_update", () => {
+    const items = groupTurnReplies([
+      block("t1", "tool_call", { meta: { tool_key: "1:1" } }),
+      block("t2", "tool_result", { meta: { tool_key: "1:1" } }),
+      block("p1", "progress_update", {
+        body: "正在运行 Bash",
+        meta: { phase: "execute", summary: "正在运行 Bash", turn: 1 },
+      }),
+      block("t3", "tool_call", { meta: { tool_key: "1:2" } }),
+      block("t4", "tool_result", { meta: { tool_key: "1:2" } }),
+    ]);
+    const clusters = items.filter((i) => i.kind === "tool_cluster");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.kind === "tool_cluster" && clusters[0].steps.length).toBe(2);
   });
 
   it("archives older phases on live turns", () => {

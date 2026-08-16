@@ -1,6 +1,7 @@
 //! 与 Claude Code `createPostCompactFileAttachments` 意图对齐：压缩后注入**少量**最近 FileRead 摘录，避免摘要丢光关键文件内容。
 //!
-//! anyCode 无 `readFileState` 缓存，从**压缩前**会话里的 FileRead `tool_result` JSON 解析 `path` + `content`。
+//! anyCode 无 `readFileState` 缓存，从**压缩前**会话里的 FileRead `tool_result`
+//! （JSON `{path,content}` 或 `path=…` 纯文本）解析摘录。
 
 use crate::compact::state::SessionCompactionState;
 use anycode_core::prelude::*;

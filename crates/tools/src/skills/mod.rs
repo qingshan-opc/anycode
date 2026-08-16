@@ -5,6 +5,7 @@ mod effective;
 pub mod install;
 pub mod router;
 pub mod scaffold;
+pub mod surface;
 pub mod vet;
 pub use effective::SkillsGovernance;
 pub use install::{
@@ -13,6 +14,10 @@ pub use install::{
 };
 pub use router::{
     resolve_capabilities, SelectedSkill, SkillMatchStatus, SkillResolution, SkillResolutionContext,
+};
+pub use surface::{
+    load_skill_surface, parse_surface_yaml, skill_ui_dir, SkillAppLifecycle, SkillAppSlot,
+    SkillSurface, SkillSurfacePermissions, VisualBrief,
 };
 pub use vet::{vet_skill_dir, SkillVetReport};
 
@@ -69,6 +74,9 @@ pub struct SkillManifest {
     /// Declarative post-run acceptance checks (see `skills::acceptance`).
     #[serde(default)]
     pub acceptance: Vec<acceptance::SkillAcceptanceCheck>,
+    /// Optional path to Skill App surface (relative to skill root), e.g. `ui/surface.yaml`.
+    #[serde(default)]
+    pub ui: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +97,9 @@ pub struct SkillMeta {
     pub provides_capabilities: Vec<String>,
     pub priority: i32,
     pub platforms: Vec<String>,
+    /// Skill App surface when `ui/` is present.
+    pub has_ui: bool,
+    pub surface: Option<SkillSurface>,
 }
 
 /// Snapshot of discovered skills (startup scan + optional cwd resolution at tool run).
@@ -121,7 +132,8 @@ impl SkillCatalog {
             skills: Vec::new(),
             by_id: HashMap::new(),
             run_timeout_ms: 120_000,
-            minimal_env: false,
+            // Prefer a scrubbed env for skill `run` unless config opts out.
+            minimal_env: true,
             roots_scanned: Vec::new(),
         }
     }
@@ -202,6 +214,8 @@ impl SkillCatalog {
                 }
                 let runner = skill_dir.join("run");
                 let has_run = runner.is_file();
+                let surface = load_skill_surface(&skill_dir);
+                let has_ui = surface.is_some();
                 map.insert(
                     id.clone(),
                     SkillMeta {
@@ -253,6 +267,8 @@ impl SkillCatalog {
                             .map(|s| s.trim().to_string())
                             .filter(|s| !s.is_empty())
                             .collect(),
+                        has_ui,
+                        surface,
                     },
                 );
             }
@@ -567,6 +583,30 @@ pub fn floor_char_boundary(s: &str, i: usize) -> usize {
     b
 }
 
+/// Parsed skill frontmatter permissions (enforced at `Skill` tool execute).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkillPermissions {
+    /// When `Some(false)`, executable `run` is refused (fail-closed).
+    pub network: Option<bool>,
+}
+
+impl SkillPermissions {
+    #[must_use]
+    pub fn from_value(v: Option<&serde_json::Value>) -> Self {
+        let Some(obj) = v.and_then(|x| x.as_object()) else {
+            return Self::default();
+        };
+        let network = obj.get("network").and_then(|x| x.as_bool());
+        Self { network }
+    }
+
+    /// `true` when the skill declares `network: false`.
+    #[must_use]
+    pub fn network_denied(&self) -> bool {
+        matches!(self.network, Some(false))
+    }
+}
+
 /// Truncate combined stdout+stderr style output for tool results.
 pub fn truncate_skill_output(mut s: String, max: usize) -> String {
     if s.len() <= max {
@@ -610,9 +650,11 @@ mod tests {
         assert_eq!(normalize_skill_category("business"), "office");
         assert_eq!(normalize_skill_category("quality"), "engineering");
         assert_eq!(
-            manifest.permissions.unwrap().get("network"),
+            manifest.permissions.as_ref().unwrap().get("network"),
             Some(&serde_json::Value::Bool(false))
         );
+        assert!(SkillPermissions::from_value(manifest.permissions.as_ref()).network_denied());
+        assert!(!SkillPermissions::from_value(None).network_denied());
     }
 
     #[test]

@@ -73,6 +73,34 @@ export const settingsClient = {
   testLlm: (capability: string) =>
     post<TestLlmResult>("/api/settings/llm", { capability }),
   policies: () => get<{ policy: PolicySummary }>("/api/settings/policies"),
+  securitySettings: () =>
+    get<{
+      security: {
+        sandbox_mode: boolean;
+        permission_mode: string;
+        require_approval: boolean;
+        embedded_desktop: boolean;
+        bypass_allowed: boolean;
+        config_path: string;
+      };
+    }>("/api/settings/security"),
+  putSecuritySettings: (body: {
+    sandbox_mode?: boolean;
+    permission_mode?: string;
+    require_approval?: boolean;
+  }) =>
+    put<{
+      ok: boolean;
+      security: {
+        sandbox_mode: boolean;
+        permission_mode: string;
+        require_approval: boolean;
+        embedded_desktop: boolean;
+        bypass_allowed: boolean;
+        config_path: string;
+      };
+      restart_hint?: string;
+    }>("/api/settings/security", body),
   dataHealth: () => get<{ health: DataHealth }>("/api/settings/data-health"),
   serviceStatus: () =>
     get<{ service: ServiceStatusDetail }>("/api/settings/service-status"),
@@ -93,6 +121,15 @@ export const settingsClient = {
       older_than_days: olderThanDays,
       confirm,
     }),
+  memoryCenter: () => get<Record<string, unknown>>("/api/settings/memory/center"),
+  patchMemoryBackend: (backend: string) =>
+    patch<{
+      ok: boolean;
+      backend?: string;
+      config_path?: string;
+      restart_hint?: string;
+      error?: string;
+    }>("/api/settings/memory/backend", { backend }),
   apiTokens: () => get<{ tokens: ApiTokenRecord[] }>("/api/settings/tokens"),
   createToken: (name: string, expiresDays?: number) =>
     post<{ token: ApiTokenRecord; plaintext: string }>(
@@ -180,12 +217,29 @@ export const settingsClient = {
       restart_hint?: string;
     }>("/api/settings/agent-limits", body),
   mcpServers: () =>
-    get<{ servers: Record<string, unknown>[] }>("/api/settings/mcp-servers"),
-  setMcpServers: (servers: unknown[]) =>
-    put<{ ok: boolean; servers: unknown[]; restart_hint?: string }>(
-      "/api/settings/mcp-servers",
-      { servers },
-    ),
+    get<{
+      servers: Record<string, unknown>[];
+      governance?: {
+        strict?: boolean;
+        max_calls_per_server?: number | null;
+        allowed_tools?: string[];
+        env_override_note?: string;
+      };
+    }>("/api/settings/mcp-servers"),
+  setMcpServers: (
+    servers: unknown[],
+    governance?: {
+      strict?: boolean;
+      max_calls_per_server?: number | null;
+      allowed_tools?: string[];
+    },
+  ) =>
+    put<{
+      ok: boolean;
+      servers: unknown[];
+      governance?: unknown;
+      restart_hint?: string;
+    }>("/api/settings/mcp-servers", { servers, governance }),
   promptPreview: (params?: { agent?: string; cwd?: string }) => {
     const q = new URLSearchParams();
     if (params?.agent) q.set("agent", params.agent);

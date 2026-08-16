@@ -26,6 +26,51 @@ pub(crate) fn truncate_text(s: String, max_bytes: usize) -> (String, bool) {
     (out, true)
 }
 
+/// Keep both the head and tail when truncating LLM-facing tool results so
+/// footers such as `ANYCODE_ARTIFACT:` survive the 8KiB cap.
+pub(crate) fn truncate_text_keep_tail(s: String, max_bytes: usize) -> (String, bool) {
+    const MARKER: &str = "\n...<truncated>...\n";
+    if s.len() <= max_bytes {
+        return (s, false);
+    }
+    if max_bytes <= MARKER.len() + 8 {
+        return truncate_text(s, max_bytes);
+    }
+    let budget = max_bytes.saturating_sub(MARKER.len());
+    let head_budget = budget / 3;
+    let tail_budget = budget - head_budget;
+    let head_end = char_boundary_at_or_before(&s, head_budget);
+    let tail_start = char_boundary_at_or_after(&s, s.len().saturating_sub(tail_budget));
+    if head_end >= tail_start {
+        return truncate_text(s, max_bytes);
+    }
+    let mut out = String::with_capacity(head_end + MARKER.len() + (s.len() - tail_start));
+    out.push_str(&s[..head_end]);
+    out.push_str(MARKER);
+    out.push_str(&s[tail_start..]);
+    (out, true)
+}
+
+fn char_boundary_at_or_before(s: &str, mut idx: usize) -> usize {
+    if idx > s.len() {
+        idx = s.len();
+    }
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn char_boundary_at_or_after(s: &str, mut idx: usize) -> usize {
+    if idx > s.len() {
+        return s.len();
+    }
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
 fn enrich_path_artifact(mut art: Artifact) -> Artifact {
     if let Some(path) = art.path.clone() {
         if art.kind.is_none() {
@@ -291,6 +336,18 @@ mod tests {
         assert!(t);
         assert!(s.contains("<truncated>"));
         assert!(s.chars().count() < 20);
+    }
+
+    #[test]
+    fn truncate_keep_tail_preserves_artifact_footer() {
+        let mut body = "HEAD\n".to_string();
+        body.push_str(&"x".repeat(400));
+        body.push_str("\nANYCODE_ARTIFACT:{\"path\":\"/tmp/deck.pptx\"}\n");
+        let (s, t) = truncate_text_keep_tail(body, 120);
+        assert!(t);
+        assert!(s.starts_with("HEAD"));
+        assert!(s.contains("ANYCODE_ARTIFACT:{\"path\":\"/tmp/deck.pptx\"}"));
+        assert!(s.contains("<truncated>"));
     }
 
     #[test]

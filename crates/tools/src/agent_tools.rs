@@ -9,7 +9,7 @@ use crate::services::ToolServices;
 use crate::skills::{
     acceptance as skill_acceptance, extract_markdown_sections, extract_skill_body,
     load_skill_instructions, parse_skill_manifest_file, parse_skill_manifest_text,
-    truncate_skill_output, SkillCatalog, MAX_SKILL_OUTPUT_BYTES,
+    truncate_skill_output, SkillCatalog, SkillPermissions, MAX_SKILL_OUTPUT_BYTES,
 };
 use anycode_core::prelude::*;
 use anycode_core::DiskTaskOutput;
@@ -756,6 +756,8 @@ impl Tool for SkillTool {
                 duration_ms: start.elapsed().as_millis() as u64,
             });
         };
+        // Skill App HITL is host-driven (auto-present on ppt prompts). Do not
+        // re-present here — that re-opens the studio after the user already locked a brief.
         let runner = root.join("run");
         if !runner.is_file() {
             let Some(body) = load_skill_instructions(&root) else {
@@ -784,7 +786,7 @@ impl Tool for SkillTool {
                     result: serde_json::json!({
                         "skill": skill_name,
                         "mode": "usage",
-                        "hint": "This skill has a run script; pass required paths in args (string array).",
+                        "hint": "This skill has a run script; pass required paths in args (string array). Working directory is the task cwd (ANYCODE_WORKING_DIR), not the skill directory.",
                         "instructions": body,
                     }),
                     error: None,
@@ -792,10 +794,36 @@ impl Tool for SkillTool {
                 });
             }
         }
+        let manifest_pre = parse_skill_manifest_file(&root.join("SKILL.md"));
+        let perms = SkillPermissions::from_value(
+            manifest_pre.as_ref().and_then(|m| m.permissions.as_ref()),
+        );
+        if perms.network_denied() {
+            return Ok(ToolOutput {
+                result: serde_json::json!({
+                    "error": "skill run blocked: permissions.network=false",
+                    "skill": skill_name,
+                    "hint": "This skill forbids network. Load instructions without args, or set permissions.network=true in SKILL.md."
+                }),
+                error: Some("skill run blocked: permissions.network=false".into()),
+                duration_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+        // Task working directory (not skill root) — documented contract.
         let skill_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
         let cwd = task_cwd
             .map(|s| std::fs::canonicalize(s).unwrap_or_else(|_| PathBuf::from(s)))
             .unwrap_or_else(|| skill_root.clone());
+        if let Err(e) = crate::sandbox::resolve_under_workdir(cwd.to_string_lossy().as_ref(), ".") {
+            return Ok(ToolOutput {
+                result: serde_json::json!({
+                    "error": format!("skill cwd outside sandbox: {e}"),
+                    "cwd": cwd.to_string_lossy(),
+                }),
+                error: Some("skill cwd outside sandbox".into()),
+                duration_ms: start.elapsed().as_millis() as u64,
+            });
+        }
         let timeout = Duration::from_millis(cat.run_timeout_ms.max(1_000));
         let mut cmd = tokio::process::Command::new(&runner);
         cmd.current_dir(&cwd);
@@ -803,13 +831,17 @@ impl Tool for SkillTool {
         cmd.env("ANYCODE_WORKING_DIR", &cwd);
         cmd.args(&v.args);
         cmd.kill_on_drop(true);
-        if cat.minimal_env {
+        // Always scrub env unless catalog explicitly disables minimal_env.
+        let use_minimal = cat.minimal_env;
+        if use_minimal {
             cmd.env_clear();
             for k in ["PATH", "HOME", "USER", "TMPDIR", "SYSTEMROOT", "LANG"] {
                 if let Ok(val) = std::env::var(k) {
                     cmd.env(k, val);
                 }
             }
+            cmd.env("ANYCODE_SKILL_DIR", &skill_root);
+            cmd.env("ANYCODE_WORKING_DIR", &cwd);
         }
         let run = cmd.output();
         let out = match tokio::time::timeout(timeout, run).await {
@@ -1856,5 +1888,98 @@ mod propose_skills_tests {
         assert!(out.error.is_none());
         assert_eq!(out.result["accepted"], 1);
         assert_eq!(out.result["reviews"][0]["targetExists"], true);
+    }
+}
+
+#[cfg(test)]
+mod skill_tool_tests {
+    use super::*;
+    use crate::skills::SkillCatalog;
+    use std::fs;
+
+    fn write_executable_run(path: &Path, body: &str) {
+        fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).unwrap();
+        }
+    }
+
+    fn catalog_with_network_denied_run() -> (tempfile::TempDir, Arc<ToolServices>) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("skills");
+        let dir = root.join("net-denied");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: net-denied\ndescription: no net\npermissions:\n  network: false\n---\n# Body\n",
+        )
+        .unwrap();
+        write_executable_run(&dir.join("run"), "#!/bin/sh\necho should-not-run\n");
+        let catalog = SkillCatalog::scan(&[root], None, 1_000, true);
+        let services = Arc::new(ToolServices::new_ephemeral_with_skills(
+            None,
+            Arc::new(catalog),
+        ));
+        (temp, services)
+    }
+
+    #[tokio::test]
+    async fn skill_run_blocked_when_network_false() {
+        let (_tmp, services) = catalog_with_network_denied_run();
+        let out = SkillTool::new(services)
+            .execute(ToolInput {
+                name: "Skill".into(),
+                input: serde_json::json!({ "name": "net-denied", "args": ["x"] }),
+                working_directory: None,
+                sandbox_mode: false,
+                dashboard_session_id: None,
+                task_id: None,
+            })
+            .await
+            .expect("execute");
+        assert!(out.error.as_deref().unwrap_or("").contains("network=false"));
+        assert_eq!(
+            out.result["error"],
+            "skill run blocked: permissions.network=false"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_instructions_mode_without_run_args() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("skills");
+        let dir = root.join("docs-only");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: docs-only\ndescription: d\n---\n# Hello skill\n",
+        )
+        .unwrap();
+        let catalog = SkillCatalog::scan(&[root], None, 1_000, true);
+        let services = Arc::new(ToolServices::new_ephemeral_with_skills(
+            None,
+            Arc::new(catalog),
+        ));
+        let out = SkillTool::new(services)
+            .execute(ToolInput {
+                name: "Skill".into(),
+                input: serde_json::json!({ "name": "docs-only" }),
+                working_directory: None,
+                sandbox_mode: false,
+                dashboard_session_id: None,
+                task_id: None,
+            })
+            .await
+            .expect("execute");
+        assert!(out.error.is_none());
+        assert_eq!(out.result["mode"], "instructions");
+        assert!(out.result["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Hello skill"));
     }
 }

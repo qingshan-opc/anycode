@@ -7,6 +7,7 @@ mod agents;
 mod compact;
 mod declarative_agent;
 mod goal_engine;
+mod graph_engine;
 mod model_instructions;
 mod nested_model;
 pub mod plugins;
@@ -35,6 +36,7 @@ pub use compact::{
 };
 pub use declarative_agent::ProfileAgent;
 pub use goal_engine::GoalEngine;
+pub use graph_engine::{GraphEngine, GraphRunOptions, GraphRunResult, GraphStepResult};
 pub use model_instructions::{
     discover_model_instructions, ModelInstructionsConfig, ModelInstructionsFile,
     DEFAULT_MODEL_INSTRUCTIONS_FILENAME, MODEL_INSTRUCTIONS_FILENAMES,

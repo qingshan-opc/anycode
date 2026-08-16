@@ -287,9 +287,9 @@ async fn try_llm_briefing(facts: &BriefingFacts) -> Result<(String, String)> {
 }
 
 fn chat_provider_config(registry: &ResolvedModelRegistry) -> Result<ProviderConfig> {
-    let item = registry
-        .active_item(ModelCapability::Chat)
-        .ok_or_else(|| anyhow!("chat model not configured"))?;
+    let item = pick_usable_chat_item(registry).ok_or_else(|| {
+        anyhow!("no usable chat model (cloud not signed in or no local API key configured)")
+    })?;
     let api_key = registry
         .resolve_api_key(item)
         .ok_or_else(|| anyhow!("api_key not configured"))?;
@@ -301,6 +301,23 @@ fn chat_provider_config(registry: &ResolvedModelRegistry) -> Result<ProviderConf
         temperature: Some(0.3),
         max_tokens: Some(2048),
         zai_tool_choice_first_turn: false,
+    })
+}
+
+/// Prefer active chat when its key resolves; otherwise first enabled chat item with a key
+/// (skips `anycode_cloud` without a session token).
+fn pick_usable_chat_item(
+    registry: &ResolvedModelRegistry,
+) -> Option<&anycode_llm::ConfiguredModelFile> {
+    if let Some(active) = registry.active_item(ModelCapability::Chat) {
+        if registry.resolve_api_key(active).is_some() {
+            return Some(active);
+        }
+    }
+    registry.items.iter().find(|item| {
+        item.enabled
+            && item.capabilities.contains(&ModelCapability::Chat)
+            && registry.resolve_api_key(item).is_some()
     })
 }
 
@@ -417,5 +434,61 @@ mod tests {
         };
         let md = template_briefing(&facts);
         assert!(md.contains("暂无"));
+    }
+
+    #[test]
+    fn pick_usable_skips_cloud_without_token_for_local() {
+        let cfg = serde_json::json!({
+            "provider": "anycode_cloud",
+            "model": "auto",
+            "models": {
+                "active": { "chat": "cloud-auto" },
+                "items": [
+                    {
+                        "id": "cloud-auto",
+                        "provider": "anycode_cloud",
+                        "model": "auto",
+                        "capabilities": ["chat"],
+                        "enabled": true,
+                        "source": "cloud"
+                    },
+                    {
+                        "id": "local-glm",
+                        "provider": "z.ai",
+                        "model": "glm-5",
+                        "capabilities": ["chat"],
+                        "enabled": true,
+                        "api_key": "sk-local-test"
+                    }
+                ]
+            }
+        });
+        let registry = ResolvedModelRegistry::from_config(&cfg);
+        let item = pick_usable_chat_item(&registry).expect("local model");
+        assert_eq!(item.id, "local-glm");
+        let pc = chat_provider_config(&registry).unwrap();
+        assert_eq!(pc.model, "glm-5");
+        assert_eq!(pc.api_key, "sk-local-test");
+    }
+
+    #[test]
+    fn pick_usable_none_when_only_cloud_without_token() {
+        let cfg = serde_json::json!({
+            "models": {
+                "active": { "chat": "cloud-auto" },
+                "items": [{
+                    "id": "cloud-auto",
+                    "provider": "anycode_cloud",
+                    "model": "auto",
+                    "capabilities": ["chat"],
+                    "enabled": true,
+                    "source": "cloud"
+                }]
+            }
+        });
+        let registry = ResolvedModelRegistry::from_config(&cfg);
+        assert!(pick_usable_chat_item(&registry).is_none());
+        let err = chat_provider_config(&registry).unwrap_err().to_string();
+        assert!(err.contains("no usable chat model"));
     }
 }

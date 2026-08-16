@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { api } from "@/api/client";
 import { DeliverableCompactShell } from "@/components/deliverables/DeliverableCompactShell";
 import { DeliverableIframePreview } from "@/components/deliverables/DeliverableIframePreview";
-import { DeliverablePanelShell } from "@/components/deliverables/DeliverablePanelShell";
+import { HtmlImmersiveViewer } from "@/components/deliverables/viewers/HtmlImmersiveViewer";
 import { useT } from "@/i18n/context";
 import { inferPreviewPath, resolvePreviewUrl } from "@/lib/previewPath";
 
@@ -111,9 +111,5 @@ export function PresentationThumbViewer({
     );
   }
 
-  return (
-    <DeliverablePanelShell path={path} projectId={projectId} title={title} metaLabel={metaLabel}>
-      {dialogBody}
-    </DeliverablePanelShell>
-  );
+  return <HtmlImmersiveViewer path={deckIndex} projectId={projectId} />;
 }

@@ -34,9 +34,14 @@ enum ParsedSource {
 /// Token prefix for market/catalog installs from the bundled starter pack.
 pub const ANYCODE_STARTER_SOURCE_PREFIX: &str = "anycode-starter:";
 
-/// Office skills distilled for DeepSeek + FDE editorial — installed by default when missing.
-pub const OFFICE_STARTER_SKILL_IDS: &[&str] =
-    &["anycode-ppt", "anycode-docx", "anycode-xlsx", "anycode-pdf"];
+/// Built-in skills with Skill Apps / office defaults — installed when missing.
+pub const OFFICE_STARTER_SKILL_IDS: &[&str] = &[
+    "anycode-ppt",
+    "anycode-docx",
+    "anycode-xlsx",
+    "anycode-pdf",
+    "anycode-video",
+];
 
 /// Resolve bundled `skills-starter/` (repo dev) or `ANYCODE_SKILLS_STARTER`.
 #[must_use]
@@ -95,12 +100,15 @@ pub fn ensure_office_starter_skills(dest_root: &Path) -> anyhow::Result<Vec<Skil
     let mut installed = Vec::new();
     for id in OFFICE_STARTER_SKILL_IDS {
         let dest = dest_root.join(id);
-        if dest.join("SKILL.md").is_file() {
-            continue;
-        }
         let sub = starter.join(id);
         if !sub.join("SKILL.md").is_file() {
             tracing::debug!(skill = id, "office starter skill missing from bundle");
+            continue;
+        }
+        if dest.join("SKILL.md").is_file() {
+            // Already installed: still copy a missing Skill App `ui/` so
+            // older ~/.anycode/skills trees pick up ADR 020 mini-apps.
+            sync_skill_app_ui(&sub, &dest);
             continue;
         }
         let report = validate_skill_dir(&sub)?;
@@ -403,6 +411,125 @@ fn try_sparse_clone(url: &str, dest: &Path, subpath: &str) -> anyhow::Result<()>
     }
 }
 
+/// Refresh bundled office Skill App files onto an existing `~/.anycode/skills` install.
+///
+/// Office starters are product-owned: always overwrite `ui/` plus SOP docs so a
+/// stale picker (identical grey thumbs) does not stick after an app update.
+fn sync_skill_app_ui(starter_skill: &Path, dest: &Path) {
+    let src_ui = starter_skill.join("ui");
+    if src_ui.join("index.html").is_file() || src_ui.join("surface.yaml").is_file() {
+        let dest_ui = dest.join("ui");
+        if let Err(e) = copy_dir_recursive(&src_ui, &dest_ui) {
+            tracing::warn!(
+                skill = %dest.display(),
+                error = %e,
+                "failed to sync Skill App ui/ onto existing install"
+            );
+        } else {
+            tracing::info!(
+                skill = %dest.display(),
+                "refreshed Skill App ui/ from bundled starter"
+            );
+        }
+    }
+    for name in [
+        "SKILL.md",
+        "families.md",
+        "visual-format.md",
+        "package.json",
+    ] {
+        let src = starter_skill.join(name);
+        if !src.is_file() {
+            continue;
+        }
+        if let Err(e) = fs::copy(&src, dest.join(name)) {
+            tracing::warn!(
+                skill = %dest.display(),
+                file = name,
+                error = %e,
+                "failed to refresh office skill file from starter"
+            );
+        }
+    }
+    // anycode-video: refresh templates/ + scripts/ when missing or outdated ui synced.
+    let skill_id = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if skill_id == "anycode-video" {
+        for name in ["templates", "scripts", "run"] {
+            let src = starter_skill.join(name);
+            if !src.exists() {
+                continue;
+            }
+            let dst = dest.join(name);
+            let need = if src.is_dir() {
+                !dst.is_dir()
+                    || !dst
+                        .join("frame-glitch-title")
+                        .join("template.html-video.yaml")
+                        .is_file()
+            } else {
+                !dst.is_file()
+            };
+            if !need {
+                continue;
+            }
+            if src.is_dir() {
+                if let Err(e) = copy_dir_recursive(&src, &dst) {
+                    tracing::warn!(
+                        skill = %dest.display(),
+                        dir = name,
+                        error = %e,
+                        "failed to sync anycode-video templates/scripts"
+                    );
+                }
+            } else if let Err(e) = fs::copy(&src, &dst) {
+                tracing::warn!(
+                    skill = %dest.display(),
+                    file = name,
+                    error = %e,
+                    "failed to sync anycode-video run"
+                );
+            } else {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&dst, fs::Permissions::from_mode(0o755));
+                }
+            }
+        }
+    }
+    if skill_id == "anycode-ppt" {
+        let src = starter_skill.join("templates");
+        let dst = dest.join("templates");
+        if src.is_dir() {
+            let need_od = !dst.join("od-bold-poster.html").is_file();
+            if need_od {
+                if let Err(e) = copy_dir_recursive(&src, &dst) {
+                    tracing::warn!(
+                        skill = %dest.display(),
+                        error = %e,
+                        "failed to sync anycode-ppt templates (Open Design)"
+                    );
+                }
+            } else {
+                // Refresh od-* cover templates without wiping user edits to other files.
+                if let Ok(entries) = fs::read_dir(&src) {
+                    for ent in entries.flatten() {
+                        let name = ent.file_name();
+                        let name_str = name.to_string_lossy();
+                        if !name_str.starts_with("od-") || !name_str.ends_with(".html") {
+                            continue;
+                        }
+                        let _ = fs::copy(ent.path(), dst.join(&name));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn copy_skill_tree(src: &Path, dest: &Path) -> anyhow::Result<()> {
     let parent = dest.parent().unwrap_or(dest);
     fs::create_dir_all(parent)?;
@@ -591,6 +718,104 @@ mod tests {
         }
         let second = ensure_office_starter_skills(&dest_root).unwrap();
         assert!(second.is_empty(), "second run should not reinstall");
+        if starter
+            .join("anycode-ppt")
+            .join("ui")
+            .join("index.html")
+            .is_file()
+        {
+            assert!(
+                dest_root
+                    .join("anycode-ppt")
+                    .join("ui")
+                    .join("index.html")
+                    .is_file(),
+                "office install should copy Skill App ui/"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_office_syncs_missing_skill_app_ui() {
+        let Some(starter) = resolve_skills_starter_dir() else {
+            return;
+        };
+        if !starter
+            .join("anycode-ppt")
+            .join("ui")
+            .join("index.html")
+            .is_file()
+        {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dest_root = tmp.path().join("skills");
+        let dest = dest_root.join("anycode-ppt");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(
+            dest.join("SKILL.md"),
+            "---\nname: anycode-ppt\ndescription: ppt slides 幻灯片\nprovides_capabilities: [presentation.author]\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dest.join("ui")).unwrap();
+        fs::write(dest.join("ui").join("index.html"), "STALE_IDENTICAL_THUMBS").unwrap();
+        let _again = ensure_office_starter_skills(&dest_root).unwrap();
+        let html = fs::read_to_string(dest.join("ui").join("index.html")).unwrap();
+        assert!(
+            html.contains("familyGrid") && !html.contains("STALE_IDENTICAL_THUMBS"),
+            "office ensure should overwrite stale PPT Skill App UI"
+        );
+        assert!(dest.join("families.md").is_file());
+        let md = fs::read_to_string(dest.join("SKILL.md")).unwrap();
+        assert!(md.contains("families.md"));
+        let cat = super::super::SkillCatalog::scan(&[dest_root], None, 120_000, true);
+        assert!(
+            cat.metas()
+                .iter()
+                .any(|m| m.id == "anycode-ppt" && m.has_ui),
+            "anycode-ppt Skill App should be in catalog; LLM opens via SkillAppPresent"
+        );
+    }
+
+    #[test]
+    fn ensure_office_installs_anycode_video_skill_app() {
+        let Some(starter) = resolve_skills_starter_dir() else {
+            return;
+        };
+        if !starter
+            .join("anycode-video")
+            .join("ui")
+            .join("index.html")
+            .is_file()
+        {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dest_root = tmp.path().join("skills");
+        let _ = ensure_office_starter_skills(&dest_root).unwrap();
+        let dest = dest_root.join("anycode-video");
+        assert!(dest.join("SKILL.md").is_file());
+        assert!(dest.join("ui").join("index.html").is_file());
+        assert!(dest.join("ui").join("surface.yaml").is_file());
+        let html = fs::read_to_string(dest.join("ui").join("index.html")).unwrap();
+        assert!(
+            html.contains("TEMPLATES") && html.contains("frame-glitch-title"),
+            "video Skill App UI should embed template catalog"
+        );
+        assert!(dest
+            .join("templates")
+            .join("frame-glitch-title")
+            .join("template.html-video.yaml")
+            .is_file());
+        assert!(dest.join("scripts").join("render.mjs").is_file());
+        assert!(dest.join("run").is_file());
+        let cat = super::super::SkillCatalog::scan(&[dest_root], None, 120_000, true);
+        assert!(
+            cat.metas()
+                .iter()
+                .any(|m| m.id == "anycode-video" && m.has_ui),
+            "anycode-video Skill App should be in catalog; LLM opens via SkillAppPresent (no keyword auto-open)"
+        );
     }
 
     #[test]

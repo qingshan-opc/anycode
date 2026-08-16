@@ -18,6 +18,12 @@ import type { SessionPlanTreeResponse } from "../types/workbench";
 import { get, patch, post } from "../http";
 import { buildArtifactQuery, type ArtifactListOpts, type EventListOpts, type SessionListOpts } from "./shared";
 
+function currentUiLang(): "zh" | "en" {
+  const saved = localStorage.getItem("anycode-dashboard-locale");
+  if (saved === "en" || saved === "zh") return saved;
+  return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
 export const sessionsClient = {
   allSessions: (opts?: SessionListOpts) => {
     const q = new URLSearchParams();
@@ -41,10 +47,31 @@ export const sessionsClient = {
       `/api/sessions/${encodeURIComponent(sessionId)}`,
       { title },
     ),
+  archiveSession: (sessionId: string) =>
+    patch<{ ok: boolean; session_id: string; archived?: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}`,
+      { archived: true },
+    ),
   cancelSession: (sessionId: string) =>
     post<{ ok: boolean; session_id: string; live_signal: boolean }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
       {},
+    ),
+  /** Host-driven nested subagent (explore / plan / general-purpose). */
+  delegateSession: (
+    sessionId: string,
+    body: { agent_type: string; prompt: string; lang?: string },
+  ) =>
+    post<{
+      ok: boolean;
+      session_id: string;
+      nested_task_id: string;
+      agent_type: string;
+      started_at: string;
+    }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/delegate`,
+      { lang: currentUiLang(), ...body },
+      { acceptStatuses: [202] },
     ),
   acknowledgeSessionBlock: (sessionId: string) =>
     post<{ ok: boolean; session_id: string }>(
@@ -135,6 +162,29 @@ export const sessionsClient = {
     get<SessionPlanTreeResponse>(
       `/api/sessions/${encodeURIComponent(sessionId)}/plan-tree`,
     ),
+  /** M4 GraphEngine: run WorkflowDefinition / plan tree / sample 3-node graph. */
+  runSessionGraph: (
+    sessionId: string,
+    body: {
+      workflow?: unknown;
+      workflow_path?: string;
+      sample?: boolean;
+      use_sample?: boolean;
+      from_plan_tree?: boolean;
+      user_prompt?: string;
+      prompt?: string;
+      wait?: boolean;
+    },
+  ) =>
+    post<{
+      ok: boolean;
+      accepted?: boolean;
+      run_id: string;
+      workflow_name?: string;
+      layers?: string[][];
+      result?: unknown;
+      error?: string;
+    }>(`/api/sessions/${encodeURIComponent(sessionId)}/graph/run`, body),
   recentReports: (opts?: {
     projectId?: string;
     sessionId?: string;

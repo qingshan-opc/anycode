@@ -4,9 +4,10 @@ use crate::data_health::global_health;
 use crate::db::DashboardDb;
 use crate::schema::{DbOperations, DbTableStat, MigrationInfo};
 use crate::service_governance::suggest_backup_path;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub async fn db_operations(db: &DashboardDb) -> Result<DbOperations> {
     let path = db.path().display().to_string();
@@ -102,18 +103,76 @@ async fn table_stats(db: &DashboardDb) -> Result<Vec<DbTableStat>> {
     Ok(out)
 }
 
-pub fn backup_db(src: &Path, dest: &Path) -> Result<()> {
+fn absolute_backup_dest(dest: &Path) -> Result<PathBuf> {
+    if dest.is_absolute() {
+        return Ok(dest.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(dest))
+}
+
+/// Consistent SQLite snapshot via `VACUUM INTO` (no WAL sidecar copy).
+pub async fn backup_db(src: &Path, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::copy(src, dest)?;
+    if dest.exists() {
+        std::fs::remove_file(dest)?;
+    }
+    let dest_abs = absolute_backup_dest(dest)?;
+    let dest_sql = dest_abs.to_string_lossy().replace('\'', "''");
+
+    let opts = SqliteConnectOptions::new()
+        .filename(src)
+        .read_only(true)
+        .create_if_missing(false);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open source db {}", src.display()))?;
+    sqlx::query(&format!("VACUUM INTO '{dest_sql}'"))
+        .execute(&pool)
+        .await
+        .context("VACUUM INTO backup")?;
+    pool.close().await;
     Ok(())
+}
+
+/// Sync wrapper for callers outside async contexts (tests, legacy hooks).
+pub fn backup_db_sync(src: &Path, dest: &Path) -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("backup runtime")?
+        .block_on(backup_db(src, dest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Row;
     use tempfile::tempdir;
+
+    async fn write_sqlite_with_row(path: &Path, value: &str) {
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t (v) VALUES (?1)")
+            .bind(value)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
 
     #[tokio::test]
     async fn db_ops_empty() {
@@ -121,5 +180,34 @@ mod tests {
         let db = DashboardDb::open(dir.path().join("o.db")).await.unwrap();
         let ops = db_operations(&db).await.unwrap();
         assert!(!ops.migrations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn backup_db_creates_consistent_sqlite_snapshot() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("app.db");
+        let dest = dir.path().join("backups").join("app.db");
+        write_sqlite_with_row(&src, "alpha").await;
+        std::fs::write(PathBuf::from(format!("{}-wal", src.display())), b"wal").unwrap();
+        std::fs::write(PathBuf::from(format!("{}-shm", src.display())), b"shm").unwrap();
+
+        backup_db(&src, &dest).await.unwrap();
+
+        let opts = SqliteConnectOptions::new().filename(&dest).read_only(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        let value: String = sqlx::query("SELECT v FROM t LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(value, "alpha");
+        assert!(
+            !PathBuf::from(format!("{}-wal", dest.display())).exists(),
+            "VACUUM INTO should produce a standalone db without -wal sidecar"
+        );
     }
 }

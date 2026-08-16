@@ -85,6 +85,18 @@ const ArtifactsPanelLazy = lazy(() =>
   })),
 );
 
+const SkillAppPanelLazy = lazy(() =>
+  import("./panels/SkillAppPanel").then((m) => ({
+    default: (p: PanelProps) => (
+      <m.SkillAppPanel
+        projectId={p.projectId}
+        sessionId={p.sessionId}
+        active={p.active}
+      />
+    ),
+  })),
+);
+
 /**
  * Single source of truth for the workbench side dock. Adding a panel =
  * adding one entry here (plus its i18n titleKey); rail icons, header icons,
@@ -128,6 +140,14 @@ export const WORKBENCH_PANELS = [
     titleKey: "workbench.tabArtifacts",
     order: 50,
     component: ArtifactsPanelLazy,
+  },
+  {
+    id: "skillApp",
+    icon: "dashboard_customize",
+    titleKey: "workbench.tabSkillApp",
+    order: 60,
+    needsProject: true,
+    component: SkillAppPanelLazy,
   },
 ] as const satisfies readonly WorkbenchPanelDef[];
 

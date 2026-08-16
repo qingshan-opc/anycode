@@ -13,8 +13,7 @@ cargo test --workspace
 cargo build --release -p anycode-channel-bridge   # anycode-daemon binary
 ./scripts/sync-desktop-dev.sh              # UI-only (~15s)
 ./scripts/sync-desktop-dev.sh --rust       # UI + Rust (release-local ~1–2min)
-./scripts/build-desktop-local.sh        # 本地迭代 DMG(release-local 无 LTO,跳过公证;loopback 账号)
-./scripts/build-desktop-release.sh      # 发货 DMG(release + LTO,公证 + staple;anycode.work 账号)
+# Shipping DMG: ./scripts/build-desktop-local.sh / ./scripts/build-desktop-release.sh
 
 # Feature-specific testing
 cargo test -p anycode-tools --features tools-lsp
@@ -22,12 +21,17 @@ cargo test -p anycode-tools --features tools-mcp
 
 # Docs site preview (account-portal)
 cd crates/account-portal && npm install && npm run dev
+
+# Workbench UI unit + e2e (also run in CI dashboard-ui job)
+cd crates/dashboard-ui && npm test && npm run test:e2e
 ```
 
 **Before committing:**
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets`
 - `cargo test --workspace`
+- Prefer also: `cd crates/dashboard-ui && npm test` (and e2e when touching chat/UI)
+- Account platform (excluded workspace): `cargo test` inside `crates/account-service` when touching billing/cloud APIs
 
 ## Workspace Architecture
 
@@ -35,11 +39,11 @@ cd crates/account-portal && npm install && npm run dev
 
 ### Crate Structure
 
-- **`apps/anycode-desktop`** — Tauri shell; embeds dashboard in-process
-- **`crates/channel-bridge`** — `anycode-daemon` (channels + scheduler)
+- **`apps/anycode-desktop`** — Tauri shell; embeds dashboard **in-process** (no sidecar)
+- **`crates/channel-bridge`** — `anycode-daemon` (**scheduler only**)
 - **`crates/config`** — `config.json` schema
 - **`crates/bootstrap`** — `initialize_runtime` composition root
-- **`crates/dashboard`** — Workbench HTTP API + embedded UI
+- **`crates/dashboard`** — Workbench HTTP API + embedded UI + in-process Agent
 - **`crates/dashboard-ipc`** — approval/question/cancel file IPC
 - **`crates/agent`** — `AgentRuntime`, tool loop, compaction
 - **`crates/core`** — domain types and traits
@@ -47,25 +51,26 @@ cd crates/account-portal && npm install && npm run dev
 - **`crates/tools`** — built-in tools and registry
 - **`crates/security`** — approval and policy
 - **`crates/memory`** — memory backends
-- **`crates/channels`** — channel abstractions
-- **`crates/locale`** — Fluent i18n
+- **`crates/locale`** — locale helpers
+
+Removed: terminal CLI (`crates/cli`), IM bridges (`crates/channels`), `crates/onboard`. Offline experience lab crate is `workspace.exclude` (`crates/experience`).
 
 ### Key Patterns
 
 **Orchestration (ADR 000):** Only `execute_task` and `execute_turn_from_messages` orchestrate multi-turn loops.
 
-**Composition root (ADR 002, superseded path):** `crates/bootstrap/src/runtime.rs::initialize_runtime` — used by Desktop, dashboard embedded chat, and `anycode-daemon`.
+**Composition root (ADR 003-app):** `crates/bootstrap/src/runtime.rs::initialize_runtime` — used by Desktop, dashboard embedded chat, and `anycode-daemon scheduler`.
 
 **Cooperative cancel (ADR 010):** `Arc<AtomicBool>` at turn/tool boundaries.
 
 ### Product Entry Points
 
-1. **anyCode.app** — Workbench at `http://127.0.0.1:43180` (in-process dashboard)
-2. **`anycode-daemon`** — `scheduler` (built-in cron)
-3. **Dev** — `cargo tauri dev` in `apps/anycode-desktop`
+1. **anyCode.app** (shipping DMG) — native WebView; in-process dashboard on ephemeral `127.0.0.1:0`
+2. **`anycode-daemon scheduler`** — headless cron
+3. **Dev** — `cargo tauri dev` in `apps/anycode-desktop`; optional `anycode-dashboard-serve` (:43180) for browser e2e only
 
 The terminal `anycode` CLI (REPL/TUI/`run`/`setup`) is **removed**.
-Third-party IM channel bridges (WeChat / Telegram / Discord) are **removed**; conversations happen in the local Workbench only.
+Third-party IM channel bridges (WeChat / Telegram / Discord) are **removed**.
 
 ### Configuration
 
@@ -87,4 +92,4 @@ Third-party IM channel bridges (WeChat / Telegram / Discord) are **removed**; co
 
 - User: `docs/user/` (published at https://anycode.work/docs/ via account-portal)
 - Maintainer: `docs/architecture.md`, `docs/ops/run-flow.md`
-- ADRs: `docs/adr/`
+- ADRs: `docs/adr/` (see `018-http-daemon-deprecated`, `019-lan-colleague-handoff` for renumbered former 003/015 duplicates)

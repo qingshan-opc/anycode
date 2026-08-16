@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatDeliveryPreflight,
+  isInternalProgressDiagnostic,
   isStaticProgressStatusLine,
   progressPhase,
   progressSummary,
@@ -38,6 +39,30 @@ describe("delivery preflight formatting", () => {
     expect(progressSummary(block)).toBe("");
   });
 
+  it("progressSummary suppresses gate and skill markers", () => {
+    expect(
+      progressSummary({
+        id: "g",
+        block_type: "progress_update",
+        body: "[gate_plan_created] family=office gates=2",
+        meta: {},
+      } as TranscriptBlock),
+    ).toBe("");
+    expect(
+      progressSummary({
+        id: "s",
+        block_type: "progress_update",
+        body: "",
+        meta: { summary: "[skill_resolved] anycode-ppt" },
+      } as TranscriptBlock),
+    ).toBe("");
+  });
+
+  it("isInternalProgressDiagnostic matches compile markers", () => {
+    expect(isInternalProgressDiagnostic("[delivery_preflight] family=general")).toBe(true);
+    expect(isInternalProgressDiagnostic("正在检查测试")).toBe(false);
+  });
+
   it("marks progress_update and narration status as static (no fold chevron)", () => {
     expect(
       isStaticProgressStatusLine({
@@ -62,7 +87,7 @@ describe("delivery preflight formatting", () => {
         body: "thinking",
         meta: { source: "thinking_delta" },
       } as TranscriptBlock),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isStaticProgressStatusLine({
         id: "i",

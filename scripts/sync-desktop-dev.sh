@@ -77,6 +77,15 @@ step "sync UI into app bundle" bash -ec "
   rsync -a --delete \"$UI_SRC/\" \"$UI_DEST/\"
 "
 
+STARTER_SRC="$ROOT/apps/anycode-desktop/resources/skills-starter"
+STARTER_DEST="$INSTALL/Contents/Resources/resources/skills-starter"
+if [[ -d "$STARTER_SRC" ]]; then
+  step "sync skills-starter into app bundle" bash -ec "
+    mkdir -p \"$STARTER_DEST\"
+    rsync -a --delete \"$STARTER_SRC/\" \"$STARTER_DEST/\"
+  "
+fi
+
 # macOS 26 Tahoe wraps legacy .icns in a light squircle ("icon jail"). Syncing the
 # icns + applying a Finder custom icon escapes that container without Assets.car.
 ICNS_SRC="$ROOT/apps/anycode-desktop/icons/icon.icns"

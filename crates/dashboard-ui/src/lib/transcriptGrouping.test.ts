@@ -78,6 +78,7 @@ describe("groupTurnReplies", () => {
       "tool_cluster",
       "block",
       "tool_cluster",
+      "block",
     ]);
     if (grouped[0]?.kind === "block") {
       expect(grouped[0].block.body).toBe("oldest step");
@@ -88,8 +89,42 @@ describe("groupTurnReplies", () => {
     if (grouped[3]?.kind === "block") {
       expect(grouped[3].block.body).toBe("now edit files");
     }
-    if (grouped[4]?.kind === "tool_cluster") {
-      expect(grouped[4].processSnippets).toContain("internal thought");
+    if (grouped[5]?.kind === "block") {
+      expect(grouped[5].block.body).toBe("internal thought");
+      expect(grouped[5].block.meta?.source).toBe("thinking_delta");
+    }
+  });
+
+  it("interleaves thinking_delta prose with tool pills (Cursor waterfall)", () => {
+    const replies = [
+      block("th1", "system_notice", {
+        meta: { source: "thinking_delta", turn: 1 },
+        body: "先读一下现状",
+      }),
+      block("t1", "tool_call", { meta: { tool_key: "1:1", name: "Read" } }),
+      block("t2", "tool_result", { meta: { tool_key: "1:1", name: "Read" } }),
+      block("th2", "system_notice", {
+        meta: { source: "thinking_delta", turn: 2 },
+        body: "接下来改状态机",
+      }),
+      block("t3", "tool_call", { meta: { tool_key: "1:2", name: "Edit" } }),
+      block("t4", "tool_result", { meta: { tool_key: "1:2", name: "Edit" } }),
+    ];
+    const grouped = groupTurnReplies(replies);
+    expect(grouped.map((item) => item.kind)).toEqual([
+      "block",
+      "tool_cluster",
+      "block",
+      "tool_cluster",
+    ]);
+    if (grouped[0]?.kind === "block") {
+      expect(grouped[0].block.body).toBe("先读一下现状");
+    }
+    if (grouped[2]?.kind === "block") {
+      expect(grouped[2].block.body).toBe("接下来改状态机");
+    }
+    if (grouped[1]?.kind === "tool_cluster") {
+      expect(grouped[1].processSnippets).toEqual([]);
     }
   });
 

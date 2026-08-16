@@ -11,6 +11,7 @@ mod cef_embed;
 #[path = "cef_embed_stub.rs"]
 mod cef_embed;
 mod dashboard_backend;
+mod open_with;
 
 use dashboard_backend::{
     apply_dashboard_env, dashboard_http_ready, desktop_api_base, start_in_process,
@@ -209,6 +210,16 @@ fn open_local_path(path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn list_open_with_apps(path: String) -> Result<Vec<open_with::OpenWithApp>, String> {
+    open_with::list_open_with_apps(&path)
+}
+
+#[tauri::command]
+fn open_path_with_app(path: String, app_id: String) -> Result<(), String> {
+    open_with::open_path_with_app(&path, &app_id)
+}
+
 fn show_workbench(app: &tauri::AppHandle, ready: bool) {
     eprintln!("anycode-desktop: show_workbench ready={ready}");
     let Some(w) = app.get_webview_window("main") else {
@@ -323,7 +334,61 @@ fn register_deep_link_handlers(app: &tauri::AppHandle) {
     }
 }
 
+fn install_panic_log_hook() {
+    // Keep panic=abort (Cargo.toml profile); still record the payload first so
+    // post-mortem diagnosis does not depend on stderr alone.
+    std::panic::set_hook(Box::new(|info| {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let log_dir = home.join(".anycode").join("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let path = log_dir.join("panic.log");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".into());
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<Any>".into()
+        };
+        let line = format!(
+            "{}\t{}\t{}\n",
+            chrono_lite_timestamp(),
+            location,
+            payload.replace('\n', "\\n")
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+            let _ = f.flush();
+        }
+        eprintln!("anycode-desktop: panic logged to {}", path.display());
+        // panic=abort will abort after the hook returns; call abort explicitly
+        // so we never unwind even if a profile ever switches to unwind.
+        std::process::abort();
+    }));
+}
+
+fn chrono_lite_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("unix:{secs}")
+}
+
 fn main() {
+    install_panic_log_hook();
+
     // If CEF was explicitly disabled, drop a leftover CDP port so screencast
     // can run. Default path keeps CEF and publishes the port on show.
     cef_embed::clear_stale_cdp_port_if_disabled();
@@ -340,6 +405,8 @@ fn main() {
             open_external_url,
             reveal_in_file_manager,
             open_local_path,
+            list_open_with_apps,
+            open_path_with_app,
             pick_directory,
             cef_embed::cef_browser_status,
             cef_embed::cef_browser_show,

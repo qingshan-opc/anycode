@@ -1,9 +1,13 @@
 //! 跨工具共享的运行时状态与 HTTP 客户端（装配自 `bootstrap` / `build_registry`）。
+//!
+//! Mutex access uses `lock().unwrap_or_else(|e| e.into_inner())` so a poisoned
+//! lock recovers instead of panicking on hot production paths (M1b).
 
 use crate::ask_user_question_host::AskUserQuestionHostArc;
 use crate::session_store::{
     resolve_session_key, SessionPlanStore, SessionTodoStore, EPHEMERAL_SESSION_KEY,
 };
+use crate::skill_app_host::SkillAppHostArc;
 use crate::skills::{SkillCatalog, SkillsGovernance};
 use anycode_core::{
     plan_tree_all_completed, CoreError, LiveTraceEvent, NestedTaskRun, PlanTree, SubAgentExecutor,
@@ -72,11 +76,11 @@ pub struct BackgroundAgentJob {
 
 impl BackgroundAgentJob {
     pub fn set_abort(&self, handle: tokio::task::AbortHandle) {
-        *self.abort.lock().expect("abort mutex") = Some(handle);
+        *self.abort.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     pub fn set_title(&self, title: String) {
-        *self.title.lock().expect("title mutex") = Some(title);
+        *self.title.lock().unwrap_or_else(|e| e.into_inner()) = Some(title);
     }
 }
 
@@ -281,6 +285,8 @@ pub struct ToolServices {
     sub_agent_executor: Mutex<Option<Arc<dyn SubAgentExecutor>>>,
     /// REPL/TUI 注入：`AskUserQuestion` 主机侧选题。
     ask_user_question_host: Mutex<Option<AskUserQuestionHostArc>>,
+    /// Workbench Skill App host (`SkillAppPresent` / `SkillAppPush`).
+    skill_app_host: Mutex<Option<SkillAppHostArc>>,
     /// `LSP` 工具：`tools-lsp` 下读此配置（CLI bootstrap 写入）。
     lsp: Mutex<LspConnectionConfig>,
     sub_agent_depth: AtomicU32,
@@ -340,6 +346,7 @@ impl Default for ToolServices {
             config_overrides: Mutex::new(HashMap::new()),
             sub_agent_executor: Mutex::new(None),
             ask_user_question_host: Mutex::new(None),
+            skill_app_host: Mutex::new(None),
             lsp: Mutex::new(LspConnectionConfig::default()),
             sub_agent_depth: AtomicU32::new(0),
             background_agents: Mutex::new(HashMap::new()),
@@ -461,7 +468,10 @@ impl ToolServices {
     }
 
     pub fn attach_sub_agent_executor(&self, ex: Arc<dyn SubAgentExecutor>) {
-        *self.sub_agent_executor.lock().expect("sub_agent_executor") = Some(ex);
+        *self
+            .sub_agent_executor
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(ex);
     }
 
     /// Set while a parent [`anycode_core::Task`] is executing so nested agents inherit tool denies.
@@ -474,7 +484,7 @@ impl ToolServices {
     ) -> Option<(Vec<String>, Vec<String>)> {
         self.parent_task_tool_deny
             .lock()
-            .expect("parent_task_tool_deny")
+            .unwrap_or_else(|e| e.into_inner())
             .replace((names, prefixes))
     }
 
@@ -482,47 +492,61 @@ impl ToolServices {
         *self
             .parent_task_tool_deny
             .lock()
-            .expect("parent_task_tool_deny") = previous;
+            .unwrap_or_else(|e| e.into_inner()) = previous;
     }
 
     pub fn clear_parent_task_tool_deny(&self) {
         *self
             .parent_task_tool_deny
             .lock()
-            .expect("parent_task_tool_deny") = None;
+            .unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     pub fn parent_task_tool_deny(&self) -> (Vec<String>, Vec<String>) {
         self.parent_task_tool_deny
             .lock()
-            .expect("parent_task_tool_deny")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_default()
     }
 
     pub fn set_skills_governance(&self, gov: SkillsGovernance) {
-        *self.skills_governance.lock().expect("skills_governance") = gov;
+        *self
+            .skills_governance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = gov;
     }
 
     pub fn set_media_registry(&self, reg: Arc<anycode_llm::media::MediaClientRegistry>) {
-        *self.media_registry.lock().expect("media_registry") = Some(reg);
+        *self
+            .media_registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(reg);
     }
 
     #[cfg(feature = "tools-browser")]
     pub fn set_browser_service(&self, svc: Arc<anycode_browser::BrowserService>) {
-        *self.browser_service.lock().expect("browser_service") = Some(svc);
+        *self
+            .browser_service
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(svc);
     }
 
     #[cfg(feature = "tools-browser")]
     pub fn browser_service(&self) -> Option<Arc<anycode_browser::BrowserService>> {
         self.browser_service
             .lock()
-            .expect("browser_service")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
     pub fn media_registry(&self) -> Result<anycode_llm::media::MediaClientRegistry, String> {
-        if let Some(reg) = self.media_registry.lock().expect("media_registry").clone() {
+        if let Some(reg) = self
+            .media_registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             return Ok((*reg).clone());
         }
         let (_, cfg) =
@@ -535,7 +559,7 @@ impl ToolServices {
         let mut guard = self
             .active_agent_type_by_session
             .lock()
-            .expect("active_agent_type");
+            .unwrap_or_else(|e| e.into_inner());
         match agent_type {
             Some(v) => {
                 guard.insert(key, v);
@@ -550,14 +574,17 @@ impl ToolServices {
         let key = resolve_session_key(None);
         self.active_agent_type_by_session
             .lock()
-            .expect("active_agent_type")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&key)
             .cloned()
     }
 
     pub fn is_skill_allowed(&self, skill_id: &str) -> bool {
         let agent = self.active_agent_type().unwrap_or_default();
-        let gov = self.skills_governance.lock().expect("skills_governance");
+        let gov = self
+            .skills_governance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if agent.is_empty() {
             return true;
         }
@@ -568,28 +595,42 @@ impl ToolServices {
         *self
             .ask_user_question_host
             .lock()
-            .expect("ask_user_question_host") = Some(host);
+            .unwrap_or_else(|e| e.into_inner()) = Some(host);
     }
 
     pub fn ask_user_question_host(&self) -> Option<AskUserQuestionHostArc> {
         self.ask_user_question_host
             .lock()
-            .expect("ask_user_question_host")
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn attach_skill_app_host(&self, host: SkillAppHostArc) {
+        *self
+            .skill_app_host
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(host);
+    }
+
+    pub fn skill_app_host(&self) -> Option<SkillAppHostArc> {
+        self.skill_app_host
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
     pub fn set_lsp_connection_config(&self, c: LspConnectionConfig) {
-        *self.lsp.lock().expect("lsp mutex") = c;
+        *self.lsp.lock().unwrap_or_else(|e| e.into_inner()) = c;
     }
 
     pub fn lsp_connection_config(&self) -> LspConnectionConfig {
-        self.lsp.lock().expect("lsp mutex").clone()
+        self.lsp.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn sub_agent_executor(&self) -> Option<Arc<dyn SubAgentExecutor>> {
         self.sub_agent_executor
             .lock()
-            .expect("sub_agent_executor")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
@@ -605,14 +646,14 @@ impl ToolServices {
     pub fn set_structured_output_schema(&self, task_id: Uuid, schema: serde_json::Value) {
         self.structured_output_schemas
             .lock()
-            .expect("structured_output_schemas")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(task_id, schema);
     }
 
     pub fn structured_output_schema(&self, task_id: Uuid) -> Option<serde_json::Value> {
         self.structured_output_schemas
             .lock()
-            .expect("structured_output_schemas")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&task_id)
             .cloned()
     }
@@ -620,14 +661,14 @@ impl ToolServices {
     pub fn clear_structured_output_schema(&self, task_id: Uuid) {
         self.structured_output_schemas
             .lock()
-            .expect("structured_output_schemas")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&task_id);
     }
 
     pub fn record_structured_output(&self, task_id: Uuid, value: serde_json::Value) {
         self.structured_output_captures
             .lock()
-            .expect("structured_output_captures")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(task_id, value);
     }
 
@@ -635,7 +676,7 @@ impl ToolServices {
     pub fn take_structured_output(&self, task_id: Uuid) -> Option<serde_json::Value> {
         self.structured_output_captures
             .lock()
-            .expect("structured_output_captures")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&task_id)
     }
 
@@ -647,14 +688,14 @@ impl ToolServices {
     ) {
         self.live_trace_by_task
             .lock()
-            .expect("live_trace_by_task")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(task_id, tx);
     }
 
     pub fn remove_live_trace_tx(&self, task_id: Uuid) {
         self.live_trace_by_task
             .lock()
-            .expect("live_trace_by_task")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&task_id);
     }
 
@@ -665,7 +706,7 @@ impl ToolServices {
     ) -> Option<tokio::sync::mpsc::UnboundedSender<LiveTraceEvent>> {
         self.live_trace_by_task
             .lock()
-            .expect("live_trace_by_task")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&task_id)
             .cloned()
     }
@@ -704,7 +745,7 @@ impl ToolServices {
         });
         self.background_agents
             .lock()
-            .expect("background_agents")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id, job.clone());
         Self::persist_background_state(id, BackgroundAgentStatus::Running, Some("running"));
         job
@@ -712,25 +753,31 @@ impl ToolServices {
 
     /// When the spawned nested task is dropped (e.g. `AbortHandle::abort`), depth and registry must still converge.
     pub fn finalize_background_if_still_running(&self, id: Uuid) {
-        let map = self.background_agents.lock().expect("background_agents");
+        let map = self
+            .background_agents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(j) = map.get(&id) else {
             return;
         };
-        let mut st = j.status.lock().expect("bg status");
+        let mut st = j.status.lock().unwrap_or_else(|e| e.into_inner());
         if *st == BackgroundAgentStatus::Running {
             *st = BackgroundAgentStatus::Cancelled;
-            *j.summary.lock().expect("bg summary") = Some("aborted".into());
+            *j.summary.lock().unwrap_or_else(|e| e.into_inner()) = Some("aborted".into());
             Self::persist_background_state(id, BackgroundAgentStatus::Cancelled, Some("aborted"));
         }
     }
 
     pub fn finish_background_agent(&self, id: Uuid, run: Result<NestedTaskRun, CoreError>) {
-        let map = self.background_agents.lock().expect("background_agents");
+        let map = self
+            .background_agents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(job) = map.get(&id) else {
             return;
         };
         {
-            let st = job.status.lock().expect("bg status");
+            let st = job.status.lock().unwrap_or_else(|e| e.into_inner());
             if *st == BackgroundAgentStatus::Cancelled {
                 return;
             }
@@ -754,19 +801,23 @@ impl ToolServices {
                         format!("{success} / remaining: {remaining}")
                     }
                 };
-                let mut st = job.status.lock().expect("bg status");
+                let mut st = job.status.lock().unwrap_or_else(|e| e.into_inner());
                 *st = new_status;
                 drop(st);
-                *job.summary.lock().expect("bg summary") = Some(summary);
-                let persisted_summary = job.summary.lock().expect("bg summary").clone();
+                *job.summary.lock().unwrap_or_else(|e| e.into_inner()) = Some(summary);
+                let persisted_summary = job
+                    .summary
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
                 Self::persist_background_state(id, new_status, persisted_summary.as_deref());
             }
             Err(e) => {
-                let mut st = job.status.lock().expect("bg status");
+                let mut st = job.status.lock().unwrap_or_else(|e| e.into_inner());
                 *st = BackgroundAgentStatus::Failed;
                 drop(st);
                 let summary = e.to_string();
-                *job.summary.lock().expect("bg summary") = Some(summary.clone());
+                *job.summary.lock().unwrap_or_else(|e| e.into_inner()) = Some(summary.clone());
                 Self::persist_background_state(id, BackgroundAgentStatus::Failed, Some(&summary));
             }
         }
@@ -779,40 +830,46 @@ impl ToolServices {
         status: BackgroundAgentStatus,
         summary: impl Into<String>,
     ) {
-        let map = self.background_agents.lock().expect("background_agents");
+        let map = self
+            .background_agents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(job) = map.get(&id) else {
             return;
         };
         {
-            let st = job.status.lock().expect("bg status");
+            let st = job.status.lock().unwrap_or_else(|e| e.into_inner());
             if *st == BackgroundAgentStatus::Cancelled {
                 return;
             }
         }
         let summary = summary.into();
-        let mut st = job.status.lock().expect("bg status");
+        let mut st = job.status.lock().unwrap_or_else(|e| e.into_inner());
         *st = status;
         drop(st);
-        *job.summary.lock().expect("bg summary") = Some(summary.clone());
+        *job.summary.lock().unwrap_or_else(|e| e.into_inner()) = Some(summary.clone());
         Self::persist_background_state(id, status, Some(&summary));
     }
 
     /// Best-effort: marks cancelled and aborts the tokio task running `run_nested_task`.
     pub fn cancel_background_agent(&self, id: Uuid) -> bool {
-        let map = self.background_agents.lock().expect("background_agents");
+        let map = self
+            .background_agents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(job) = map.get(&id) else {
             return false;
         };
         job.coop_cancel.store(true, Ordering::Release);
-        let mut st = job.status.lock().expect("bg status");
+        let mut st = job.status.lock().unwrap_or_else(|e| e.into_inner());
         if *st != BackgroundAgentStatus::Running {
             return false;
         }
         *st = BackgroundAgentStatus::Cancelled;
         drop(st);
-        *job.summary.lock().expect("bg summary") = Some("cancelled".into());
+        *job.summary.lock().unwrap_or_else(|e| e.into_inner()) = Some("cancelled".into());
         Self::persist_background_state(id, BackgroundAgentStatus::Cancelled, Some("cancelled"));
-        if let Some(a) = job.abort.lock().expect("abort").as_ref() {
+        if let Some(a) = job.abort.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             a.abort();
         }
         true
@@ -824,11 +881,18 @@ impl ToolServices {
         id: Uuid,
     ) -> Option<(BackgroundAgentStatus, Option<String>)> {
         let job = {
-            let map = self.background_agents.lock().expect("background_agents");
+            let map = self
+                .background_agents
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             map.get(&id).cloned()?
         };
-        let st = *job.status.lock().expect("bg status");
-        let sum = job.summary.lock().expect("bg summary").clone();
+        let st = *job.status.lock().unwrap_or_else(|e| e.into_inner());
+        let sum = job
+            .summary
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Some((st, sum))
     }
 
@@ -836,7 +900,7 @@ impl ToolServices {
     pub fn attach_mcp_session(&self, session: Arc<dyn crate::mcp_connected::McpConnected>) {
         self.mcp_sessions
             .lock()
-            .expect("mcp_sessions")
+            .unwrap_or_else(|e| e.into_inner())
             .push(session);
     }
 
@@ -849,7 +913,10 @@ impl ToolServices {
     /// 已连接的 MCP 会话（顺序与连接顺序一致）。
     #[cfg(feature = "tools-mcp")]
     pub fn mcp_sessions(&self) -> Vec<Arc<dyn crate::mcp_connected::McpConnected>> {
-        self.mcp_sessions.lock().expect("mcp_sessions").clone()
+        self.mcp_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// 兼容旧逻辑：仅首个会话（单 MCP 时与历史行为一致）。
@@ -857,7 +924,7 @@ impl ToolServices {
     pub fn mcp_stdio(&self) -> Option<Arc<dyn crate::mcp_connected::McpConnected>> {
         self.mcp_sessions
             .lock()
-            .expect("mcp_sessions")
+            .unwrap_or_else(|e| e.into_inner())
             .first()
             .cloned()
     }
@@ -867,13 +934,22 @@ impl ToolServices {
         let _ = snap.todos;
         let _ = snap.plan_tree;
         let _ = snap.mode;
-        *self.tasks.lock().expect("tasks mutex") = snap.tasks;
-        *self.teams.lock().expect("teams mutex") = snap.teams;
-        *self.crons.lock().expect("crons mutex") = snap.crons;
-        *self.remote_hooks.lock().expect("remote mutex") = snap.remote_hooks;
-        *self.inter_messages.lock().expect("msg mutex") = snap.inter_messages;
-        *self.deferred_tool_names.lock().expect("defer mutex") = snap.deferred_tool_names;
-        *self.config_overrides.lock().expect("cfg mutex") = snap.config_overrides;
+        *self.tasks.lock().unwrap_or_else(|e| e.into_inner()) = snap.tasks;
+        *self.teams.lock().unwrap_or_else(|e| e.into_inner()) = snap.teams;
+        *self.crons.lock().unwrap_or_else(|e| e.into_inner()) = snap.crons;
+        *self.remote_hooks.lock().unwrap_or_else(|e| e.into_inner()) = snap.remote_hooks;
+        *self
+            .inter_messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = snap.inter_messages;
+        *self
+            .deferred_tool_names
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = snap.deferred_tool_names;
+        *self
+            .config_overrides
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = snap.config_overrides;
     }
 
     fn collect_snapshot(&self) -> OrchestrationSnapshotV1 {
@@ -881,18 +957,30 @@ impl ToolServices {
             version: 1,
             todos: Vec::new(),
             plan_tree: PlanTree::default(),
-            tasks: self.tasks.lock().expect("tasks mutex").clone(),
-            teams: self.teams.lock().expect("teams mutex").clone(),
-            crons: self.crons.lock().expect("crons mutex").clone(),
-            remote_hooks: self.remote_hooks.lock().expect("remote mutex").clone(),
-            inter_messages: self.inter_messages.lock().expect("msg mutex").clone(),
+            tasks: self.tasks.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            teams: self.teams.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            crons: self.crons.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            remote_hooks: self
+                .remote_hooks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            inter_messages: self
+                .inter_messages
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
             mode: RuntimeModeState::default(),
             deferred_tool_names: self
                 .deferred_tool_names
                 .lock()
-                .expect("defer mutex")
+                .unwrap_or_else(|e| e.into_inner())
                 .clone(),
-            config_overrides: self.config_overrides.lock().expect("cfg mutex").clone(),
+            config_overrides: self
+                .config_overrides
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
         }
     }
 
@@ -910,7 +998,7 @@ impl ToolServices {
         // ToolServices writes and append/update/remove helpers serialize.
         let _guard = ORCHESTRATION_FILE_LOCK
             .lock()
-            .expect("orchestration file lock");
+            .unwrap_or_else(|e| e.into_inner());
         let snap = self.collect_snapshot();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -923,18 +1011,24 @@ impl ToolServices {
     }
 
     pub fn attach_session_plan_store(&self, store: Arc<dyn SessionPlanStore>) {
-        *self.session_plan_store.lock().expect("session_plan_store") = Some(store);
+        *self
+            .session_plan_store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(store);
     }
 
     pub fn attach_session_todo_store(&self, store: Arc<dyn SessionTodoStore>) {
-        *self.session_todo_store.lock().expect("session_todo_store") = Some(store);
+        *self
+            .session_todo_store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(store);
     }
 
     pub fn todos(&self, session_id: Option<&str>) -> Vec<TodoItem> {
         let key = resolve_session_key(session_id);
         self.todos_by_session
             .lock()
-            .expect("todos mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&key)
             .cloned()
             .unwrap_or_default()
@@ -946,7 +1040,10 @@ impl ToolServices {
         new: Vec<TodoItem>,
     ) -> (Vec<TodoItem>, Vec<TodoItem>) {
         let key = resolve_session_key(session_id);
-        let mut guard = self.todos_by_session.lock().expect("todos mutex");
+        let mut guard = self
+            .todos_by_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let old = guard.remove(&key).unwrap_or_default();
         // Vacuous true for empty list — matches prior global TodoWrite clear semantics.
         let all_done = new.iter().all(|t| t.status == "completed");
@@ -963,7 +1060,7 @@ impl ToolServices {
         let store = self
             .session_todo_store
             .lock()
-            .expect("session_todo_store")
+            .unwrap_or_else(|e| e.into_inner())
             .clone();
         let Some(store) = store else {
             return;
@@ -984,7 +1081,10 @@ impl ToolServices {
     pub async fn hydrate_todos(&self, session_id: Option<&str>) {
         let key = resolve_session_key(session_id);
         {
-            let guard = self.todos_by_session.lock().expect("todos mutex");
+            let guard = self
+                .todos_by_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if guard.contains_key(&key) {
                 return;
             }
@@ -992,7 +1092,7 @@ impl ToolServices {
         let store = self
             .session_todo_store
             .lock()
-            .expect("session_todo_store")
+            .unwrap_or_else(|e| e.into_inner())
             .clone();
         let Some(store) = store else {
             return;
@@ -1004,7 +1104,7 @@ impl ToolServices {
             Ok(Some(todos)) => {
                 self.todos_by_session
                     .lock()
-                    .expect("todos mutex")
+                    .unwrap_or_else(|e| e.into_inner())
                     .insert(key, todos);
             }
             Ok(None) => {}
@@ -1018,7 +1118,7 @@ impl ToolServices {
         let key = resolve_session_key(session_id);
         self.plan_trees
             .lock()
-            .expect("plan_trees mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&key)
             .cloned()
             .unwrap_or_default()
@@ -1030,7 +1130,7 @@ impl ToolServices {
         new: PlanTree,
     ) -> (PlanTree, PlanTree) {
         let key = resolve_session_key(session_id);
-        let mut guard = self.plan_trees.lock().expect("plan_trees mutex");
+        let mut guard = self.plan_trees.lock().unwrap_or_else(|e| e.into_inner());
         let old = guard.remove(&key).unwrap_or_default();
         let cur = if plan_tree_all_completed(&new) {
             PlanTree::default()
@@ -1049,7 +1149,7 @@ impl ToolServices {
         let store = self
             .session_plan_store
             .lock()
-            .expect("session_plan_store")
+            .unwrap_or_else(|e| e.into_inner())
             .clone();
         let Some(store) = store else {
             return;
@@ -1070,7 +1170,7 @@ impl ToolServices {
     pub async fn hydrate_plan_tree(&self, session_id: Option<&str>) {
         let key = resolve_session_key(session_id);
         {
-            let guard = self.plan_trees.lock().expect("plan_trees mutex");
+            let guard = self.plan_trees.lock().unwrap_or_else(|e| e.into_inner());
             if guard.contains_key(&key) {
                 return;
             }
@@ -1078,7 +1178,7 @@ impl ToolServices {
         let store = self
             .session_plan_store
             .lock()
-            .expect("session_plan_store")
+            .unwrap_or_else(|e| e.into_inner())
             .clone();
         let Some(store) = store else {
             return;
@@ -1090,7 +1190,7 @@ impl ToolServices {
             Ok(Some(tree)) => {
                 self.plan_trees
                     .lock()
-                    .expect("plan_trees mutex")
+                    .unwrap_or_else(|e| e.into_inner())
                     .insert(key, tree);
             }
             Ok(None) => {}
@@ -1130,27 +1230,31 @@ impl ToolServices {
         };
         self.tasks
             .lock()
-            .expect("tasks mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), t.clone());
         self.try_persist();
         t
     }
 
     pub fn get_task(&self, id: &str) -> Option<TaskRecord> {
-        self.tasks.lock().expect("tasks mutex").get(id).cloned()
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
     }
 
     pub fn list_tasks(&self) -> Vec<TaskRecord> {
         self.tasks
             .lock()
-            .expect("tasks mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .values()
             .cloned()
             .collect()
     }
 
     pub fn update_task(&self, id: &str, patch: TaskRecord) -> Option<TaskRecord> {
-        let mut m = self.tasks.lock().expect("tasks mutex");
+        let mut m = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
         let out = m.get_mut(id).map(|existing| {
             if !patch.subject.is_empty() {
                 existing.subject = patch.subject;
@@ -1186,7 +1290,12 @@ impl ToolServices {
     }
 
     pub fn remove_task(&self, id: &str) -> bool {
-        let removed = self.tasks.lock().expect("tasks mutex").remove(id).is_some();
+        let removed = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id)
+            .is_some();
         if removed {
             self.try_persist();
         }
@@ -1202,14 +1311,19 @@ impl ToolServices {
         };
         self.teams
             .lock()
-            .expect("teams mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), t.clone());
         self.try_persist();
         t
     }
 
     pub fn remove_team(&self, id: &str) -> bool {
-        let removed = self.teams.lock().expect("teams mutex").remove(id).is_some();
+        let removed = self
+            .teams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id)
+            .is_some();
         if removed {
             self.try_persist();
         }
@@ -1219,7 +1333,7 @@ impl ToolServices {
     pub fn list_teams(&self) -> Vec<TeamRecord> {
         self.teams
             .lock()
-            .expect("teams mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .values()
             .cloned()
             .collect()
@@ -1272,13 +1386,16 @@ impl ToolServices {
             workflow: opts.workflow.filter(|s| !s.trim().is_empty()),
             recurring: opts.recurring.unwrap_or(true),
         };
-        self.crons.lock().expect("crons mutex").push(job.clone());
+        self.crons
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(job.clone());
         self.try_persist();
         job
     }
 
     pub fn remove_cron(&self, id: &str) -> bool {
-        let mut g = self.crons.lock().expect("crons mutex");
+        let mut g = self.crons.lock().unwrap_or_else(|e| e.into_inner());
         let len = g.len();
         g.retain(|c| c.id != id);
         let removed = g.len() < len;
@@ -1290,7 +1407,7 @@ impl ToolServices {
     }
 
     pub fn update_cron(&self, id: &str, patch: CronJobPatch) -> Option<CronJob> {
-        let mut g = self.crons.lock().expect("crons mutex");
+        let mut g = self.crons.lock().unwrap_or_else(|e| e.into_inner());
         let job = g.iter_mut().find(|c| c.id == id)?;
         if let Some(name) = patch.name.filter(|s| !s.trim().is_empty()) {
             job.name = Some(name);
@@ -1333,29 +1450,35 @@ impl ToolServices {
     }
 
     pub fn list_crons(&self) -> Vec<CronJob> {
-        self.crons.lock().expect("crons mutex").clone()
+        self.crons.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn push_remote_hook(&self, url: String) {
-        self.remote_hooks.lock().expect("remote mutex").push(url);
+        self.remote_hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(url);
         self.try_persist();
     }
 
     pub fn push_message(&self, from: String, body: String) {
         self.inter_messages
             .lock()
-            .expect("msg mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .push((from, body));
         self.try_persist();
     }
 
     pub fn list_messages(&self) -> Vec<(String, String)> {
-        self.inter_messages.lock().expect("msg mutex").clone()
+        self.inter_messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn set_plan_mode(&self, v: bool) {
         let key = resolve_session_key(None);
-        let mut modes = self.modes.lock().expect("modes mutex");
+        let mut modes = self.modes.lock().unwrap_or_else(|e| e.into_inner());
         modes.entry(key).or_default().plan_mode = v;
     }
 
@@ -1363,7 +1486,7 @@ impl ToolServices {
         let key = resolve_session_key(None);
         self.modes
             .lock()
-            .expect("modes mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&key)
             .map(|m| m.plan_mode)
             .unwrap_or(false)
@@ -1371,7 +1494,7 @@ impl ToolServices {
 
     pub fn set_worktree(&self, path: Option<String>) {
         let key = resolve_session_key(None);
-        let mut modes = self.modes.lock().expect("modes mutex");
+        let mut modes = self.modes.lock().unwrap_or_else(|e| e.into_inner());
         modes.entry(key).or_default().worktree_path = path;
     }
 
@@ -1379,7 +1502,7 @@ impl ToolServices {
         let key = resolve_session_key(None);
         self.modes
             .lock()
-            .expect("modes mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .get(&key)
             .and_then(|m| m.worktree_path.clone())
     }
@@ -1387,7 +1510,7 @@ impl ToolServices {
     pub fn defer_tool(&self, name: String) {
         self.deferred_tool_names
             .lock()
-            .expect("defer mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .push(name);
         self.try_persist();
     }
@@ -1395,14 +1518,14 @@ impl ToolServices {
     pub fn deferred_tools(&self) -> Vec<String> {
         self.deferred_tool_names
             .lock()
-            .expect("defer mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
     pub fn config_set(&self, key: String, value: serde_json::Value) {
         self.config_overrides
             .lock()
-            .expect("cfg mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(key, value);
         self.try_persist();
     }
@@ -1410,13 +1533,16 @@ impl ToolServices {
     pub fn config_get(&self, key: &str) -> Option<serde_json::Value> {
         self.config_overrides
             .lock()
-            .expect("cfg mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .get(key)
             .cloned()
     }
 
     pub fn config_snapshot(&self) -> HashMap<String, serde_json::Value> {
-        self.config_overrides.lock().expect("cfg mutex").clone()
+        self.config_overrides
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -1466,7 +1592,7 @@ pub fn append_cron_job_to_orchestration_file(
     use uuid::Uuid;
     let _guard = ORCHESTRATION_FILE_LOCK
         .lock()
-        .expect("orchestration file lock");
+        .unwrap_or_else(|e| e.into_inner());
     let mut snap = if path.is_file() {
         let text = fs::read_to_string(path)?;
         serde_json::from_str::<OrchestrationSnapshotV1>(&text)
@@ -1517,7 +1643,7 @@ pub fn update_cron_job_in_orchestration_file(
 ) -> anyhow::Result<Option<CronJob>> {
     let _guard = ORCHESTRATION_FILE_LOCK
         .lock()
-        .expect("orchestration file lock");
+        .unwrap_or_else(|e| e.into_inner());
     if !path.is_file() {
         return Ok(None);
     }
@@ -1574,7 +1700,7 @@ pub fn update_cron_job_in_orchestration_file(
 pub fn remove_cron_job_from_orchestration_file(path: &Path, id: &str) -> anyhow::Result<bool> {
     let _guard = ORCHESTRATION_FILE_LOCK
         .lock()
-        .expect("orchestration file lock");
+        .unwrap_or_else(|e| e.into_inner());
     if !path.is_file() {
         return Ok(false);
     }

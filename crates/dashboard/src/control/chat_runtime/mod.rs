@@ -48,6 +48,29 @@ impl std::fmt::Display for ChatSendConflict {
 
 impl std::error::Error for ChatSendConflict {}
 
+/// Result of [`ChatRuntimeHost::delegate`] (async nested run already spawned).
+#[derive(Debug, Clone)]
+pub struct DelegateResult {
+    pub session_id: String,
+    pub nested_task_id: String,
+    pub agent_type: String,
+    pub started_at: String,
+}
+
+/// Normalize Workbench-delegate agent types to catalog ids.
+/// Returns `None` when the type is not one of explore / plan / general-purpose.
+pub fn normalize_delegate_agent_type(raw: &str) -> Option<String> {
+    let lower = raw.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "explore" | "explorer" => Some("explore".into()),
+        "plan" | "planner" => Some("plan".into()),
+        "general-purpose" | "general_purpose" | "generalpurpose" | "builder" => {
+            Some("general-purpose".into())
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn embedded_loop_limits() -> anycode_core::AgentLoopLimits {
     let Ok((_, cfg)) = crate::config_patch::read_config_root() else {
         return anycode_core::resolve_agent_loop_limits(None, None);
@@ -380,6 +403,216 @@ impl ChatRuntimeHost {
         })
     }
 
+    /// Host-driven nested subagent (Workbench 「委派」): runs `SubAgentExecutor`
+    /// without requiring the parent model to call the Agent tool.
+    ///
+    /// Allowed `agent_type`: `explore` | `plan` | `general-purpose` (aliases normalized).
+    /// Nested live-trace events appear in the transcript as `subagent_group`.
+    pub async fn delegate(
+        &self,
+        db: DashboardDb,
+        events: Arc<EventBus>,
+        tail_hub: &WebChatTailHub,
+        session_id: &str,
+        project_id: &str,
+        project_root: &Path,
+        host_agent: Option<&str>,
+        agent_type: &str,
+        prompt: &str,
+        reply_lang: Option<&str>,
+    ) -> anyhow::Result<DelegateResult> {
+        let subagent = normalize_delegate_agent_type(agent_type)
+            .ok_or_else(|| anyhow::anyhow!("unsupported agent_type for delegate: {agent_type}"))?;
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            anyhow::bail!("prompt is required");
+        }
+        if !crate::question_ipc::list_pending_for_session(Some(session_id), 1).is_empty() {
+            return Err(ChatSendConflict::PendingQuestion.into());
+        }
+
+        let root = crate::project_root::ensure_project_root(project_root, false)?;
+        let host_agent_type = AgentType::new(
+            crate::control::agent_resolve::resolve_web_chat_agent(host_agent),
+        );
+        let working_directory = root.to_string_lossy().to_string();
+        let runtime = self.runtime(&root).await?;
+        let runtime_generation = self.runtime_generation.load(Ordering::Acquire);
+
+        let session = {
+            let existing = {
+                let guard = self.sessions.lock().await;
+                guard.get(session_id).cloned()
+            };
+            let existing = match existing {
+                Some(s) if s.agent_type == host_agent_type => Some(s),
+                Some(s) => {
+                    if s.turn_in_flight.load(Ordering::Acquire) {
+                        return Err(ChatSendConflict::TurnInFlight.into());
+                    }
+                    self.sessions.lock().await.remove(session_id);
+                    None
+                }
+                None => None,
+            };
+            if let Some(existing) = existing {
+                existing
+            } else {
+                let mut base = runtime
+                    .build_session_messages(&host_agent_type, &working_directory)
+                    .await?;
+                let hydrated = match load_prior_history(&db, session_id).await {
+                    Ok(h) => h,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            session_id,
+                            "failed to hydrate chat history for delegate; continuing without prior turns"
+                        );
+                        HydratedHistory::default()
+                    }
+                };
+                base.extend(hydrated.messages);
+                let task_id = TaskId::from(Uuid::new_v4());
+                let log_path = self.disk.output_path(task_id);
+                let embedded = Arc::new(EmbeddedSession {
+                    messages: Arc::new(Mutex::new(base)),
+                    agent_type: host_agent_type,
+                    working_directory: working_directory.clone(),
+                    task_id,
+                    log_path: log_path.clone(),
+                    user_turn_seq: Arc::new(AtomicU32::new(hydrated.max_user_turn_id)),
+                    runtime_generation: AtomicU64::new(runtime_generation),
+                    turn_in_flight: Arc::new(AtomicBool::new(false)),
+                    active_cancel: std::sync::Mutex::new(None),
+                    epoch: AtomicU64::new(0),
+                });
+                let mut guard = self.sessions.lock().await;
+                if let Some(existing) = guard.get(session_id) {
+                    existing.clone()
+                } else {
+                    guard.insert(session_id.to_string(), Arc::clone(&embedded));
+                    embedded
+                }
+            }
+        };
+
+        if session
+            .turn_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(ChatSendConflict::TurnInFlight.into());
+        }
+
+        let user_turn_id = session.user_turn_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let turn_epoch = session.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        let coop = Arc::new(AtomicBool::new(false));
+        if let Ok(mut guard) = session.active_cancel.lock() {
+            *guard = Some(Arc::clone(&coop));
+        }
+
+        let display_prompt = format!("[委派 · {subagent}]\n{prompt}");
+        let user_evt = crate::observability::chat_turn_log::user_message_event(
+            session_id,
+            project_id,
+            user_turn_id,
+            &display_prompt,
+        );
+        match crate::observability::chat_turn_log::persist_and_enrich(&db, user_evt, user_turn_id)
+            .await
+        {
+            Ok(enriched) => events.publish_chat(enriched),
+            Err(error) => tracing::warn!(%error, "delegate user message persist failed"),
+        }
+
+        if log_tail_fallback_enabled() {
+            tail_hub.ensure_tail(
+                Arc::clone(&events),
+                session_id,
+                project_id,
+                &session.log_path,
+            );
+        }
+
+        let nested_task_id = Uuid::new_v4();
+        let (live_tx, live_rx) = mpsc::unbounded_channel();
+        spawn_live_bridge(
+            Arc::clone(&events),
+            db.clone(),
+            session_id.to_string(),
+            project_id.to_string(),
+            user_turn_id,
+            live_rx,
+        );
+
+        let _ = db
+            .attach_task_to_session(
+                session_id,
+                &session.task_id.to_string(),
+                Some(session.agent_type.as_str()),
+                Some(&truncate(prompt, 240)),
+            )
+            .await;
+        let _ = crate::cancel_ipc::register_active(session_id, &session.task_id.to_string());
+
+        let tool_deny_names = anycode_tools::merge_agent_type_tool_denies(&subagent, &[]);
+        let invoke = NestedTaskInvoke {
+            agent_type: AgentType::new(subagent.clone()),
+            prompt: prompt.to_string(),
+            working_directory: session.working_directory.clone(),
+            model: None,
+            isolation: None,
+            task_id: Some(nested_task_id),
+            cancel: Some(Arc::clone(&coop)),
+            tool_deny_names,
+            tool_deny_prefixes: vec![],
+            context_injections: vec![],
+            live_trace_tx: Some(live_tx),
+            parent_task_id: Some(session.task_id),
+        };
+
+        let db2 = db.clone();
+        let events2 = Arc::clone(&events);
+        let session_id_owned = session_id.to_string();
+        let project_id_owned = project_id.to_string();
+        let runtime2 = Arc::clone(&runtime);
+        let session2 = Arc::clone(&session);
+        let turn_guard = Arc::clone(&session.turn_in_flight);
+        let subagent_owned = subagent.clone();
+        let reply_lang_owned = reply_lang.map(str::to_string);
+        let prompt_owned = prompt.to_string();
+        tokio::spawn(async move {
+            let _clear_turn = TurnInFlightGuard(turn_guard);
+            if let Err(e) = run_host_delegate(
+                runtime2,
+                db2,
+                events2,
+                session2,
+                session_id_owned.clone(),
+                project_id_owned,
+                invoke,
+                subagent_owned,
+                prompt_owned,
+                reply_lang_owned,
+                user_turn_id,
+                coop,
+                turn_epoch,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "host-driven delegate failed");
+            }
+        });
+
+        Ok(DelegateResult {
+            session_id: session_id.to_string(),
+            nested_task_id: nested_task_id.to_string(),
+            agent_type: subagent,
+            started_at: chrono::Utc::now().to_rfc3339(),
+        })
+    }
+
     pub async fn evict(&self, session_id: &str) {
         self.sessions.lock().await.remove(session_id);
     }
@@ -393,6 +626,16 @@ impl ChatRuntimeHost {
             .get(session_id)
             .map(|s| s.signal_cancel())
             .unwrap_or(false)
+    }
+
+    /// Cooperative-cancel flag for the active embedded turn, if any.
+    pub async fn session_cancel_flag(&self, session_id: &str) -> Option<Arc<AtomicBool>> {
+        self.sessions.lock().await.get(session_id).and_then(|s| {
+            s.active_cancel
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(Arc::clone))
+        })
     }
 
     pub async fn is_turn_in_flight(&self, session_id: &str) -> bool {
@@ -709,6 +952,246 @@ fn normalize_reply_lang(lang: Option<&str>) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn run_host_delegate(
+    runtime: Arc<AgentRuntime>,
+    db: DashboardDb,
+    events: Arc<EventBus>,
+    session: Arc<EmbeddedSession>,
+    session_id: String,
+    project_id: String,
+    invoke: NestedTaskInvoke,
+    subagent: String,
+    prompt: String,
+    reply_lang: Option<String>,
+    user_turn_id: u32,
+    coop: Arc<AtomicBool>,
+    turn_epoch: u64,
+) -> anyhow::Result<()> {
+    let reply_lang = normalize_reply_lang(reply_lang.as_deref());
+    let chat_turn = anycode_core::ChatTurnContext {
+        dashboard_session_id: Some(session_id.clone()),
+        user_turn_id: Some(user_turn_id),
+        reply_language: Some(reply_lang),
+        host_intent_hint: Some(format!("delegate:{subagent}")),
+    };
+    anycode_core::scope_chat_turn(
+        chat_turn,
+        run_host_delegate_scoped(
+            runtime,
+            db,
+            events,
+            session,
+            session_id,
+            project_id,
+            invoke,
+            subagent,
+            prompt,
+            user_turn_id,
+            coop,
+            turn_epoch,
+        ),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_host_delegate_scoped(
+    runtime: Arc<AgentRuntime>,
+    db: DashboardDb,
+    events: Arc<EventBus>,
+    session: Arc<EmbeddedSession>,
+    session_id: String,
+    project_id: String,
+    invoke: NestedTaskInvoke,
+    subagent: String,
+    prompt: String,
+    user_turn_id: u32,
+    coop: Arc<AtomicBool>,
+    turn_epoch: u64,
+) -> anyhow::Result<()> {
+    crate::notify::register_inprocess_bus(Arc::clone(&events));
+
+    {
+        let mut msgs = session.messages.lock().await;
+        msgs.push(Message {
+            id: Uuid::new_v4(),
+            role: MessageRole::User,
+            content: MessageContent::Text(format!("[委派 · {subagent}]\n{prompt}")),
+            timestamp: chrono::Utc::now(),
+            metadata: Default::default(),
+        });
+    }
+
+    let session_id_cancel = session_id.clone();
+    let exec = runtime.run_nested_task(invoke);
+    tokio::pin!(exec);
+
+    let mut cancel_poll = tokio::time::interval(EMBEDDED_CANCEL_POLL_INTERVAL);
+    cancel_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let result = loop {
+        tokio::select! {
+            res = &mut exec => break res,
+            _ = cancel_poll.tick() => {
+                poll_embedded_cancel(&session_id_cancel, &coop);
+            }
+        }
+    };
+
+    let epoch_current = session.epoch.load(Ordering::Acquire) == turn_epoch;
+    if !epoch_current {
+        tracing::info!(
+            target: "anycode_dashboard",
+            session_id = %session_id,
+            turn_epoch,
+            "stale host delegate finished; skipping session state writes"
+        );
+        return Ok(());
+    }
+
+    let (terminal_status, summary) = match &result {
+        Ok(run) => match &run.result {
+            TaskResult::Success { output, .. } => (
+                crate::control::session_status::STATUS_COMPLETED,
+                Some(output.trim().to_string()),
+            ),
+            TaskResult::Partial { success, remaining } => (
+                crate::control::session_status::STATUS_COMPLETED,
+                Some(
+                    format!("{success}\n\n(remaining) {remaining}")
+                        .trim()
+                        .to_string(),
+                ),
+            ),
+            TaskResult::Failure { error, details } => {
+                let body = match details {
+                    Some(d) if !d.trim().is_empty() => format!("{error}\n{d}"),
+                    _ => error.clone(),
+                };
+                (crate::control::session_status::STATUS_FAILED, Some(body))
+            }
+        },
+        Err(e) if e.is_cooperative_cancel() => {
+            (crate::control::session_status::STATUS_CANCELLED, None)
+        }
+        Err(e) => (
+            crate::control::session_status::STATUS_FAILED,
+            Some(e.to_string()),
+        ),
+    };
+
+    if let Some(text) = summary.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let assistant_evt =
+            host_delegate_assistant_event(&session_id, &project_id, user_turn_id, &subagent, text);
+        match crate::observability::chat_turn_log::persist_and_enrich(
+            &db,
+            assistant_evt,
+            user_turn_id,
+        )
+        .await
+        {
+            Ok(enriched) => events.publish_chat(enriched),
+            Err(error) => tracing::warn!(%error, "delegate assistant summary persist failed"),
+        }
+        let mut msgs = session.messages.lock().await;
+        msgs.push(Message {
+            id: Uuid::new_v4(),
+            role: MessageRole::Assistant,
+            content: MessageContent::Text(text.to_string()),
+            timestamp: chrono::Utc::now(),
+            metadata: Default::default(),
+        });
+    }
+
+    let _ = db
+        .finish_session(
+            &session_id,
+            terminal_status,
+            summary.as_deref().map(|s| truncate(s, 2000)).as_deref(),
+        )
+        .await;
+    crate::cancel_ipc::unregister_active(&session_id);
+    publish_embedded_turn_done(
+        &events,
+        &session_id,
+        &project_id,
+        user_turn_id,
+        terminal_status,
+    );
+
+    if let Err(e) = &result {
+        if e.is_cooperative_cancel() {
+            return Ok(());
+        }
+        if let Ok(evt) = db
+            .insert_event(crate::schema::InsertEventRequest {
+                project_id: project_id.clone(),
+                session_id: Some(session_id.clone()),
+                task_id: None,
+                agent_id: None,
+                event_type: "session_error".into(),
+                severity: Some("error".into()),
+                title: "Host delegate failed".into(),
+                body: Some(e.to_string()),
+                payload: None,
+            })
+            .await
+        {
+            crate::control::web_chat_tail::publish_project_chat_event(&events, &evt);
+        }
+    }
+
+    Ok(())
+}
+
+fn host_delegate_assistant_event(
+    session_id: &str,
+    project_id: &str,
+    conversation_turn_id: u32,
+    subagent: &str,
+    body: &str,
+) -> crate::schema::ChatStreamEvent {
+    use crate::schema::{ChatStreamEvent, TranscriptBlock};
+    let at = chrono::Utc::now().to_rfc3339();
+    let block_id = format!(
+        "assistant:u{conversation_turn_id}:{}",
+        Uuid::new_v4().simple()
+    );
+    ChatStreamEvent {
+        session_id: session_id.to_string(),
+        project_id: project_id.to_string(),
+        kind: "assistant_message".into(),
+        turn: None,
+        conversation_turn_id: Some(conversation_turn_id),
+        seq: None,
+        event_id: None,
+        tool_key: None,
+        tool_name: None,
+        text: Some(body.to_string()),
+        block: Some(TranscriptBlock {
+            id: block_id,
+            block_type: "assistant_message".into(),
+            at: at.clone(),
+            title: format!("委派 · {subagent}"),
+            body: body.to_string(),
+            meta: serde_json::json!({
+                "user_turn_id": conversation_turn_id,
+                "source": "host_delegate",
+                "agent_type": subagent,
+            }),
+            collapsible: false,
+            default_collapsed: false,
+            event_id: None,
+        }),
+        payload: serde_json::json!({
+            "user_turn_id": conversation_turn_id,
+            "source": "host_delegate",
+            "agent_type": subagent,
+        }),
+        at,
+    }
+}
+
 struct TurnInFlightGuard(Arc<AtomicBool>);
 
 impl Drop for TurnInFlightGuard {
@@ -797,6 +1280,24 @@ mod tests {
         let new_epoch = session.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         assert_ne!(session.epoch.load(Ordering::Acquire), old_epoch);
         assert_eq!(session.epoch.load(Ordering::Acquire), new_epoch);
+    }
+
+    #[test]
+    fn normalize_delegate_agent_type_accepts_aliases() {
+        assert_eq!(
+            normalize_delegate_agent_type("Explore").as_deref(),
+            Some("explore")
+        );
+        assert_eq!(
+            normalize_delegate_agent_type("plan").as_deref(),
+            Some("plan")
+        );
+        assert_eq!(
+            normalize_delegate_agent_type("general_purpose").as_deref(),
+            Some("general-purpose")
+        );
+        assert!(normalize_delegate_agent_type("goal").is_none());
+        assert!(normalize_delegate_agent_type("").is_none());
     }
 
     #[test]

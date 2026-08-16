@@ -42,7 +42,7 @@ pub struct DatabaseBackupResponse {
 pub async fn post_database_backup(State(state): State<AppState>) -> impl IntoResponse {
     let src = state.db.path();
     let dest = crate::service_governance::suggest_backup_path(src);
-    match crate::backup_db(src, &dest) {
+    match crate::backup_db(src, &dest).await {
         Ok(()) => Json(DatabaseBackupResponse {
             ok: true,
             path: dest.display().to_string(),
@@ -805,6 +805,51 @@ pub async fn get_memory_center() -> impl IntoResponse {
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct MemoryBackendBody {
+    pub backend: String,
+}
+
+pub async fn patch_memory_backend(Json(body): Json<MemoryBackendBody>) -> impl IntoResponse {
+    let backend = match anycode_config::normalize_memory_backend(&body.backend) {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    match crate::config_patch::read_config_root() {
+        Ok((_path, mut cfg)) => {
+            if !cfg.get("memory").is_some_and(|m| m.is_object()) {
+                cfg["memory"] = json!({});
+            }
+            cfg["memory"]["backend"] = json!(backend);
+            match crate::config_patch::write_config_root(&cfg) {
+                Ok(path) => Json(json!({
+                    "ok": true,
+                    "backend": backend,
+                    "config_path": path.display().to_string(),
+                    "restart_hint": "Restart the desktop app or embedded dashboard for memory backend changes to take effect."
+                }))
+                .into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "ok": false, "error": e.to_string() })),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
         )
             .into_response(),
     }

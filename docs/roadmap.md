@@ -82,7 +82,7 @@
 
 - **网页端操作 Agent**：Web 触发 run/goal、工具审批收件箱、会话 cancel 等本地控制面能力**不**作为 0.3 产品承诺；继续 CLI + 本地 Workbench 观测。
 - 远程队列执行、云端 Agent 控制台、OpenClaw Gateway/Codex 式托管。
-- HTTP `anycode daemon`（[ADR 003](adr/003-http-daemon-deprecated.md)）。
+- HTTP `anycode daemon`（[ADR 003](adr/018-http-daemon-deprecated.md)）。
 
 ### 3.5.3 云端产品纠偏（0.3+，[ADR 011](adr/011-cloud-account-platform.md)）
 
@@ -130,6 +130,21 @@
 
 ---
 
+## 4.9 Skill Apps（人机协同视觉宿主）— [ADR 020](adr/020-skill-apps.md)
+
+| 切片 | 状态 | 说明 |
+|------|------|------|
+| 合约 `ui/surface.yaml` + VisualBrief | **落地** | `crates/tools/src/skills/surface.rs` |
+| 三槽宿主 + hello fixture | **落地** | dock / conversation / project pin；`skills-starter/skill-app-hello` |
+| Present / Push / Read + brief 锁定 | **落地** | `SkillAppPresent` / `SkillAppPush` / `SkillAppRead` |
+| anycode-ppt 视觉工作台 | **落地** | `skills-starter/anycode-ppt/ui` |
+| anycode-video 短视频工作台 | **落地** | `skills-starter/anycode-video`（html-video 模板 + Playwright MP4） |
+| scaffold / vet / 文档 | **落地** | 本 ADR + user guide |
+
+后续增强：多 Skill App 同时钉在 header、MCP Apps 共用同一宿主、Doc 专用 brief schema。
+
+---
+
 ## 5. 后续（Later）
 
 - **真正恢复执行的跨进程后台 Agent**：先完成 diagnostic state，再决定是否恢复执行。
@@ -146,7 +161,7 @@
 
 | 决策 | 记录 |
 |------|------|
-| **不提供 / 不恢复 HTTP `anycode daemon`** | [ADR 003](adr/003-http-daemon-deprecated.md) |
+| **不提供 / 不恢复 HTTP `anycode daemon`** | [ADR 003](adr/018-http-daemon-deprecated.md) |
 | **MCP stdio 长驻会话不自动重连** | 子进程退出 / EOF / 超时后由用户修正命令或重启 CLI；见 [`mcp-stdio-lifecycle.md`](ops/mcp-stdio-lifecycle.md) |
 
 ---

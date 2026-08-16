@@ -15,7 +15,8 @@ export function isStaticProgressStatusLine(block: TranscriptBlock): boolean {
   if (block.block_type === "progress_update") return true;
   if (
     block.block_type === "system_notice" &&
-    block.meta?.source === "intermediate_assistant"
+    (block.meta?.source === "intermediate_assistant" ||
+      block.meta?.source === "thinking_delta")
   ) {
     return true;
   }
@@ -25,6 +26,24 @@ export function isStaticProgressStatusLine(block: TranscriptBlock): boolean {
       block.meta?.message_role === "status" ||
       block.meta?.live === true)
   );
+}
+
+/** Cursor waterfall prose — stays fully visible after later tools arrive. */
+export function isWaterfallProseBlock(block: TranscriptBlock): boolean {
+  if (
+    block.block_type === "system_notice" &&
+    (block.meta?.source === "intermediate_assistant" ||
+      block.meta?.source === "thinking_delta")
+  ) {
+    return (block.body?.trim()?.length ?? 0) > 0;
+  }
+  if (
+    block.block_type === "assistant_message" &&
+    (block.meta?.narration === true || block.meta?.message_role === "status")
+  ) {
+    return (block.body?.trim()?.length ?? 0) > 0;
+  }
+  return false;
 }
 
 /** Mid-turn assistant text — inline status, not a final reply bubble. */
@@ -69,13 +88,23 @@ export function formatDeliveryPreflight(_summary: string): string | null {
   return null;
 }
 
+/** Compile/gate/skill diagnostics that must never appear in the chat timeline. */
+export function isInternalProgressDiagnostic(text: string): boolean {
+  const t = text.trim();
+  return (
+    t.includes("[delivery_preflight]") ||
+    t.includes("[gate_plan") ||
+    t.includes("[skill_resolved]")
+  );
+}
+
 export function progressSummary(block: TranscriptBlock, localeBody?: string): string {
   const metaSummary = block.meta?.summary;
   const raw =
     typeof metaSummary === "string" && metaSummary.trim()
       ? metaSummary.trim()
       : (localeBody ?? block.body ?? "").trim();
-  if (raw.includes("[delivery_preflight]")) return "";
+  if (isInternalProgressDiagnostic(raw)) return "";
   return raw;
 }
 

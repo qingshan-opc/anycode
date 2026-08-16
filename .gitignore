@@ -1,5 +1,4 @@
 target/
-Cargo.lock
 **/*.rs.bk
 *.pdb
 .DS_Store
@@ -41,6 +40,9 @@ crates/account-portal/public/downloads/*.dmg
 crates/account-portal/public/downloads/*.exe
 crates/account-portal/public/downloads/*.msi
 crates/account-portal/public/downloads/latest.json
+# Tauri updater payloads belong on CDN / object storage — never commit binaries.
+crates/account-portal/public/downloads/update/*.app.tar.gz
+crates/account-portal/public/downloads/update/*.app.tar.gz.sig
 deploy/account-service/.env
 deploy/account-service/secrets/
 crates/model-gateway/

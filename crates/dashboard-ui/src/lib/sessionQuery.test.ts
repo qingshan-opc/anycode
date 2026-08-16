@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   SESSION_QUERY_GC_MS,
+  omitSessionFromSessionsCache,
   transcriptQueryOptions,
   sessionArtifactsQueryOptions,
   transcriptStaleTime,
 } from "./sessionQuery";
+import type { SessionWithProject } from "@/api/types";
 
 describe("sessionQuery", () => {
   it("uses infinite stale time for completed sessions", () => {
@@ -31,5 +33,17 @@ describe("sessionQuery", () => {
       queryKey: ["session-artifacts", "sess-1"],
       gcTime: SESSION_QUERY_GC_MS,
     });
+  });
+
+  it("omits an archived session from list cache payloads", () => {
+    const keep = { id: "keep" } as SessionWithProject;
+    const hide = { id: "hide" } as SessionWithProject;
+    expect(omitSessionFromSessionsCache({ sessions: [keep, hide] }, "hide")).toEqual({
+      sessions: [keep],
+    });
+    expect(omitSessionFromSessionsCache({ sessions: [keep] }, "missing")).toEqual({
+      sessions: [keep],
+    });
+    expect(omitSessionFromSessionsCache(undefined, "hide")).toBeUndefined();
   });
 });

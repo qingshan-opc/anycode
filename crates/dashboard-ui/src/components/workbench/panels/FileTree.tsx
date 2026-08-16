@@ -2,7 +2,12 @@ import { useState } from "react";
 import type { FsEntry } from "@/api/types/workbench";
 import { Icon } from "@/components/Icon";
 import { kindForPath } from "@/lib/artifactKind";
+import { resolveDeliverableAbsPath } from "@/lib/deliverablePath";
 import { useProjectFsList } from "../hooks/useProjectFileTree";
+import {
+  FileTreeContextMenu,
+  type FileContextMenuTarget,
+} from "./FileTreeContextMenu";
 
 function fileIconForPath(path: string): string {
   switch (kindForPath(path)) {
@@ -31,19 +36,30 @@ function fileIconForPath(path: string): string {
 
 type Props = {
   projectId: string;
+  projectRoot?: string | null;
   selectedPath: string | null;
   onSelectPath: (path: string | null) => void;
 };
 
 type TreeNodeProps = {
   projectId: string;
+  projectRoot?: string | null;
   entry: FsEntry;
   depth: number;
   selectedPath: string | null;
   onSelectPath: (path: string | null) => void;
+  onContextMenu: (entry: FsEntry, event: React.MouseEvent) => void;
 };
 
-function TreeNode({ projectId, entry, depth, selectedPath, onSelectPath }: TreeNodeProps) {
+function TreeNode({
+  projectId,
+  projectRoot,
+  entry,
+  depth,
+  selectedPath,
+  onSelectPath,
+  onContextMenu,
+}: TreeNodeProps) {
   const [expanded, setExpanded] = useState(false);
   const isDir = entry.kind === "dir";
   const isSelected = selectedPath === entry.path;
@@ -68,6 +84,7 @@ function TreeNode({ projectId, entry, depth, selectedPath, onSelectPath }: TreeN
           }
           onSelectPath(entry.path);
         }}
+        onContextMenu={(event) => onContextMenu(entry, event)}
       >
         {isDir ? (
           <Icon name={expanded ? "expand_more" : "chevron_right"} size={16} className="shrink-0 text-secondary" />
@@ -87,18 +104,21 @@ function TreeNode({ projectId, entry, depth, selectedPath, onSelectPath }: TreeN
           <TreeNode
             key={child.path}
             projectId={projectId}
+            projectRoot={projectRoot}
             entry={child}
             depth={depth + 1}
             selectedPath={selectedPath}
             onSelectPath={onSelectPath}
+            onContextMenu={onContextMenu}
           />
         ))}
     </div>
   );
 }
 
-export function FileTree({ projectId, selectedPath, onSelectPath }: Props) {
+export function FileTree({ projectId, projectRoot, selectedPath, onSelectPath }: Props) {
   const root = useProjectFsList(projectId, "");
+  const [menu, setMenu] = useState<FileContextMenuTarget | null>(null);
 
   if (root.isPending) {
     return <p className="text-xs text-secondary px-3 py-2 m-0">Loading…</p>;
@@ -117,12 +137,26 @@ export function FileTree({ projectId, selectedPath, onSelectPath }: Props) {
         <TreeNode
           key={entry.path}
           projectId={projectId}
+          projectRoot={projectRoot}
           entry={entry}
           depth={0}
           selectedPath={selectedPath}
           onSelectPath={onSelectPath}
+          onContextMenu={(node, event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const absPath = resolveDeliverableAbsPath(node.path, projectRoot);
+            setMenu({
+              x: event.clientX,
+              y: event.clientY,
+              absPath: absPath || node.path,
+              relPath: node.path,
+              isDir: node.kind === "dir",
+            });
+          }}
         />
       ))}
+      {menu ? <FileTreeContextMenu target={menu} onClose={() => setMenu(null)} /> : null}
     </div>
   );
 }

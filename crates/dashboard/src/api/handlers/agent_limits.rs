@@ -52,7 +52,7 @@ fn limits_payload(cfg: &Value, config_path: &std::path::Path) -> Value {
             "max_tool_calls_max": MAX_TOOL_CALLS_CLAMP,
         },
         "config_path": config_path.display().to_string(),
-        "restart_hint": "Start a new conversation or restart the CLI for updated limits to apply.",
+        "restart_hint": "Start a new conversation or restart anyCode Desktop for updated limits to apply.",
     })
 }
 
@@ -99,7 +99,7 @@ pub async fn put_agent_limits(Json(body): Json<AgentLimitsBody>) -> impl IntoRes
             "max_agent_turns": limits.max_agent_turns,
             "max_tool_calls": limits.max_tool_calls,
             "config_path": path.display().to_string(),
-            "restart_hint": "Start a new conversation or restart the CLI for updated limits to apply.",
+            "restart_hint": "Start a new conversation or restart anyCode Desktop for updated limits to apply.",
         }))
         .into_response(),
         Err(e) => (

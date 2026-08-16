@@ -27,37 +27,11 @@ function isDeliverBlock(block: TranscriptBlock): boolean {
   return isFinalAssistantMessage(block);
 }
 
-/** Hide narration assistant_message when a structured progress_update exists for the same model turn. */
+/** Hide heuristic progress_update; keep narration assistant_message (Cursor-style). */
 export function dedupeNarrationWithProgress(items: TurnReplyItem[]): TurnReplyItem[] {
-  const progressTurns = new Set<number>();
-  for (const item of items) {
-    if (item.kind !== "block") continue;
-    if (item.block.block_type !== "progress_update") continue;
-    const turn = item.block.meta?.turn;
-    if (typeof turn === "number") {
-      progressTurns.add(turn);
-    } else if (typeof turn === "string") {
-      const n = Number.parseInt(turn, 10);
-      if (!Number.isNaN(n)) progressTurns.add(n);
-    }
-  }
-  if (progressTurns.size === 0) return items;
-
   return items.filter((item) => {
     if (item.kind !== "block") return true;
-    const block = item.block;
-    if (block.block_type !== "assistant_message") return true;
-    if (block.meta?.narration !== true && block.meta?.message_role !== "status") {
-      return true;
-    }
-    const turn = block.meta?.turn;
-    const turnNum =
-      typeof turn === "number"
-        ? turn
-        : typeof turn === "string"
-          ? Number.parseInt(turn, 10)
-          : Number.NaN;
-    return Number.isNaN(turnNum) || !progressTurns.has(turnNum);
+    return item.block.block_type !== "progress_update";
   });
 }
 

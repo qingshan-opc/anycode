@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hello Skill App</title>
+  <style>
+    :root { color-scheme: dark light; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 16px; background: #12141a; color: #e8eaed; }
+    h1 { font-size: 1.1rem; margin: 0 0 8px; }
+    p { font-size: 0.85rem; color: #9aa0a6; margin: 0 0 12px; }
+    .count { font-size: 2.5rem; font-weight: 700; margin: 12px 0; color: #8ab4ff; }
+    button {
+      border: 0; border-radius: 8px; padding: 8px 14px; margin-right: 8px; margin-bottom: 8px;
+      background: #3c4043; color: #fff; cursor: pointer; font-size: 0.9rem;
+    }
+    button.primary { background: #1a73e8; }
+    button:hover { filter: brightness(1.1); }
+    .ok { color: #81c995; font-size: 0.85rem; min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <h1>Hello Skill App</h1>
+  <p>Persistent counter — switch dock / conversation / project slots; count should stay.</p>
+  <div class="count" id="count">0</div>
+  <button type="button" id="inc">+1</button>
+  <button type="button" class="primary" id="lock">Lock brief</button>
+  <button type="button" id="prompt">Ask agent to continue</button>
+  <div class="ok" id="status"></div>
+  <script>
+    // Inline Host SDK (also documented in skillAppBridge.ts)
+    window.anycode = (function () {
+      let seq = 0;
+      const pending = new Map();
+      const pushListeners = [];
+      window.addEventListener("message", (ev) => {
+        const d = ev.data;
+        if (!d || typeof d !== "object") return;
+        if (d.method === "anycode.agent.push") {
+          pushListeners.forEach((fn) => fn(d.params));
+          return;
+        }
+        if (d.id != null && pending.has(d.id)) {
+          const { resolve, reject } = pending.get(d.id);
+          pending.delete(d.id);
+          if (d.error) reject(new Error(d.error.message || "bridge error"));
+          else resolve(d.result);
+        }
+      });
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = ++seq;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      }
+      return {
+        ready: () => call("anycode.ready"),
+        state: {
+          get: () => call("anycode.state.get"),
+          set: (patch) => call("anycode.state.set", patch),
+        },
+        brief: { submit: (brief) => call("anycode.brief.submit", brief) },
+        agent: {
+          prompt: (payload) => call("anycode.agent.prompt", payload),
+          onPush: (fn) => { pushListeners.push(fn); },
+        },
+      };
+    })();
+
+    let count = 0;
+    const el = document.getElementById("count");
+    const status = document.getElementById("status");
+    function render() { el.textContent = String(count); }
+
+    async function boot() {
+      await anycode.ready();
+      const snap = await anycode.state.get();
+      const st = (snap && snap.state) || {};
+      if (typeof st.count === "number") count = st.count;
+      render();
+      anycode.agent.onPush((p) => {
+        status.textContent = "push: " + JSON.stringify(p);
+      });
+    }
+    document.getElementById("inc").onclick = async () => {
+      count += 1;
+      render();
+      await anycode.state.set({ count });
+      status.textContent = "saved";
+    };
+    document.getElementById("lock").onclick = async () => {
+      const brief = {
+        skill_id: "skill-app-hello",
+        schema: "visual-brief/v1",
+        family: "hello",
+        templates: ["counter"],
+        tokens: { count },
+        notes: "Locked from hello Skill App",
+      };
+      await anycode.brief.submit(brief);
+      status.textContent = "brief locked";
+    };
+    document.getElementById("prompt").onclick = async () => {
+      await anycode.agent.prompt({
+        text: "Hello Skill App counter is " + count + ". Continue.",
+      });
+      status.textContent = "prompt sent";
+    };
+    boot().catch((e) => { status.textContent = String(e); });
+  </script>
+</body>
+</html>

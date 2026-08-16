@@ -205,7 +205,12 @@ impl<'a> TaskCompiler<'a> {
 
     /// Image/video generation intent — these prompts must route to
     /// GenerateImage/GenerateVideo, never to office/PPT experience cards.
+    /// HTML motion short-form (`anycode-video` / html-video) is handled by
+    /// [`Self::is_html_motion_video_intent`] instead.
     fn is_media_generation_intent(prompt: &str) -> bool {
+        if Self::is_html_motion_video_intent(prompt) {
+            return false;
+        }
         let p = prompt.to_ascii_lowercase();
         [
             "画图",
@@ -241,6 +246,30 @@ impl<'a> TaskCompiler<'a> {
         .any(|k| p.contains(k))
     }
 
+    /// Short-form HTML motion video (anycode-video / html-video Skill App).
+    fn is_html_motion_video_intent(prompt: &str) -> bool {
+        let p = prompt.to_ascii_lowercase();
+        [
+            "短视频",
+            "html-video",
+            "html video",
+            "抖音",
+            "快手",
+            "reels",
+            "tiktok",
+            "动画视频",
+            "动态标题",
+            "数据动画",
+            "动画标题",
+            "motion graphic",
+            "motion graphics",
+            "产品 promo",
+            "html motion",
+        ]
+        .iter()
+        .any(|k| p.contains(k))
+    }
+
     /// Mark a keyword-inferred SOP constraint as an overridable default: the
     /// user's explicit instructions always win over these (see
     /// [`TaskSpec::to_prompt_segment`] for the rendered override note).
@@ -257,7 +286,26 @@ impl<'a> TaskCompiler<'a> {
         let mut deliverables = Vec::new();
         let mut constraints = Vec::new();
 
-        if Self::is_media_generation_intent(prompt) {
+        if Self::is_html_motion_video_intent(prompt) {
+            required_capabilities.push("video.html_motion".into());
+            deliverables
+                .push("HTML motion video (video/index.html) + local MP4 via anycode-video".into());
+            expected_artifacts.push(ExpectedArtifact {
+                id: "motion_html".into(),
+                kind: "html".into(),
+                required: true,
+                path_globs: vec!["video/index.html".into(), "**/video/index.html".into()],
+            });
+            expected_artifacts.push(ExpectedArtifact {
+                id: "motion_mp4".into(),
+                kind: "video".into(),
+                required: true,
+                path_globs: vec!["video/out.mp4".into(), "**/video/out.mp4".into()],
+            });
+            constraints.push(Self::default_constraint(
+                "use anycode-video Skill App VisualBrief — fill locked html-video template only; run video/ for MP4; do NOT call GenerateVideo unless the user explicitly asks for cloud Kling/Sora",
+            ));
+        } else if Self::is_media_generation_intent(prompt) {
             required_capabilities.push("media.generate".into());
             deliverables.push("generated image/video file via GenerateImage/GenerateVideo".into());
             constraints.push(
@@ -350,7 +398,7 @@ impl<'a> TaskCompiler<'a> {
                         });
                         deliverables.push("HTML slide deck (slides/*.html + index.html)".into());
                         constraints.push(Self::default_constraint(
-                            "use Skill anycode-ppt (templates → validate → index.html); deliver HTML not pptx",
+                            "use Skill anycode-ppt (skin tokens → infer outline → creative slides → validate → index.html); deliver HTML not pptx",
                         ));
                     }
                 } else if p.contains("pdf")
@@ -1113,6 +1161,9 @@ mod tests {
         assert!(!TaskCompiler::is_media_generation_intent(
             "做一份产品发布 pptx"
         ));
+        assert!(!TaskCompiler::is_media_generation_intent(
+            "帮我做个抖音短视频"
+        ));
         let intent = TaskCompiler::compile_base_intent("画个图");
         assert!(intent
             .required_capabilities
@@ -1124,6 +1175,26 @@ mod tests {
             TaskCompiler::infer_family("画个图"),
             TaskFamily::OfficeDelivery
         );
+    }
+
+    #[test]
+    fn html_motion_video_intent_uses_anycode_video_not_generate_video() {
+        assert!(TaskCompiler::is_html_motion_video_intent(
+            "帮我做个抖音短视频介绍产品"
+        ));
+        assert!(TaskCompiler::is_html_motion_video_intent(
+            "用 html-video 做个动画标题"
+        ));
+        assert!(!TaskCompiler::is_html_motion_video_intent("生成视频"));
+        let intent = TaskCompiler::compile_base_intent("帮我做个抖音短视频");
+        assert!(intent
+            .required_capabilities
+            .contains(&"video.html_motion".to_string()));
+        assert!(!intent
+            .required_capabilities
+            .contains(&"media.generate".to_string()));
+        assert!(intent.expected_artifacts.iter().any(|a| a.kind == "html"));
+        assert!(intent.expected_artifacts.iter().any(|a| a.kind == "video"));
     }
 
     #[test]

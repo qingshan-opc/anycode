@@ -21,7 +21,7 @@ read_when:
 - **审批 / 沙箱**（`SecurityLayer` 与配置项）。  
 - **z.ai（OpenAI 兼容）与 Anthropic** 至少一条日常可用的 tool-calling 路径。  
 - **执行期落盘日志**（`~/.anycode/tasks/<id>/output.log`）与 **结束 summary**（非 TUI 直出场景）。  
-- **CLI**：`run`、`repl`、`tui`、通道桥、`scheduler` 等。（**HTTP `daemon`** 已移除 — 见 [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/003-http-daemon-deprecated.md) 与 [HTTP 守护进程（已移除）](./cli-daemon)。）
+- **CLI**：`run`、`repl`、`tui`、通道桥、`scheduler` 等。（**HTTP `daemon`** 已移除 — 见 [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/018-http-daemon-deprecated.md) 与 [HTTP 守护进程（已移除）](./cli-daemon)。）
 
 **MVP 外**（独立里程碑，**不阻塞**上述 MVP 发布）
 

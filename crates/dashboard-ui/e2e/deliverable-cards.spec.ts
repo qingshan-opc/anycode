@@ -25,6 +25,10 @@ test.describe("deliverable fs/raw", () => {
         `/api/projects/${encodeURIComponent(project!.id)}/fs/raw?path=${encodeURIComponent(rel)}`,
       );
       expect(raw.ok()).toBeTruthy();
+      const byPath = await request.get(
+        `/api/projects/${encodeURIComponent(project!.id)}/fs/raw/${encodeURIComponent(rel)}`,
+      );
+      expect(byPath.ok()).toBeTruthy();
       const ct = raw.headers()["content-type"] ?? "";
       expect(ct.includes("image") || ct.includes("octet-stream")).toBeTruthy();
       const buf = Buffer.from(await raw.body());

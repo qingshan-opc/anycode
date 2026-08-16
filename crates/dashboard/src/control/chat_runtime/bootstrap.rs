@@ -3,12 +3,12 @@
 use anycode_agent::AgentRuntime;
 use anycode_bootstrap::{
     initialize_runtime, load_project_enabled_skills, MemoryAttachMode, RuntimeHosts,
-    WorkbenchAskUserQuestionHost,
+    WorkbenchAskUserQuestionHost, WorkbenchSkillAppHost,
 };
 use anycode_config::load_config_for_session;
 use anycode_core::DiskTaskOutput;
 use anycode_dashboard_ipc::cancel_ipc;
-use anycode_tools::AskUserQuestionHost;
+use anycode_tools::{AskUserQuestionHost, SkillAppHost};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,6 +24,7 @@ pub async fn build_embedded_runtime(
         ask_user_question_host: Some(
             Arc::new(WorkbenchAskUserQuestionHost::new()) as Arc<dyn AskUserQuestionHost>
         ),
+        skill_app_host: Some(Arc::new(WorkbenchSkillAppHost::new()) as Arc<dyn SkillAppHost>),
         ..Default::default()
     };
     initialize_runtime(

@@ -126,7 +126,7 @@ impl McpRmcpSession {
             .map_err(|e| CoreError::LLMError(format!("MCP OAuth: {e}")))?;
         if !ok {
             return Err(CoreError::LLMError(format!(
-                "no OAuth credentials in {}; run `anycode mcp oauth-login --url ... --credentials-store {}`",
+                "no OAuth credentials in {}; configure MCP OAuth in Workbench Settings (credentials store: {})",
                 oauth_credentials_path.display(),
                 oauth_credentials_path.display()
             )));

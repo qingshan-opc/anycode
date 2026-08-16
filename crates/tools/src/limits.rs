@@ -12,3 +12,5 @@ pub fn file_read_max_bytes() -> u64 {
 
 pub const GLOB_MAX_FILES: usize = 100;
 pub const GREP_MAX_JSON_LINES: usize = 800;
+/// Default Grep `head_limit` when the model omits it. `0` still means unlimited.
+pub const GREP_DEFAULT_HEAD_LIMIT: usize = 50;

@@ -34,7 +34,8 @@ start_workbench() {
   export ANYCODE_ACCOUNT_API_URL="${ANYCODE_ACCOUNT_API_URL:-http://127.0.0.1:43200}"
   export ANYCODE_ACCOUNT_PORTAL_URL="${ANYCODE_ACCOUNT_PORTAL_URL:-http://127.0.0.1:43200}"
   export ANYCODE_MODEL_GATEWAY_URL="${ANYCODE_MODEL_GATEWAY_URL:-http://127.0.0.1:43210}"
-  export ANYCODE_DASHBOARD_EMBEDDED_DESKTOP="${ANYCODE_DASHBOARD_EMBEDDED_DESKTOP:-1}"
+  # Do not set EMBEDDED_DESKTOP here — that flag is for the Tauri shell only.
+  # Browser e2e/dev must use real session cookies, not Desktop loopback trust.
   export ANYCODE_IGNORE_APPROVAL="${ANYCODE_IGNORE_APPROVAL:-1}"
 
   if [[ ! -x "$BIN" ]]; then

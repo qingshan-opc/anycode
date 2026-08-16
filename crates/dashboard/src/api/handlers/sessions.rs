@@ -36,7 +36,10 @@ pub async fn get_session(
 
 #[derive(Deserialize)]
 pub struct PatchSessionRequest {
-    pub title: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub archived: Option<bool>,
 }
 
 pub async fn patch_session(
@@ -44,20 +47,29 @@ pub async fn patch_session(
     Path(session_id): Path<String>,
     Json(body): Json<PatchSessionRequest>,
 ) -> impl IntoResponse {
-    let title = body.title.trim();
-    if title.is_empty() {
+    if body.title.is_none() && body.archived.is_none() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "title is required" })),
+            Json(json!({ "error": "title or archived is required" })),
         )
             .into_response();
     }
-    if title.chars().count() > 120 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "title must be at most 120 characters" })),
-        )
-            .into_response();
+    if let Some(ref title) = body.title {
+        let title = title.trim();
+        if title.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "title is required" })),
+            )
+                .into_response();
+        }
+        if title.chars().count() > 120 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "title must be at most 120 characters" })),
+            )
+                .into_response();
+        }
     }
     match state.db.get_session(&session_id).await {
         Ok(None) => {
@@ -76,20 +88,36 @@ pub async fn patch_session(
         }
         Ok(Some(_)) => {}
     }
-    match state
-        .db
-        .update_session_metadata(&session_id, Some(title), None)
-        .await
-    {
-        Ok(()) => {
-            Json(json!({ "ok": true, "session_id": session_id, "title": title })).into_response()
+    if let Some(title) = body.title.as_deref() {
+        let title = title.trim();
+        if let Err(e) = state
+            .db
+            .update_session_metadata(&session_id, Some(title), None)
+            .await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
     }
+    if let Some(archived) = body.archived {
+        if let Err(e) = state.db.set_session_archived(&session_id, archived).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    }
+    Json(json!({
+        "ok": true,
+        "session_id": session_id,
+        "title": body.title.as_deref().map(str::trim),
+        "archived": body.archived,
+    }))
+    .into_response()
 }
 
 pub async fn send_session_message(
@@ -227,7 +255,6 @@ pub async fn send_session_message(
             // the session row, so the composer agent picker (global routing) is
             // untouched. The runtime rebuilds under the override for this turn
             // and self-reconciles back on the next plain message.
-            state.web_chat.evict(&session_id).await;
             state.chat_runtime.evict(&session_id).await;
         } else {
             if let Err(e) = state
@@ -241,7 +268,6 @@ pub async fn send_session_message(
                 )
                     .into_response();
             }
-            state.web_chat.evict(&session_id).await;
             state.chat_runtime.evict(&session_id).await;
         }
     }
@@ -419,6 +445,162 @@ pub async fn send_session_message(
     }
 }
 
+#[derive(Deserialize)]
+pub struct DelegateSessionRequest {
+    pub agent_type: String,
+    pub prompt: String,
+    pub lang: Option<String>,
+}
+
+/// Host-driven nested subagent: `POST /api/sessions/{id}/delegate`.
+/// Body: `{ "agent_type": "explore"|"plan"|"general-purpose", "prompt": "..." }`.
+pub async fn delegate_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<DelegateSessionRequest>,
+) -> impl IntoResponse {
+    if !crate::task_trigger::triggers_allowed(&state.host) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "UI trigger run is disabled for this binding. Use loopback or set ANYCODE_DASHBOARD_TRIGGER_RUN_REMOTE=1."
+            })),
+        )
+            .into_response();
+    }
+    let prompt = body.prompt.trim();
+    if prompt.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "prompt is required" })),
+        )
+            .into_response();
+    }
+    if crate::control::chat_runtime::normalize_delegate_agent_type(&body.agent_type).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "agent_type must be explore, plan, or general-purpose",
+            })),
+        )
+            .into_response();
+    }
+
+    let session = match state.db.get_session(&session_id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "session not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+    let project = match state.db.get_project(&session.project_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "project not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+    let root_path = std::path::PathBuf::from(&project.root_path);
+    let (root, _created_root) = match super::chat_util::ensure_chat_project_root(
+        &state.db,
+        &session.project_id,
+        Some(&session_id),
+        &root_path,
+        "session_delegate",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+        }
+    };
+
+    let host_agent = session.agent_type.as_str();
+    match state
+        .chat_runtime
+        .delegate(
+            state.db.clone(),
+            std::sync::Arc::clone(&state.events),
+            &state.web_chat_tail,
+            &session_id,
+            &session.project_id,
+            &root,
+            Some(host_agent),
+            &body.agent_type,
+            prompt,
+            body.lang.as_deref(),
+        )
+        .await
+    {
+        Ok(result) => {
+            let _ = crate::audit::record_audit(
+                &state.db,
+                crate::audit::AuditEventInput {
+                    project_id: Some(session.project_id.clone()),
+                    session_id: Some(session_id.clone()),
+                    action: "session_delegate".into(),
+                    risk: "medium".into(),
+                    detail: json!({
+                        "agent_type": result.agent_type,
+                        "nested_task_id": result.nested_task_id,
+                        "host_driven": true,
+                    }),
+                },
+            )
+            .await;
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({
+                    "ok": true,
+                    "session_id": result.session_id,
+                    "nested_task_id": result.nested_task_id,
+                    "agent_type": result.agent_type,
+                    "started_at": result.started_at,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            if e.downcast_ref::<crate::control::chat_runtime::ChatSendConflict>()
+                .is_some()
+            {
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": e.to_string(), "session_id": session_id })),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string(), "session_id": session_id })),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
 pub async fn list_session_message_queue(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -478,7 +660,6 @@ pub async fn cancel_session(
     // Unblock wait_web loops that only poll approval/question IPC.
     let _ = crate::approval_ipc::clear_pending_for_session(&session_id);
     let _ = crate::question_ipc::clear_pending_for_session(&session_id);
-    state.web_chat.evict(&session_id).await;
     // Signal the embedded turn directly (no IPC poll latency). The session
     // object stays alive so the running turn unwinds under its own epoch;
     // do NOT evict here, or the stale turn loses its epoch guard.
@@ -1052,6 +1233,282 @@ pub async fn delete_session_plan_tree(
             Json(json!({ "error": e.to_string() })),
         )
             .into_response(),
+    }
+}
+
+/// Request body for `POST /api/sessions/{id}/graph/run` (M4 GraphEngine).
+#[derive(Deserialize)]
+pub struct GraphRunRequest {
+    /// Inline workflow JSON object or JSON text string.
+    pub workflow: Option<serde_json::Value>,
+    /// Absolute or project-relative YAML/JSON workflow path.
+    pub workflow_path: Option<String>,
+    /// Run the built-in sample 3-node graph.
+    #[serde(default, alias = "use_sample")]
+    pub sample: bool,
+    /// Convert the session plan tree into a sequential workflow and run it.
+    #[serde(default)]
+    pub from_plan_tree: bool,
+    #[serde(default, alias = "prompt")]
+    pub user_prompt: Option<String>,
+    /// When true, block until the graph finishes (default: spawn and return 202).
+    #[serde(default)]
+    pub wait: bool,
+}
+
+/// Start a workflow DAG via [`anycode_agent::GraphEngine`] (Workbench path; not cron-only).
+pub async fn run_session_graph(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<GraphRunRequest>,
+) -> impl IntoResponse {
+    if !crate::task_trigger::triggers_allowed(&state.host) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "graph runs disabled for this host" })),
+        )
+            .into_response();
+    }
+    let session = match state.db.get_session(&session_id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let project = match state.db.get_project(&session.project_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "project not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let root_path = std::path::PathBuf::from(&project.root_path);
+    let (root, _) = match super::chat_util::ensure_chat_project_root(
+        &state.db,
+        &session.project_id,
+        Some(&session_id),
+        &root_path,
+        "graph_run",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+        }
+    };
+
+    let workflow = match resolve_graph_workflow(&state, &session_id, &root, &body).await {
+        Ok(wf) => wf,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+        }
+    };
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let preview = format!("graph:{} ({})", workflow.name, run_id);
+    let _ = state
+        .db
+        .attach_task_to_session(&session_id, &run_id, Some("graph"), Some(&preview))
+        .await;
+
+    let opts = anycode_agent::GraphRunOptions {
+        working_directory: root.clone(),
+        user_prompt: body.user_prompt.clone(),
+        dashboard_session_id: Some(session_id.clone()),
+        nested_cancel: state.chat_runtime.session_cancel_flag(&session_id).await,
+        checkpoint_path: None,
+    };
+
+    if body.wait {
+        let runtime = match state.chat_runtime.runtime_for_gate(&root).await {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = state
+                    .db
+                    .finish_session(&session_id, "failed", Some(&e.to_string()))
+                    .await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        };
+        match anycode_agent::GraphEngine::run(&runtime, &workflow, opts).await {
+            Ok(result) => {
+                let status = if result.status == "completed" {
+                    "completed"
+                } else {
+                    "failed"
+                };
+                let summary = result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| format!("graph {} {}", result.workflow_name, result.status));
+                let _ = state
+                    .db
+                    .finish_session(&session_id, status, Some(&summary))
+                    .await;
+                Json(json!({
+                    "ok": result.status == "completed",
+                    "accepted": false,
+                    "run_id": result.run_id,
+                    "result": result,
+                }))
+                .into_response()
+            }
+            Err(e) => {
+                let _ = state
+                    .db
+                    .finish_session(&session_id, "failed", Some(&e.to_string()))
+                    .await;
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        let chat_runtime = state.chat_runtime.clone();
+        let db = state.db.clone();
+        let sid = session_id.clone();
+        let wf = workflow.clone();
+        tokio::spawn(async move {
+            let run_result: anyhow::Result<anycode_agent::GraphRunResult> = async {
+                let runtime = chat_runtime.runtime_for_gate(&root).await?;
+                anycode_agent::GraphEngine::run(&runtime, &wf, opts)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            .await;
+            match run_result {
+                Ok(result) => {
+                    let status = if result.status == "completed" {
+                        "completed"
+                    } else {
+                        "failed"
+                    };
+                    let summary = result.error.clone().unwrap_or_else(|| {
+                        format!("graph {} {}", result.workflow_name, result.status)
+                    });
+                    let _ = db.finish_session(&sid, status, Some(&summary)).await;
+                }
+                Err(e) => {
+                    let _ = db
+                        .finish_session(&sid, "failed", Some(&e.to_string()))
+                        .await;
+                }
+            }
+        });
+        (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "ok": true,
+                "accepted": true,
+                "run_id": run_id,
+                "workflow_name": workflow.name,
+                "layers": anycode_core::workflow_topo_layers(&workflow)
+                    .unwrap_or_default(),
+            })),
+        )
+            .into_response()
+    }
+}
+
+async fn resolve_graph_workflow(
+    state: &AppState,
+    session_id: &str,
+    root: &std::path::Path,
+    body: &GraphRunRequest,
+) -> Result<anycode_core::WorkflowDefinition, String> {
+    let sources = [
+        body.workflow.is_some(),
+        body.workflow_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty()),
+        body.sample,
+        body.from_plan_tree,
+    ]
+    .iter()
+    .filter(|&&x| x)
+    .count();
+    if sources == 0 {
+        return Err("provide workflow, workflow_path, sample=true, or from_plan_tree=true".into());
+    }
+    if sources > 1 {
+        return Err(
+            "provide only one of workflow, workflow_path, sample, or from_plan_tree".into(),
+        );
+    }
+    if body.sample {
+        return Ok(anycode_agent::GraphEngine::sample_three_node_workflow());
+    }
+    if body.from_plan_tree {
+        let tree = state
+            .db
+            .get_session_plan_tree(session_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .map(|(t, _)| t)
+            .unwrap_or_default();
+        if !anycode_agent::GraphEngine::plan_tree_runnable(&tree) {
+            return Err("session plan tree is empty".into());
+        }
+        return Ok(anycode_agent::GraphEngine::plan_tree_to_workflow(
+            &tree,
+            format!("plan-{session_id}"),
+        ));
+    }
+    if let Some(wf) = &body.workflow {
+        return parse_inline_workflow(wf);
+    }
+    let path_raw = body
+        .workflow_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "workflow_path is empty".to_string())?;
+    let path = if std::path::Path::new(path_raw).is_absolute() {
+        std::path::PathBuf::from(path_raw)
+    } else {
+        root.join(path_raw)
+    };
+    anycode_agent::GraphEngine::load_workflow_path(&path).map_err(|e| e.to_string())
+}
+
+fn parse_inline_workflow(
+    value: &serde_json::Value,
+) -> Result<anycode_core::WorkflowDefinition, String> {
+    match value {
+        serde_json::Value::String(text) => {
+            anycode_agent::GraphEngine::parse_workflow_text(text).map_err(|e| e.to_string())
+        }
+        _ => serde_json::from_value(value.clone())
+            .map_err(|e| format!("workflow JSON parse error: {e}")),
     }
 }
 

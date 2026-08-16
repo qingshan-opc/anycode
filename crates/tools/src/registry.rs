@@ -33,13 +33,16 @@ use crate::notebook_edit::NotebookEditTool;
 use crate::orchestration::{
     CronCreateTool, CronDeleteTool, CronListTool, CronUpdateTool, MonitorTool, RemoteTriggerTool,
     ScheduleWakeupTool, TaskCreateTool, TaskGetTool, TaskListTool, TaskOutputTool, TaskStopTool,
-    TaskUpdateTool, TeamCreateTool, TeamDeleteTool,
+    TaskUpdateTool,
 };
+// TeamCreateTool / TeamDeleteTool intentionally not registered by default
+// (graph-only / optional surface; implementations remain in orchestration.rs).
 use crate::plan_write::PlanWriteTool;
 use crate::platform_tools::{
     AskUserQuestionTool, BriefTool, ConfigTool, PowerShellTool, ReplTool, SendUserMessageTool,
 };
 use crate::services::ToolRegistryDeps;
+use crate::skill_app_tools::{SkillAppPresentTool, SkillAppPushTool, SkillAppReadTool};
 use crate::todo_write::TodoWriteTool;
 use crate::web_fetch::WebFetchTool;
 use crate::web_search::WebSearchTool;
@@ -117,8 +120,6 @@ pub fn build_registry(deps: &ToolRegistryDeps) -> HashMap<ToolName, Box<dyn Tool
     ins!(TaskGetTool::new(s.clone()));
     ins!(TaskStopTool::new(s.clone()));
     ins!(TaskOutputTool::new(s.clone()));
-    ins!(TeamCreateTool::new(s.clone()));
-    ins!(TeamDeleteTool::new(s.clone()));
     ins!(CronCreateTool::new(s.clone()));
     ins!(CronUpdateTool::new(s.clone()));
     ins!(CronDeleteTool::new(s.clone()));
@@ -139,6 +140,9 @@ pub fn build_registry(deps: &ToolRegistryDeps) -> HashMap<ToolName, Box<dyn Tool
     ins!(SendUserMessageTool::new());
     ins!(BriefTool::new());
     ins!(AskUserQuestionTool::new(s.clone()));
+    ins!(SkillAppPresentTool::new(s.clone()));
+    ins!(SkillAppPushTool::new(s.clone()));
+    ins!(SkillAppReadTool::new(s.clone()));
     ins!(ReplTool::new());
     ins!(SpeechToTextTool::new(s.clone()));
     ins!(TextToSpeechTool::new(s.clone()));

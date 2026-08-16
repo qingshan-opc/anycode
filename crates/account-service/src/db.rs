@@ -124,6 +124,11 @@ impl AccountDb {
             include_str!("../migrations/025_credit_quota_billing.sql"),
         )
         .await?;
+        self.apply_migration(
+            "026_enable_deepseek_v4_pro",
+            include_str!("../migrations/026_enable_deepseek_v4_pro.sql"),
+        )
+        .await?;
         Ok(())
     }
 

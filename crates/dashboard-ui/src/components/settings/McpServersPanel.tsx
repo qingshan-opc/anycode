@@ -26,9 +26,14 @@ export function McpServersPanel() {
   });
   const [draft, setDraft] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [strict, setStrict] = useState<boolean | null>(null);
+  const [allowlist, setAllowlist] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: (servers: unknown[]) => api.setMcpServers(servers),
+    mutationFn: (payload: {
+      servers: unknown[];
+      governance: { strict: boolean; allowed_tools: string[] };
+    }) => api.setMcpServers(payload.servers, payload.governance),
     onSuccess: () => {
       setParseError(null);
       void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
@@ -37,9 +42,13 @@ export function McpServersPanel() {
   });
 
   const servers = serversQuery.data?.servers ?? [];
+  const gov = serversQuery.data?.governance;
   const text =
     draft ??
     (servers.length > 0 ? JSON.stringify(servers, null, 2) : EXAMPLE);
+  const strictVal = strict ?? Boolean(gov?.strict);
+  const allowlistVal =
+    allowlist ?? (gov?.allowed_tools?.length ? gov.allowed_tools.join(", ") : "");
 
   return (
     <SectionCard title={t("settings.mcpServers.title")}>
@@ -53,6 +62,26 @@ export function McpServersPanel() {
         }}
         spellCheck={false}
       />
+      <label className="inline-flex items-center gap-2 text-sm mt-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={strictVal}
+          onChange={(e) => setStrict(e.target.checked)}
+        />
+        {t("settings.mcpServers.strict")}
+      </label>
+      <label className="flex flex-col gap-1 text-sm mt-2">
+        <span className="text-secondary">{t("settings.mcpServers.allowlist")}</span>
+        <input
+          className="dw-input text-sm font-code"
+          value={allowlistVal}
+          placeholder="server:tool, other:tool"
+          onChange={(e) => setAllowlist(e.target.value)}
+        />
+      </label>
+      {gov?.env_override_note ? (
+        <p className="text-xs text-secondary m-0 mt-2">{gov.env_override_note}</p>
+      ) : null}
       {parseError && <p className="text-sm text-error m-0 mt-2">{parseError}</p>}
       {save.isError && (
         <p className="text-sm text-error m-0 mt-2">{t("settings.mcpServers.error")}</p>
@@ -69,8 +98,17 @@ export function McpServersPanel() {
                 setParseError(t("settings.mcpServers.invalidArray"));
                 return;
               }
-              save.mutate(parsed);
+              const tools = allowlistVal
+                .split(/[,\n]/)
+                .map((s) => s.trim())
+                .filter(Boolean);
+              save.mutate({
+                servers: parsed,
+                governance: { strict: strictVal, allowed_tools: tools },
+              });
               setDraft(null);
+              setStrict(null);
+              setAllowlist(null);
             } catch {
               setParseError(t("settings.mcpServers.invalidJson"));
             }

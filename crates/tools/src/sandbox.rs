@@ -117,6 +117,7 @@ pub fn resolve_under_workdir_with_extra_read_roots(
         return Ok(candidate_lex);
     }
 
+    let mut allowed_roots = vec![root_canon.display().to_string()];
     for extra in extra_roots {
         let extra_canon = if extra.is_absolute() {
             extra.canonicalize().ok()
@@ -124,17 +125,40 @@ pub fn resolve_under_workdir_with_extra_read_roots(
             root_canon.join(extra).canonicalize().ok()
         };
         if let Some(extra_canon) = extra_canon {
+            allowed_roots.push(extra_canon.display().to_string());
             if path_has_prefix(&candidate_lex, &extra_canon) {
                 return Ok(candidate_lex);
             }
         }
     }
 
-    Err(CoreError::PermissionDenied(format!(
-        "path escapes sandbox (must be under {}): {:?}",
-        root_canon.display(),
-        candidate_lex
+    Err(CoreError::PermissionDenied(sandbox_escape_message(
+        &root_canon,
+        &candidate_lex,
+        &allowed_roots,
     )))
+}
+
+/// Actionable PermissionDenied text when a path leaves the sandbox.
+pub fn sandbox_escape_message(
+    workdir: &Path,
+    candidate: &Path,
+    allowed_roots: &[String],
+) -> String {
+    let roots = if allowed_roots.is_empty() {
+        workdir.display().to_string()
+    } else {
+        allowed_roots.join("; ")
+    };
+    format!(
+        "path escapes sandbox (must be under {}): {:?}. \
+         Hint: use a path relative to the working directory, or under an allowed skill root \
+         (~/.anycode/skills/<id>/...). Allowed roots: {}. \
+         Do not retry the same absolute path outside the sandbox.",
+        workdir.display(),
+        candidate,
+        roots
+    )
 }
 
 #[cfg(test)]
@@ -243,5 +267,35 @@ mod tests {
         let w = work.to_str().unwrap();
         let skill_path = skill.canonicalize().unwrap();
         assert!(resolve_under_workdir(w, skill_path.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn escape_error_includes_actionable_hint() {
+        let parent = TempDir::new().unwrap();
+        let work = parent.path().join("work");
+        let other = parent.path().join("other");
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("secret.txt"), "x").unwrap();
+        let w = work.to_str().unwrap();
+        let err = resolve_under_workdir(w, "../other/secret.txt").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("path escapes sandbox"),
+            "expected escape marker: {msg}"
+        );
+        assert!(msg.contains("Hint:"), "expected actionable Hint: {msg}");
+        assert!(
+            msg.contains("~/.anycode/skills"),
+            "expected skill-root guidance: {msg}"
+        );
+        assert!(
+            msg.contains("Do not retry the same absolute path"),
+            "expected no-retry guidance: {msg}"
+        );
+        assert!(
+            msg.contains("Allowed roots:"),
+            "expected Allowed roots: {msg}"
+        );
     }
 }

@@ -29,7 +29,7 @@ Configuration lives in `~/.anycode/config.json` (same schema as the Workbench). 
 | Linux server / NAS | **`anycode-daemon`** for scheduler |
 | Automations only | `anycode-daemon scheduler` (or keep desktop app running) |
 
-The old HTTP `anycode daemon` subcommand (POST `/v1/tasks`) was removed — see [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/003-http-daemon-deprecated.md).
+The old HTTP `anycode daemon` subcommand (POST `/v1/tasks`) was removed — see [ADR 003](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/018-http-daemon-deprecated.md).
 
 ## Related
 

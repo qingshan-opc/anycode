@@ -22,6 +22,7 @@ import {
 } from "@/lib/cefBrowserEmbed";
 import { isTauriDesktop } from "@/lib/desktopShell";
 import { useWorkbenchBrowser } from "../hooks/useWorkbenchBrowser";
+import { workbenchSidebarStore } from "../hooks/useWorkbenchSidebarState";
 import { AgentControlIndicator } from "./AgentControlIndicator";
 
 type Props = {
@@ -97,7 +98,8 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
     status,
   } = useWorkbenchBrowser(projectId, conversationSessionId, active, {
     // Desktop default: native CEF. Assets probe returns ready when frameworks exist
-    // and ANYCODE_CEF_EMBED is not explicitly 0.
+    // and ANYCODE_CEF_EMBED is not explicitly 0. Prefer JPEG screencast fallback:
+    // launch with ANYCODE_CEF_EMBED=0 (no Workbench settings toggle yet).
     preferCef: isTauriDesktop() && cefAssetsReady,
     cefSurfaceReady,
   });
@@ -401,7 +403,17 @@ export function BrowserPanel({ projectId, conversationSessionId, active }: Props
                   onClick={(e) => {
                     e.stopPropagation();
                     void cefBrowserCloseTab(tab.id)
-                      .then(applyTabsFromStatus)
+                      .then((s) => {
+                        applyTabsFromStatus(s);
+                        // Last tab closed by the user: collapse the panel
+                        // surface (dock or main-area tab) instead of leaving an
+                        // empty browser area on screen. Poll-driven tab
+                        // transitions must NOT collapse — a cold poll sees
+                        // tabs==0 before the first show completes.
+                        if ((s.tabs ?? []).length === 0) {
+                          workbenchSidebarStore.collapseTab("browser");
+                        }
+                      })
                       .catch((err: Error) => setCefError(err.message));
                   }}
                 >

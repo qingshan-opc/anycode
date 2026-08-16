@@ -59,14 +59,20 @@ pub struct CloudLinkPollResponse {
     pub error: Option<String>,
 }
 
-pub async fn post_cloud_link_poll(Json(body): Json<CloudLinkPollBody>) -> impl IntoResponse {
+pub async fn post_cloud_link_poll(
+    State(state): State<AppState>,
+    Json(body): Json<CloudLinkPollBody>,
+) -> impl IntoResponse {
     match anycode_setup::try_poll_device_link(&body.device_code).await {
-        Ok(Some(_)) => Json(CloudLinkPollResponse {
-            linked: true,
-            pending: None,
-            error: None,
-        })
-        .into_response(),
+        Ok(Some(_)) => {
+            state.chat_runtime.invalidate_runtime().await;
+            Json(CloudLinkPollResponse {
+                linked: true,
+                pending: None,
+                error: None,
+            })
+            .into_response()
+        }
         Ok(None) => Json(CloudLinkPollResponse {
             linked: false,
             pending: Some(true),
@@ -123,10 +129,15 @@ async fn cloud_me_profile(token: &str) -> Option<(bool, Option<String>, Option<S
     Some((identity_verified, email, display_name))
 }
 
-pub async fn get_cloud_session() -> Json<CloudSessionResponse> {
+pub async fn get_cloud_session(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Json<CloudSessionResponse> {
     let portal_url = Some(anycode_llm::cloud_portal_url());
     let gateway_url = Some(anycode_llm::resolve_gateway_host());
     let path = anycode_llm::cloud_session_path();
+    // Never return the cloud JWT to anonymous loopback callers.
+    let may_read_token = crate::api::auth::request_may_read_cloud_token(&state, &headers).await;
     if !path.is_file() {
         return Json(CloudSessionResponse {
             linked: false,
@@ -177,7 +188,11 @@ pub async fn get_cloud_session() -> Json<CloudSessionResponse> {
         gateway_url,
         user_email,
         display_name,
-        access_token: if linked { token } else { None },
+        access_token: if linked && may_read_token {
+            token
+        } else {
+            None
+        },
     })
 }
 
@@ -315,7 +330,7 @@ fn cloud_registry_item(id: &str, model: &str, display_name: &str) -> ConfiguredM
 }
 
 /// Fetch hosted model catalog and upsert `anycode_cloud` entries into local registry.
-pub async fn post_cloud_sync_models() -> impl IntoResponse {
+pub async fn post_cloud_sync_models(State(state): State<AppState>) -> impl IntoResponse {
     let token = match read_cloud_access_token() {
         Some(t) if !t.trim().is_empty() => t,
         _ => {
@@ -449,6 +464,7 @@ pub async fn post_cloud_sync_models() -> impl IntoResponse {
             .into_response();
     }
 
+    state.chat_runtime.invalidate_runtime().await;
     Json(CloudSyncModelsResponse {
         ok: true,
         synced,

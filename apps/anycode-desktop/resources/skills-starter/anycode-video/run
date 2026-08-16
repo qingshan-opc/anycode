@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# anycode-video: doctor → Playwright record → ffmpeg MP4 → ANYCODE_ARTIFACT lines
+# Single scene: video/index.html → video/out.mp4
+# Multi scene:  video/scenes/*/index.html → concat → video/out.mp4
+set -euo pipefail
+
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RENDER="$SKILL_DIR/scripts/render.mjs"
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: run video_dir" >&2
+  exit 1
+fi
+
+VIDEO_DIR="$(cd "$1" && pwd)"
+HTML="$VIDEO_DIR/index.html"
+OUT="$VIDEO_DIR/out.mp4"
+META="$VIDEO_DIR/render_meta.json"
+SCENES_DIR="$VIDEO_DIR/scenes"
+
+WIDTH=1080
+HEIGHT=1920
+DURATION=5
+FPS=30
+if [[ -f "$VIDEO_DIR/brief.json" ]]; then
+  eval "$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+extra = d.get("extra") or {}
+print("WIDTH=%d" % int(extra.get("width") or 1080))
+print("HEIGHT=%d" % int(extra.get("height") or 1920))
+print("DURATION=%s" % float(extra.get("duration_sec") or 5))
+' "$VIDEO_DIR/brief.json")"
+fi
+
+echo "[anycode-video] doctor"
+export NODE_PATH="${SKILL_DIR}/node_modules${NODE_PATH:+:$NODE_PATH}"
+if [[ ! -d "$SKILL_DIR/node_modules/playwright" ]]; then
+  echo "[anycode-video] playwright missing — run once: (cd \"$SKILL_DIR\" && npm install && npx playwright install chromium)" >&2
+fi
+if ! node "$RENDER" doctor; then
+  echo "[anycode-video] doctor failed — install missing deps above, then re-run" >&2
+  exit 1
+fi
+
+render_one() {
+  local html="$1"
+  local out="$2"
+  echo "[anycode-video] render ${WIDTH}x${HEIGHT} ${DURATION}s → $out"
+  node "$RENDER" render \
+    --input "$html" \
+    --output "$out" \
+    --width "$WIDTH" \
+    --height "$HEIGHT" \
+    --duration "$DURATION" \
+    --fps "$FPS"
+  if [[ ! -s "$out" ]]; then
+    echo "error: MP4 not produced: $out" >&2
+    exit 1
+  fi
+}
+
+SCENE_COUNT=0
+FIRST_SCENE_HTML=""
+if [[ -d "$SCENES_DIR" ]]; then
+  LIST="$VIDEO_DIR/concat_list.txt"
+  : >"$LIST"
+  # Portable: no mapfile / process substitution (macOS /bin/bash 3.2)
+  SCENE_LIST_FILE="$VIDEO_DIR/.scene_htmls.txt"
+  find "$SCENES_DIR" -mindepth 2 -maxdepth 2 -name index.html | sort >"$SCENE_LIST_FILE"
+  while IFS= read -r html; do
+    [[ -z "$html" ]] && continue
+    SCENE_COUNT=$((SCENE_COUNT + 1))
+    if [[ -z "$FIRST_SCENE_HTML" ]]; then
+      FIRST_SCENE_HTML="$html"
+    fi
+    part="$VIDEO_DIR/scene_$(printf '%02d' "$SCENE_COUNT").mp4"
+    render_one "$html" "$part"
+    printf "file '%s'\n" "$part" >>"$LIST"
+  done <"$SCENE_LIST_FILE"
+  rm -f "$SCENE_LIST_FILE"
+fi
+
+if [[ "$SCENE_COUNT" -gt 0 ]]; then
+  echo "[anycode-video] concat ${SCENE_COUNT} scenes → $OUT"
+  if ! ffmpeg -y -f concat -safe 0 -i "$LIST" -c copy "$OUT" >/dev/null 2>&1; then
+    ffmpeg -y -f concat -safe 0 -i "$LIST" -c:v libx264 -pix_fmt yuv420p "$OUT"
+  fi
+  echo "{\"scenes\":$SCENE_COUNT,\"width\":$WIDTH,\"height\":$HEIGHT}" >"$META"
+elif [[ -f "$HTML" ]]; then
+  render_one "$HTML" "$OUT" | tee "$META"
+else
+  echo "error: missing $HTML and no video/scenes/*/index.html — Copy template source first" >&2
+  exit 1
+fi
+
+if [[ ! -s "$OUT" ]]; then
+  echo "error: MP4 not produced: $OUT" >&2
+  exit 1
+fi
+
+PREVIEW_HTML="$HTML"
+if [[ ! -f "$PREVIEW_HTML" && -n "$FIRST_SCENE_HTML" ]]; then
+  PREVIEW_HTML="$FIRST_SCENE_HTML"
+fi
+
+echo "html: $PREVIEW_HTML"
+echo "mp4: $OUT"
+echo "ANYCODE_ARTIFACT:{\"path\":\"$PREVIEW_HTML\",\"kind\":\"html\",\"title\":\"短视频预览\"}"
+echo "ANYCODE_ARTIFACT:{\"path\":\"$OUT\",\"kind\":\"video\",\"title\":\"短视频 MP4\"}"

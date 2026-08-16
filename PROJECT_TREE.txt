@@ -1,32 +1,41 @@
 anycode/
 ├── Cargo.toml                 # Rust workspace
-├── .github/workflows/         # CI, docs publish, release binaries
+├── .github/workflows/         # CI, docs publish, desktop release
 ├── README.md
-├── WORKBENCH.md               # Digital Workbench quick-start and operator notes
-├── docs/                      # Maintainer docs, ADRs, roadmap, workbench planning/archive
-├── docs/user/                 # User docs source (published at anycode.work/docs via account-portal)
-├── scripts/                   # Install/build/dashboard/eval scripts and fixtures
-├── examples/                  # Small runnable examples
+├── WORKBENCH.md               # Digital Workbench notes
+├── DESIGN.md                  # Product / brand contract
+├── docs/                      # Maintainer docs, ADRs, roadmap
+├── docs/user/                 # User docs (anycode.work/docs)
+├── scripts/                   # Install/build/eval scripts
+├── skills-starter/            # Bundled Agent Skills
+├── apps/
+│   └── anycode-desktop/       # Tauri shell; in-process dashboard + WebView
 │
 └── crates/
-    ├── core/                  # 领域与 trait：子模块 ids/message/task/llm_types/traits 等，lib.rs 聚合
-    ├── agent/                 # AgentRuntime；runtime/*（含 tool_result_injection）为 LLM + 工具循环
-    ├── tools/                 # File/Bash/Glob/Grep/MCP/LSP tools and registry
-    ├── llm/                   # LLM transports and provider adapters
-    ├── security/              # SecurityLayer、审批、策略
-    ├── channels/              # Channel abstractions
-    ├── memory/                # Memory store and embedding pipeline
-    ├── onboard/               # 配置向导等
-    ├── locale/                # Fluent bundles and localization support
-    ├── dashboard/             # Digital Workbench backend; db/store/{open,*} + API handlers
-    ├── dashboard-ui/          # React/Vite workbench UI embedded into release builds
-    └── cli/                   # anycode binary: composition root
-        ├── app_config/        # schema/{types,validation}, prompts, wizards, load/onboard
-        ├── channels/          # WeChat / Telegram / Discord bridges
-        ├── commands/dispatch/ # CLI dispatch (channel_cmds, ops, task_cmds)
-        ├── cli_args/          # Clap args and subcommands
-        ├── tasks/             # run / REPL / workflow execution
-        ├── repl/              # stream ratatui REPL
-        └── term/              # transcript, styles, session persist
+    ├── core/                  # Domain types + traits
+    ├── agent/                 # AgentRuntime (LLM + tool loop)
+    ├── tools/                 # Built-in tools, skills, MCP, workflows
+    ├── llm/                   # LLM providers
+    ├── security/              # Approval + policy
+    ├── memory/                # Memory backends
+    ├── bootstrap/             # initialize_runtime composition root
+    ├── config/                # ~/.anycode/config.json schema
+    ├── locale/                # Locale helpers
+    ├── dashboard/             # Workbench HTTP + SQLite + embedded Agent
+    ├── dashboard-ui/          # React/Vite UI (not a Cargo member; embedded at build)
+    ├── dashboard-ipc/         # Approval / question / cancel file IPC
+    ├── channel-bridge/        # anycode-daemon (scheduler only)
+    ├── setup/                 # First-run setup helpers
+    ├── browser/ / browser-cef/# Browser automation / CEF helper
+    ├── apple-media/           # macOS Speech/OCR helpers
+    ├── relay-gateway/         # Local relay
+    ├── account-service/       # Cloud account API (workspace.exclude)
+    ├── account-portal/        # Docs / account Vite SPA
+    └── ops-portal/            # Ops Vite SPA
 
-说明：`docs/` 是维护者文档与 ADR；面向用户的文档以 `docs/user/` 为准。`crates/dashboard-ui/` 是 Node/Vite 项目，不是 Cargo workspace member，但由 `crates/dashboard/build.rs` 和 `scripts/build-dashboard-ui.sh` 嵌入发布产物。
+Removed (do not look for these):
+- crates/cli, crates/channels, crates/onboard (terminal CLI + IM bridges)
+- anycode-daemon wechat/telegram/discord bridge subcommands
+
+Notes: `docs/` is maintainer + ADR; user-facing docs live under `docs/user/`.
+`crates/dashboard-ui/` is Node/Vite, embedded by dashboard/desktop build scripts.

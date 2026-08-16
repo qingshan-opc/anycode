@@ -84,13 +84,19 @@ Based on the user interview, fill in these components:
 ```
 skill-name/
 ├── SKILL.md (required)
-│   ├── YAML frontmatter (name, description required)
+│   ├── YAML frontmatter (name, description required; optional ui: ui/surface.yaml)
 │   └── Markdown instructions
 └── Bundled Resources (optional)
+    ├── ui/         - Skill App mini-app (surface.yaml + index.html) for visual HITL
     ├── scripts/    - Executable code for deterministic/repetitive tasks
     ├── references/ - Docs loaded into context as needed
     └── assets/     - Files used in output (templates, icons, fonts)
 ```
+
+When the skill benefits from **see-then-generate** collaboration (PPT themes, doc layouts),
+add a Skill App under `ui/`. The Workbench host opens it and waits for a style click;
+do not tell the agent to call `SkillAppPresent` as the primary path. See ADR 020 and
+`skills-starter/anycode-ppt`.
 
 #### Progressive Disclosure
 

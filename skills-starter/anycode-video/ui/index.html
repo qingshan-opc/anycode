@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>短视频工作台</title>
+  <style>
+    :root {
+      --ui-bg: #0f1115;
+      --ui-ink: #e8eaed;
+      --ui-muted: #9aa0a6;
+      --ui-line: #2a2f3a;
+      --ui-card: #1a1d24;
+      --ui-accent: #7c5cff;
+      font-family: "IBM Plex Sans", "PingFang SC", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--ui-bg); color: var(--ui-ink); padding: 14px 16px 24px; }
+    h1 { font-size: 1.05rem; margin: 0 0 2px; letter-spacing: -0.03em; }
+    .sub { font-size: 0.75rem; color: var(--ui-muted); margin: 0 0 12px; line-height: 1.45; }
+    h2 { font-size: 0.7rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ui-muted); margin: 16px 0 8px; font-weight: 700; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; align-items: center; }
+    .chip {
+      border: 1px solid var(--ui-line); background: var(--ui-card); color: var(--ui-ink);
+      border-radius: 999px; padding: 6px 12px; font-size: 0.78rem; cursor: pointer; font: inherit;
+    }
+    .chip.on { border-color: var(--ui-accent); background: #241f3d; box-shadow: 0 0 0 1px var(--ui-accent); }
+    .chip label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .chip input { width: 52px; background: #0b0d12; border: 1px solid var(--ui-line); color: var(--ui-ink); border-radius: 4px; padding: 2px 4px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); gap: 10px; }
+    .card {
+      background: var(--ui-card); border: 2px solid transparent; border-radius: 8px;
+      padding: 6px; cursor: pointer; text-align: left; width: 100%;
+      box-shadow: 0 1px 2px rgba(0,0,0,.35); color: inherit; font: inherit;
+    }
+    .card.selected { border-color: var(--ui-accent); box-shadow: 0 0 0 1px var(--ui-accent); }
+    .card .name { font-size: 0.78rem; font-weight: 700; margin-top: 6px; }
+    .card .hint { font-size: 0.65rem; color: var(--ui-muted); margin-top: 2px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .thumb {
+      aspect-ratio: 9/16; max-height: 140px; width: 100%; border-radius: 4px; overflow: hidden; position: relative;
+      border: 1px solid rgba(255,255,255,.08); background: #111;
+    }
+    .thumb.landscape { aspect-ratio: 16/9; max-height: 90px; }
+    .thumb * { pointer-events: none; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
+    button.act {
+      border: 0; border-radius: 6px; padding: 8px 14px; background: var(--ui-accent); color: #fff;
+      font-size: 0.85rem; cursor: pointer; font-weight: 700;
+    }
+    button.ghost { background: #2a2f3a; color: #fff; }
+    .status { font-size: 0.75rem; min-height: 1.2em; color: #b0b4ba; margin-top: 8px; }
+    /* CSS thumbs */
+    .t-glitch { background: #0d0e10; }
+    .t-glitch::after { content:"SIGNAL"; position:absolute; left:8%; top:42%; font:900 14px/1 monospace; color:#f5f5f7; text-shadow: -2px 0 #00f0ff, 2px 0 #ff2bd6; }
+    .t-liquid { background: linear-gradient(135deg,#5b8def,#c084fc,#22d3ee); }
+    .t-liquid::after { content:"HERO"; position:absolute; left:12%; top:40%; font:700 16px/1 sans-serif; color:#fff; }
+    .t-cinema { background: linear-gradient(#1a1208,#3a2410); }
+    .t-cinema::after { content:""; position:absolute; inset:20% 10%; background:radial-gradient(ellipse,rgba(255,180,80,.45),transparent 70%); }
+    .t-nyt { background:#f7f4ee; color:#111; }
+    .t-nyt::before { content:"NYT"; position:absolute; left:8%; top:12%; font:700 9px/1 Georgia,serif; color:#999; letter-spacing:.12em; }
+    .t-nyt::after { content:""; position:absolute; left:10%; right:10%; bottom:22%; height:2px; background:#111; box-shadow:0 -18px 0 #ccc,0 -36px 0 #ddd; }
+    .t-logo { background:#000; }
+    .t-logo::after { content:"◎"; position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); font-size:28px; color:#fff; }
+    .t-cursor { background:#0b120c; }
+    .t-cursor::after { content:">_"; position:absolute; left:12%; top:42%; font:700 18px/1 ui-monospace,monospace; color:#3dff7a; }
+    .t-kinetic { background:#111; }
+    .t-kinetic::after { content:"TYPE"; position:absolute; left:8%; top:38%; font:900 20px/1 Impact,sans-serif; color:#fff; letter-spacing:-.04em; }
+    .t-swiss { background:#fff; color:#111; }
+    .t-swiss::before { content:""; position:absolute; left:8%; top:12%; width:14px; height:14px; background:#e30613; }
+    .t-swiss::after { content:"GRID"; position:absolute; left:8%; top:40%; font:700 12px Helvetica,sans-serif; letter-spacing:.1em; }
+    .t-grain { background:#2a2218; }
+    .t-grain::after { content:"GRAIN"; position:absolute; left:10%; top:42%; font:600 12px Georgia,serif; color:#e8d5b5; }
+    .t-promo { background:linear-gradient(160deg,#0b1c3a,#1e3a5f); }
+    .t-promo::after { content:"PROMO"; position:absolute; left:10%; top:40%; font:700 14px/1 sans-serif; color:#7ec8ff; }
+    .t-poster { background:#f2ebe0; }
+    .t-poster::before { content:""; position:absolute; left:8%; top:28%; right:8%; height:3px; background:#c41230; }
+    .t-poster::after { content:"Aa"; position:absolute; left:10%; top:40%; font:900 28px/1 Georgia,serif; color:#1a1a1a; }
+    .t-signal { background:#0e1117; }
+    .t-signal::after { content:"01"; position:absolute; right:10%; top:18%; font:900 28px/1 sans-serif; color:#ff7a3d; opacity:.9; }
+    .t-minimal { background:#faf8f4; }
+    .t-minimal::after { content:"build"; position:absolute; left:12%; top:42%; font:200 16px/1 Helvetica,sans-serif; color:#222; letter-spacing:.2em; }
+    .t-voltage { background:#0a0f1c; }
+    .t-voltage::before { content:""; position:absolute; left:0; top:0; bottom:0; width:48%; background:#1a2744; }
+    .t-voltage::after { content:"V~"; position:absolute; left:18%; top:40%; font:700 22px/1 cursive; color:#5eead4; }
+    .t-electric { background:#05060a; }
+    .t-electric::after { content:"⚡"; position:absolute; left:42%; top:38%; font-size:28px; }
+    .t-tree { background:#0f172a; }
+    .t-tree::after { content:"◇─◇"; position:absolute; left:20%; top:42%; font:700 14px monospace; color:#93c5fd; }
+    .t-stat { background:#111; }
+    .t-stat::after { content:"42%"; position:absolute; left:16%; top:38%; font:900 26px/1 Helvetica,sans-serif; color:#fff; }
+    .t-play { background:#18181b; }
+    .t-play::after { content:"▶ PLAY"; position:absolute; left:14%; top:42%; font:700 12px/1 sans-serif; color:#a3e635; }
+    .t-organic { background:#1c1917; }
+    .t-organic::after { content:"◎"; position:absolute; left:40%; top:36%; font-size:36px; color:#fbbf24; opacity:.7; }
+    .t-vignelli { background:#fff; }
+    .t-vignelli::after { content:"VIGNELLI"; position:absolute; left:8%; top:40%; font:700 11px Helvetica,sans-serif; letter-spacing:.16em; color:#111; }
+    .t-default { background:#1f2937; }
+    .t-default::after { content:"VIDEO"; position:absolute; left:14%; top:42%; font:700 12px/1 sans-serif; color:#9ca3af; }
+  </style>
+</head>
+<body>
+  <h1>短视频工作台</h1>
+  <p class="sub">可多选动画模板并锁定画幅。选好后点「交给 Agent」——点卡片只切换选中，不会立刻开工。</p>
+
+  <h2>画幅</h2>
+  <div class="chips" id="aspectChips"></div>
+
+  <h2>时长（秒）</h2>
+  <div class="chips">
+    <span class="chip"><label>秒 <input id="durInput" type="number" min="2" max="60" value="4" /></label></span>
+  </div>
+
+  <div id="groups"></div>
+
+  <div class="row">
+    <button type="button" class="act" id="go" disabled>交给 Agent</button>
+    <button type="button" class="act ghost" id="back">返回会话</button>
+  </div>
+  <p class="status" id="status"></p>
+
+  <script>
+    const TEMPLATES = [{"id": "frame-bold-poster", "name": "Bold Poster", "name_zh": "大胆海报帧", "desc": "A 1970s European editorial poster, in motion. A red rule draws across under a mono kicker, a giant Shrikhand figure rotates and drops in, a ", "group": "title", "duration_sec": 4, "min_sec": 4, "max_sec": 6, "thumb": "t-poster", "tags": ["poster", "editorial", "bold", "serif", "red"]}, {"id": "frame-bold-signal", "name": "Bold Signal", "name_zh": "大胆信号卡帧", "desc": "Bold colored card on a dark gradient — a big section number rolls in, a nav breadcrumb fades, a vibrant orange card slides in from the right", "group": "title", "duration_sec": 4, "min_sec": 3, "max_sec": 6, "thumb": "t-signal", "tags": ["bold", "card", "dark", "orange", "section"]}, {"id": "frame-build-minimal", "name": "Build Minimal", "name_zh": "奢华极简留白帧", "desc": "Luxury-minimal whitespace hero — a single word reveals letter by letter in ultra-thin Inter, a warm-gold hairline extends, thin indicators r", "group": "promo", "duration_sec": 4, "min_sec": 4, "max_sec": 7, "thumb": "t-minimal", "tags": ["minimal", "luxury", "whitespace", "hero", "gold"]}, {"id": "frame-creative-voltage", "name": "Creative Voltage", "name_zh": "创意电压分屏帧", "desc": "Electric-blue / dark offset split with a hand-drawn script accent — panels slide in offset, a display title rises with one electric outlined", "group": "cinematic", "duration_sec": 4, "min_sec": 3, "max_sec": 6, "thumb": "t-voltage", "tags": ["split-panel", "electric", "script", "retro-modern", "voltage"]}, {"id": "frame-data-chart-nyt", "name": "NYT Data Chart", "name_zh": "NYT 风数据图表帧", "desc": "New York Times-style animated data chart with counter animation and editorial typography.", "group": "data", "duration_sec": 8, "min_sec": 5, "max_sec": 20, "thumb": "t-nyt", "tags": ["chart", "bar", "data", "nyt", "journalism"]}, {"id": "frame-decision-tree", "name": "Decision Tree", "name_zh": "Decision Tree", "desc": "Animated flowchart with branching paths", "group": "data", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-tree", "tags": ["explainer", "flowchart", "decision", "branching", "diagram"]}, {"id": "frame-electric-studio", "name": "Electric Studio", "name_zh": "电光工作室分屏帧", "desc": "Two-panel vertical split with a quote as the hero — white top and electric-blue bottom panels open from the center, a black accent bar grows", "group": "cinematic", "duration_sec": 4, "min_sec": 3, "max_sec": 6, "thumb": "t-electric", "tags": ["split-panel", "quote", "blue", "high-contrast", "studio"]}, {"id": "frame-glitch-title", "name": "Glitch Title", "name_zh": "故障艺术标题帧", "desc": "Cyberpunk-style glitch title with RGB shift, scanline, and chromatic aberration effects.", "group": "title", "duration_sec": 4, "min_sec": 3, "max_sec": 8, "thumb": "t-glitch", "tags": ["title", "glitch", "cyberpunk", "rgb-shift", "tech"]}, {"id": "frame-kinetic-type", "name": "Kinetic Type", "name_zh": "Kinetic Type", "desc": "Bold kinetic typography promo", "group": "title", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-kinetic", "tags": ["kinetic", "typography", "promo", "bold", "motion-text"]}, {"id": "frame-light-leak-cinema", "name": "Light Leak Cinema", "name_zh": "胶片漏光电影帧", "desc": "Cinematic light leak frame — film grain, lens flare, and editorial 35mm warmth over a hero shot.", "group": "cinematic", "duration_sec": 6, "min_sec": 4, "max_sec": 10, "thumb": "t-cinema", "tags": ["cinema", "light-leak", "film", "35mm", "grain"]}, {"id": "frame-liquid-bg-hero", "name": "Liquid Background Hero", "name_zh": "流体背景 Hero 帧", "desc": "Hero card over a flowing liquid mesh-gradient background — magazine-style cover with editorial typography.", "group": "cinematic", "duration_sec": 6, "min_sec": 4, "max_sec": 12, "thumb": "t-liquid", "tags": ["hero", "liquid", "gradient", "mesh", "editorial"]}, {"id": "frame-logo-outro", "name": "Logo Outro Frame", "name_zh": "品牌 Logo 收尾帧", "desc": "Segmented logo assembly + glow bloom + tagline reveal — perfect for video outros and brand closing frames.", "group": "title", "duration_sec": 5, "min_sec": 3, "max_sec": 10, "thumb": "t-logo", "tags": ["logo", "outro", "branding", "end-card", "frame"]}, {"id": "frame-nyt-graph", "name": "NYT Graph", "name_zh": "NYT Graph", "desc": "Animated data chart in print editorial style", "group": "data", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-nyt", "tags": ["data", "chart", "editorial", "nyt", "line-graph"]}, {"id": "frame-pentagram-stat", "name": "Pentagram Stat", "name_zh": "瑞士网格数据帧", "desc": "Swiss-grid statistic anchor — a giant number bleeds off the edge while grid rules sweep in, a bar chart grows, and a black data bar slides u", "group": "data", "duration_sec": 4, "min_sec": 3, "max_sec": 6, "thumb": "t-stat", "tags": ["stat", "swiss-grid", "editorial", "data", "pentagram"]}, {"id": "frame-play-mode", "name": "Play Mode", "name_zh": "Play Mode", "desc": "Playful elastic animations", "group": "promo", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-play", "tags": ["playful", "elastic", "fun", "bouncy", "social"]}, {"id": "frame-product-promo", "name": "Product Promo", "name_zh": "Product Promo", "desc": "Multi-scene product showcase with SVG assets", "group": "promo", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-promo", "tags": ["product", "promo", "multi-scene", "showcase", "svg"]}, {"id": "frame-product-promo-30s", "name": "Product Promo · 30s", "name_zh": "Product Promo · 30s", "desc": "Multi-scene 30-second product promo: problem-type intro, brand reveal, benefits flowchart, product surfaces, value pillars, foundation, CTA ", "group": "data", "duration_sec": 4, "min_sec": 25, "max_sec": 35, "thumb": "t-promo", "tags": ["product", "promo", "multi-scene", "30s", "benefits"]}, {"id": "frame-swiss-grid", "name": "Swiss Grid", "name_zh": "Swiss Grid", "desc": "Structured grid layout", "group": "data", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-swiss", "tags": ["swiss", "grid", "minimal", "corporate", "typography"]}, {"id": "frame-takram-organic", "name": "Takram Organic", "name_zh": "东方柔和有机帧", "desc": "Soft-tech radial node graph as art — a frosted rounded card holds the message while curved links draw and eight nodes pop outward around an ", "group": "data", "duration_sec": 4, "min_sec": 4, "max_sec": 7, "thumb": "t-organic", "tags": ["organic", "soft-tech", "radial", "node-graph", "takram"]}, {"id": "frame-vignelli", "name": "Vignelli", "name_zh": "Vignelli", "desc": "Bold typography with red accents", "group": "data", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-vignelli", "tags": ["vignelli", "red", "bold", "portrait", "9:16"]}, {"id": "frame-warm-grain", "name": "Warm Grain", "name_zh": "Warm Grain", "desc": "Cream aesthetic with grain texture", "group": "cinematic", "duration_sec": 4, "min_sec": 3, "max_sec": 30, "thumb": "t-grain", "tags": ["lifestyle", "warm", "grain", "cream", "editorial"]}, {"id": "vfx-text-cursor", "name": "Text + Cursor VFX", "name_zh": "VFX 文字光标", "desc": "Typewriter text effect with blinking terminal cursor — perfect for code-style reveals or tech demos.", "group": "title", "duration_sec": 5, "min_sec": 3, "max_sec": 10, "thumb": "t-cursor", "tags": ["text", "typewriter", "cursor", "terminal", "code"]}];
+    const GROUPS = [
+      { id: "title", label: "标题 / VFX" },
+      { id: "data", label: "数据" },
+      { id: "promo", label: "宣传" },
+      { id: "explainer", label: "解读" },
+      { id: "cinematic", label: "电影感" },
+      { id: "other", label: "其他" },
+    ];
+    const ASPECTS = [
+      { id: "9:16", w: 1080, h: 1920, label: "9:16 竖屏" },
+      { id: "16:9", w: 1920, h: 1080, label: "16:9 横屏" },
+      { id: "1:1", w: 1080, h: 1080, label: "1:1 方形" },
+    ];
+
+    const anycode = (() => {
+      const pending = new Map();
+      let seq = 0;
+      const pushListeners = [];
+      window.addEventListener("message", (ev) => {
+        const d = ev.data;
+        if (!d || d.jsonrpc !== "2.0") return;
+        if (d.method === "anycode.agent.push") {
+          pushListeners.forEach((fn) => fn(d.params));
+          return;
+        }
+        if (d.id != null && pending.has(d.id)) {
+          const { resolve, reject } = pending.get(d.id);
+          pending.delete(d.id);
+          if (d.error) reject(new Error(d.error.message || "bridge error"));
+          else resolve(d.result);
+        }
+      });
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = ++seq;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      }
+      return {
+        ready: () => call("anycode.ready"),
+        state: {
+          get: () => call("anycode.state.get"),
+          set: (patch) => call("anycode.state.set", patch),
+        },
+        brief: { submit: (brief) => call("anycode.brief.submit", brief) },
+        agent: {
+          prompt: (payload) => call("anycode.agent.prompt", payload),
+          onPush: (fn) => { pushListeners.push(fn); },
+        },
+        ui: { backToChat: () => call("anycode.ui.backToChat") },
+      };
+    })();
+
+    let aspectId = "9:16";
+    let selectedIds = [];
+    let waitBrief = false;
+    let handing = false;
+    let handedOff = false;
+
+    function aspect() {
+      return ASPECTS.find((a) => a.id === aspectId) || ASPECTS[0];
+    }
+    function selectedTemplates() {
+      return selectedIds
+        .map((id) => TEMPLATES.find((t) => t.id === id))
+        .filter(Boolean);
+    }
+    function primaryTemplate() {
+      const list = selectedTemplates();
+      return list[0] || TEMPLATES[0];
+    }
+    function durationSec() {
+      const t = primaryTemplate();
+      let v = Number(document.getElementById("durInput").value);
+      if (!Number.isFinite(v)) v = t ? t.duration_sec : 4;
+      const min = t ? t.min_sec || 2 : 2;
+      const max = t ? t.max_sec || 60 : 60;
+      return Math.max(min, Math.min(max, Math.round(v)));
+    }
+    function syncGo() {
+      const go = document.getElementById("go");
+      go.disabled = selectedIds.length === 0 || handing || handedOff;
+      go.textContent =
+        selectedIds.length > 1
+          ? "交给 Agent（" + selectedIds.length + " 个分镜）"
+          : "交给 Agent";
+    }
+
+    function renderAspects() {
+      const el = document.getElementById("aspectChips");
+      el.innerHTML = "";
+      ASPECTS.forEach((a) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chip" + (a.id === aspectId ? " on" : "");
+        btn.textContent = a.label;
+        btn.onclick = () => {
+          aspectId = a.id;
+          renderAll();
+        };
+        el.appendChild(btn);
+      });
+    }
+
+    function toggleTemplate(id) {
+      const idx = selectedIds.indexOf(id);
+      if (idx >= 0) selectedIds.splice(idx, 1);
+      else selectedIds.push(id);
+      const t = TEMPLATES.find((x) => x.id === id);
+      if (t && selectedIds[selectedIds.length - 1] === id) {
+        const inp = document.getElementById("durInput");
+        inp.min = t.min_sec;
+        inp.max = t.max_sec;
+        inp.value = t.duration_sec;
+      }
+      renderAll();
+    }
+
+    function renderGroups() {
+      const root = document.getElementById("groups");
+      root.innerHTML = "";
+      const landscape = aspectId !== "9:16";
+      GROUPS.forEach((g) => {
+        const items = TEMPLATES.filter((t) => t.group === g.id);
+        if (!items.length) return;
+        const h = document.createElement("h2");
+        h.textContent = g.label;
+        root.appendChild(h);
+        const grid = document.createElement("div");
+        grid.className = "grid";
+        items.forEach((t) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          const order = selectedIds.indexOf(t.id);
+          btn.className = "card" + (order >= 0 ? " selected" : "");
+          btn.innerHTML =
+            '<div class="thumb ' + (landscape ? "landscape " : "") + (t.thumb || "t-default") + '"></div>' +
+            '<div class="name">' +
+            (order >= 0 ? (order + 1) + ". " : "") +
+            (t.name_zh || t.name) +
+            "</div>" +
+            '<div class="hint">' + (t.desc || t.id) + "</div>";
+          btn.onclick = () => toggleTemplate(t.id);
+          grid.appendChild(btn);
+        });
+        root.appendChild(grid);
+      });
+    }
+
+    function renderAll() {
+      renderAspects();
+      renderGroups();
+      syncGo();
+    }
+
+    function snapshot() {
+      return { aspectId, templateIds: selectedIds.slice(), duration_sec: durationSec() };
+    }
+
+    function buildBrief() {
+      const list = selectedTemplates();
+      const t = list[0];
+      const a = aspect();
+      const dur = durationSec();
+      const ids = list.map((x) => x.id);
+      const names = list.map((x) => x.name_zh || x.name).join(", ");
+      const multi = ids.length > 1;
+      return {
+        skill_id: "anycode-video",
+        schema: "visual-brief/v1",
+        family: t.id,
+        templates: ids,
+        tokens: {},
+        density: "motion",
+        notes: multi
+          ? "Locked ordered html-video templates [" +
+            ids.join(", ") +
+            "] (" +
+            names +
+            "). Copy each into video/scenes/<id>/, fill yaml inputs only — keep visual signatures. " +
+            "Aspect " +
+            a.id +
+            " (" +
+            a.w +
+            "x" +
+            a.h +
+            "), duration_sec=" +
+            dur +
+            " per scene. Then run video/ (concat MP4)."
+          : "Locked html-video template " +
+            t.id +
+            " (" +
+            (t.name_zh || t.name) +
+            "). Copy templates/" +
+            t.id +
+            "/source into video/. Fill yaml inputs only — keep visual signature. " +
+            "Aspect " +
+            a.id +
+            " (" +
+            a.w +
+            "x" +
+            a.h +
+            "), duration_sec=" +
+            dur +
+            ". Then run video/ for MP4.",
+        extra: {
+          aspect: a.id,
+          width: a.w,
+          height: a.h,
+          duration_sec: dur,
+          template_id: t.id,
+          template_ids: ids,
+        },
+      };
+    }
+
+    async function handoff() {
+      if (handing || selectedIds.length === 0) return;
+      handing = true;
+      syncGo();
+      try {
+        const brief = buildBrief();
+        await anycode.state.set(snapshot());
+        await anycode.brief.submit(brief);
+        handedOff = true;
+        waitBrief = false;
+        const n = selectedIds.length;
+        status.textContent =
+          "已交给 Agent · " +
+          n +
+          " 个模板 · " +
+          aspect().id;
+        if (anycode.ui && anycode.ui.backToChat) await anycode.ui.backToChat();
+      } catch (e) {
+        status.textContent = String(e);
+      } finally {
+        handing = false;
+        syncGo();
+      }
+    }
+
+    const status = document.getElementById("status");
+    document.getElementById("go").onclick = () => {
+      void handoff();
+    };
+    document.getElementById("back").onclick = () => {
+      if (anycode.ui && anycode.ui.backToChat) void anycode.ui.backToChat();
+    };
+
+    async function boot() {
+      await anycode.ready();
+      const snap = await anycode.state.get();
+      const st = (snap && snap.state) || {};
+      waitBrief = snap && snap.wait_brief === true;
+      if (st.aspectId && ASPECTS.some((a) => a.id === st.aspectId)) aspectId = st.aspectId;
+      if (Array.isArray(st.templateIds) && st.templateIds.length) {
+        selectedIds = st.templateIds.filter((id) => TEMPLATES.some((t) => t.id === id));
+      } else if (st.templateId && TEMPLATES.some((t) => t.id === st.templateId)) {
+        selectedIds = [st.templateId];
+      }
+      if (st.duration_sec) document.getElementById("durInput").value = st.duration_sec;
+      const t = primaryTemplate();
+      if (t) {
+        const inp = document.getElementById("durInput");
+        inp.min = t.min_sec;
+        inp.max = t.max_sec;
+      }
+      status.textContent = waitBrief
+        ? "可多选模板，选好后点「交给 Agent」"
+        : snap && snap.brief
+          ? "选好模板后点「交给 Agent」· 上次 " + (snap.brief.family || "")
+          : "可多选模板，选好后点「交给 Agent」";
+      renderAll();
+      anycode.agent.onPush((p) => {
+        if (p && p.wait_brief === true) waitBrief = true;
+        status.textContent = "Agent push: " + (p && p.message ? p.message : JSON.stringify(p));
+      });
+    }
+    boot().catch((e) => {
+      status.textContent = String(e);
+    });
+  </script>
+</body>
+</html>

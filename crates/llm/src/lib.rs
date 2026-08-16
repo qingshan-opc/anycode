@@ -69,7 +69,7 @@ pub use config_models::{
     SpeechModelsConfig,
 };
 pub use copilot_token::{
-    anycode_credentials_dir, copilot_token_cache_path, github_oauth_token_path,
+    anycode_credentials_dir, anycode_home_dir, copilot_token_cache_path, github_oauth_token_path,
     read_github_oauth_access_token, resolve_copilot_api_token,
 };
 pub use deepseek_catalog::{
@@ -108,8 +108,9 @@ pub use retry_strategy::{
 };
 pub use runtime_capabilities::{
     capabilities_for_model_config, explicitly_requests_tool_execution, has_tool_recovery_nudge,
-    is_first_agent_turn, resolve_runtime_model_capabilities, RuntimeModelCapabilities,
-    TOOL_RECOVERY_NUDGE, TOOL_RECOVERY_NUDGE_FORCE_GLOB, WEAK_LOCAL_TOOL_GUIDANCE,
+    is_first_agent_turn, openai_parallel_tool_calls, resolve_runtime_model_capabilities,
+    RuntimeModelCapabilities, TOOL_RECOVERY_NUDGE, TOOL_RECOVERY_NUDGE_FORCE_GLOB,
+    WEAK_LOCAL_TOOL_GUIDANCE,
 };
 pub use tool_call_normalizer::normalize_assistant_output;
 

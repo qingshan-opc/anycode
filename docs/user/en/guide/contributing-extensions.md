@@ -33,6 +33,14 @@ This page lists **where to change code** for common extensions. For layering rul
 - **File / hybrid / noop**: configured via `anycode-bootstrap` → `build_memory_layer` (`crates/bootstrap/src/memory_setup.rs`).
 - **Pipeline** (vector + optional embedding): types in `crates/core/src/memory_pipeline.rs`, implementation `crates/memory`. See [`docs/adr/001-memory-pipeline-and-store.md`](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/001-memory-pipeline-and-store.md).
 
+## Skill App (visual mini-app)
+
+1. Add `ui/surface.yaml` + `ui/index.html` under the skill directory (scaffold creates a stub).
+2. Optionally set `ui: ui/surface.yaml` in `SKILL.md` frontmatter.
+3. Speak the Host SDK via `postMessage` (`anycode.state`, `anycode.brief.submit`, `anycode.agent.prompt`) — never call dashboard REST from the iframe.
+4. Bind to a project via `PUT /api/projects/{id}/skill-apps` or let `SkillAppPresent` auto-bind.
+5. See [ADR 020](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/020-skill-apps.md) and `skills-starter/skill-app-hello`.
+
 ## Quick navigation
 
 | Goal | First file to open |
@@ -41,3 +49,5 @@ This page lists **where to change code** for common extensions. For layering rul
 | Tool catalog / sensitive IDs | `crates/tools/src/catalog.rs` |
 | Runtime assembly | `crates/bootstrap/src/runtime.rs` |
 | Agent loop | `crates/agent/src/runtime/session.rs`, `mod.rs` |
+| Skill Apps host | `crates/dashboard-ui/src/components/workbench/panels/SkillAppPanel.tsx` |
+| Skill App surface types | `crates/tools/src/skills/surface.rs` |

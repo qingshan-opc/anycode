@@ -88,10 +88,26 @@ export function modelSubtitle(item: ConfiguredModel): string {
   return item.provider;
 }
 
-export function listChatModels(items: ConfiguredModel[]): ComposerModelOption[] {
+export type ListChatModelsOptions = {
+  /** When false, hide `source: cloud` / anycode_cloud entries (logged-out UI). Default true. */
+  includeCloud?: boolean;
+};
+
+function isCloudConfiguredModel(item: ConfiguredModel): boolean {
+  if (item.source === "cloud") return true;
+  const provider = item.provider.trim().toLowerCase().replace(/-/g, "_");
+  return provider === "anycode_cloud" || provider === "anycodecloud";
+}
+
+export function listChatModels(
+  items: ConfiguredModel[],
+  options: ListChatModelsOptions = {},
+): ComposerModelOption[] {
+  const includeCloud = options.includeCloud !== false;
   const seen = new Set<string>();
-  const options = items
+  const optionsList = items
     .filter((m) => m.enabled && m.capabilities.includes("chat"))
+    .filter((m) => includeCloud || !isCloudConfiguredModel(m))
     .filter((m) => {
       const key = `${m.provider}/${m.model}`;
       if (seen.has(key)) return false;
@@ -102,7 +118,7 @@ export function listChatModels(items: ConfiguredModel[]): ComposerModelOption[] 
       id: item.id,
       label: modelLabel(item),
       subtitle: modelSubtitle(item),
-      isCloud: item.source === "cloud",
+      isCloud: isCloudConfiguredModel(item),
       cloudModel: item.model,
       tier: item.tier,
       tierNote: item.tier_note,
@@ -110,7 +126,7 @@ export function listChatModels(items: ConfiguredModel[]): ComposerModelOption[] 
       curated: item.curated,
     }));
 
-  return options.sort((a, b) => {
+  return optionsList.sort((a, b) => {
     const rank = (o: ComposerModelOption) => {
       if (o.isCloud && o.cloudModel === "auto") return 0;
       if (o.isCloud) return 1;

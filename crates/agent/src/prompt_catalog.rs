@@ -198,7 +198,8 @@ pub(crate) fn default_stack_sections(
     if include_mcp {
         parts.push(core("mcp_integration").trim().to_string());
     }
-    parts.push(core("hooks_configuration").trim().to_string());
+    // Host lifecycle hooks.json (SessionStart / UserPromptSubmit / …) is not a product surface.
+    // Internal compaction uses CompactionHooks in crates/agent/src/compact — not advertised here.
     if let Some(out) = locale_output_format_section() {
         parts.push(out);
     } else {

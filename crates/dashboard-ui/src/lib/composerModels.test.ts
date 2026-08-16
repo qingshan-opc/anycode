@@ -41,6 +41,14 @@ describe("composerModels", () => {
     expect(options.map((o) => o.id)).toEqual(["cloud-auto", "cloud-agnes", "local"]);
   });
 
+  it("hides cloud models when includeCloud is false", () => {
+    const items = [
+      chatItem({ id: "local", provider: "openai", model: "gpt-4" }),
+      chatItem({ id: "cloud-auto", provider: "anycode_cloud", model: "auto", source: "cloud" }),
+    ];
+    expect(listChatModels(items, { includeCloud: false }).map((o) => o.id)).toEqual(["local"]);
+  });
+
   it("dedupes chat models by provider/model", () => {
     const items = [
       chatItem({ id: "a", provider: "google", model: "gemini-2.5-flash" }),

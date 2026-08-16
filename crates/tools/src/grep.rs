@@ -1,4 +1,4 @@
-use crate::limits::GREP_MAX_JSON_LINES;
+use crate::limits::{GREP_DEFAULT_HEAD_LIMIT, GREP_MAX_JSON_LINES};
 use crate::paths::resolve_read_path_fields;
 use anycode_core::prelude::*;
 use async_trait::async_trait;
@@ -76,8 +76,10 @@ impl Tool for GrepTool {
             - Optional `path` scopes the search root; defaults to workspace / cwd under sandbox rules.\n\
             - `output_mode`: \"content\" (default, structured matches with context), \"files_with_matches\" (file paths only), \"count\" (per-file match counts).\n\
             - Context flags `-B`/`-A`/`-C`/`context`, `-n`, `-i`, `-o`, `type`, `head_limit`, `offset` and `multiline` mirror Claude Code's Grep tool.\n\
+            - `head_limit` defaults to 50; pass 0 for unlimited (use sparingly — large result sets waste context).\n\
             - Output may be truncated when too many matches; refine pattern or path.\n\
-            - Prefer Grep for exact symbol/string search; use Glob for filename patterns.",
+            - Prefer Grep for exact symbol/string search; use Glob for filename patterns.\n\
+            - Can be batched with other read-only tools (Glob/FileRead/WebSearch) in the same turn.",
             self.description()
         )
     }
@@ -102,7 +104,7 @@ impl Tool for GrepTool {
                 "-i": { "type": "boolean", "description": "Case insensitive search (rg -i)" },
                 "-o": { "type": "boolean", "description": "Print only the matched (non-empty) parts of each matching line, one match per output line (rg -o / --only-matching). Requires output_mode: \"content\", ignored otherwise. Defaults to false." },
                 "type": { "type": "string", "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc." },
-                "head_limit": { "type": "integer", "description": "Limit output to first N lines/entries. Pass 0 for unlimited (use sparingly — large result sets waste context)." },
+                "head_limit": { "type": "integer", "description": "Limit output to first N lines/entries. Defaults to 50. Pass 0 for unlimited (use sparingly — large result sets waste context)." },
                 "offset": { "type": "integer", "description": "Skip first N lines/entries before applying head_limit. Defaults to 0." },
                 "multiline": { "type": "boolean", "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false." }
             },
@@ -213,7 +215,7 @@ impl Tool for GrepTool {
         }
 
         let offset = g.offset.unwrap_or(0);
-        let head_limit = g.head_limit;
+        let head_limit = effective_grep_head_limit(g.head_limit);
         let apply_paging = |lines: Vec<String>| -> (Vec<String>, bool) {
             let mut out: Vec<String> = Vec::new();
             let mut truncated = false;
@@ -222,9 +224,7 @@ impl Tool for GrepTool {
                     continue;
                 }
                 if let Some(limit) = head_limit {
-                    if limit == 0 {
-                        // unlimited (still bounded by GREP_MAX_JSON_LINES below for content mode)
-                    } else if out.len() >= limit {
+                    if out.len() >= limit {
                         truncated = true;
                         break;
                     }
@@ -285,7 +285,7 @@ impl Tool for GrepTool {
                     continue;
                 }
                 if let Some(limit) = head_limit {
-                    if limit > 0 && kept.len() >= limit {
+                    if kept.len() >= limit {
                         truncated = true;
                         break;
                     }
@@ -308,5 +308,26 @@ impl Tool for GrepTool {
             error: None,
             duration_ms,
         })
+    }
+}
+
+/// `None` → default 50; `Some(0)` → unlimited; otherwise the requested cap.
+fn effective_grep_head_limit(head_limit: Option<usize>) -> Option<usize> {
+    match head_limit {
+        None => Some(GREP_DEFAULT_HEAD_LIMIT),
+        Some(0) => None,
+        Some(n) => Some(n),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_head_limit_is_fifty_and_zero_is_unlimited() {
+        assert_eq!(effective_grep_head_limit(None), Some(50));
+        assert_eq!(effective_grep_head_limit(Some(0)), None);
+        assert_eq!(effective_grep_head_limit(Some(12)), Some(12));
     }
 }

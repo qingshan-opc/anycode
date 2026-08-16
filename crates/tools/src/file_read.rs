@@ -46,7 +46,8 @@ impl Tool for FileReadTool {
             - `offset`/`limit` select a line range for large files (offset is 1-based, mirroring Claude Code).\n\
             - `pages` selects a page range for PDF files (e.g. \"1-5\", \"10-20\", max 20 pages).\n\
             - A maximum byte budget applies for full reads (env ANYCODE_FILE_READ_MAX_BYTES); line-range reads bypass it.\n\
-            - Always use absolute or sandbox-relative paths consistent with the task working directory.",
+            - Always use absolute or sandbox-relative paths consistent with the task working directory.\n\
+            - Can be batched with other read-only tools (Grep/Glob/WebSearch) in the same turn.",
             self.description()
         )
     }

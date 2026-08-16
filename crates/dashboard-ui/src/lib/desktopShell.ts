@@ -21,15 +21,10 @@ function hasTauriInternals(): boolean {
 
 export function isTauriDesktop(): boolean {
   if (tauriAvailable !== null) return tauriAvailable;
+  // Only the real Tauri WebView exposes these globals. Do **not** treat the
+  // server-injected `dw-tauri` CSS class as proof of Desktop — Chrome on the
+  // ephemeral loopback URL used to look "native" and break invoke.
   if (hasTauriInternals()) {
-    tauriAvailable = true;
-    return true;
-  }
-  // Embedded desktop serves the SPA from loopback; server injects `dw-tauri` on index.html.
-  if (
-    typeof document !== "undefined" &&
-    document.documentElement.classList.contains("dw-tauri")
-  ) {
     tauriAvailable = true;
     return true;
   }

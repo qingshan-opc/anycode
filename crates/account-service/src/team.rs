@@ -37,19 +37,18 @@ pub struct OrgInviteView {
 }
 
 pub async fn team_status(db: &AccountDb, org_id: &str) -> Result<TeamStatusView> {
-    let row = sqlx::query(
-        "SELECT name, team_setup_at FROM organizations WHERE id = ? LIMIT 1",
+    let row = sqlx::query("SELECT name, team_setup_at FROM organizations WHERE id = ? LIMIT 1")
+        .bind(org_id)
+        .fetch_optional(db.pool())
+        .await?
+        .ok_or_else(|| anyhow!("organization not found"))?;
+
+    let member_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM users WHERE organization_id = ? AND status != 'disabled'",
     )
     .bind(org_id)
-    .fetch_optional(db.pool())
-    .await?
-    .ok_or_else(|| anyhow!("organization not found"))?;
-
-    let member_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE organization_id = ? AND status != 'disabled'")
-            .bind(org_id)
-            .fetch_one(db.pool())
-            .await?;
+    .fetch_one(db.pool())
+    .await?;
 
     let pending_invites: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM org_invites WHERE organization_id = ? AND status = 'pending' AND expires_at > NOW(3)",
@@ -58,7 +57,9 @@ pub async fn team_status(db: &AccountDb, org_id: &str) -> Result<TeamStatusView>
     .fetch_one(db.pool())
     .await?;
 
-    let team_setup = row.get::<Option<chrono::DateTime<Utc>>, _>("team_setup_at").is_some();
+    let team_setup = row
+        .get::<Option<chrono::DateTime<Utc>>, _>("team_setup_at")
+        .is_some();
     let member_count = member_count.max(0) as u64;
     let gate = if !team_setup {
         TeamGate::SetupRequired
@@ -298,28 +299,32 @@ pub async fn accept_invite(db: &AccountDb, user: &AuthUser, token: &str) -> Resu
     .fetch_one(db.pool())
     .await?;
     if solo != 1 {
-        return Err(anyhow!("leave your current team before accepting this invite"));
+        return Err(anyhow!(
+            "leave your current team before accepting this invite"
+        ));
     }
     if user.role != "owner" {
-        return Err(anyhow!("only solo workspace owners can accept a team invite"));
+        return Err(anyhow!(
+            "only solo workspace owners can accept a team invite"
+        ));
     }
 
     let old_org = user.organization_id.clone();
     let invite_id: String = row.get("id");
     let mut tx = db.pool().begin().await?;
 
-    sqlx::query("UPDATE users SET organization_id = ?, role = 'member', updated_at = NOW(3) WHERE id = ?")
-        .bind(&target_org)
-        .bind(&user.id)
-        .execute(&mut *tx)
-        .await?;
-
     sqlx::query(
-        "UPDATE org_invites SET status = 'accepted', accepted_at = NOW(3) WHERE id = ?",
+        "UPDATE users SET organization_id = ?, role = 'member', updated_at = NOW(3) WHERE id = ?",
     )
-    .bind(&invite_id)
+    .bind(&target_org)
+    .bind(&user.id)
     .execute(&mut *tx)
     .await?;
+
+    sqlx::query("UPDATE org_invites SET status = 'accepted', accepted_at = NOW(3) WHERE id = ?")
+        .bind(&invite_id)
+        .execute(&mut *tx)
+        .await?;
 
     sqlx::query("DELETE FROM organizations WHERE id = ?")
         .bind(&old_org)
@@ -330,11 +335,7 @@ pub async fn accept_invite(db: &AccountDb, user: &AuthUser, token: &str) -> Resu
     team_status(db, &target_org).await
 }
 
-async fn get_invite_by_email(
-    db: &AccountDb,
-    org_id: &str,
-    email: &str,
-) -> Result<OrgInviteView> {
+async fn get_invite_by_email(db: &AccountDb, org_id: &str, email: &str) -> Result<OrgInviteView> {
     let row = sqlx::query(
         r#"
         SELECT id, kind, email, status, expires_at, created_at

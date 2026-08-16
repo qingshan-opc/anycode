@@ -1,70 +1,34 @@
 ---
-title: Agent skills（技能）
-description: SKILL.md 约定、~/.anycode/skills 扫描、config.json 的 skills 段、Skill 工具与 anycode skills 子命令。
-summary: anyCode 如何发现技能、写入系统提示，以及可选 run 脚本的执行方式。
-read_when:
-  - 需要与 OpenClaw / agentskills 风格对齐的目录与 frontmatter。
-  - 要用 CLI 查看搜索根或生成技能模板。
+title: Agent 技能
+description: SKILL.md 布局、~/.anycode/skills 发现、skills.* 配置与 Skill 工具。
+summary: anyCode 如何发现技能、注入系统提示，以及如何运行可选的 run 脚本。
 ---
 
-# Agent skills（技能）
+# Agent 技能
 
-anyCode 采用常见的 **Agent Skills** 约定：每个技能是一个目录，内含 **`SKILL.md`**，顶部 YAML frontmatter 必填 **`name`**、**`description`**。目录下可选可执行文件 **`run`**，由 **`Skill`** 工具调用（风险级别接近 **Bash**，走审批与敏感工具策略）。
+anyCode 对齐常见 **Agent Skills** 约定：每个技能是一个目录，内含 **`SKILL.md`**（YAML frontmatter 含 **`name`**、**`description`**）。可选可执行文件 **`run`** 由 **`Skill`** 工具调用（风险级别接近 **Bash**，走审批策略）。
 
-## 目录布局
+## 布局
 
-- **用户级默认根目录：** `~/.anycode/skills/<skill_id>/`
-- **项目内（启动时不扫描）：** `<cwd>/skills/<skill_id>/` 或 `<cwd>/.anycode/skills/<skill_id>/` — 若 catalog 中尚无该 id，在 **Skill** 工具执行时会尝试解析。
-- **`skill_id`** 须与目录名、frontmatter 的 **`name`** 一致（仅 ASCII 字母数字及 `.` `_` `-`）。不一致会记录警告并跳过。
+- **用户根目录：** `~/.anycode/skills/<skill_id>/`
+- **项目覆盖：** `<cwd>/skills/<skill_id>/` 或 `<cwd>/.anycode/skills/<skill_id>/`
 
-| **`description`** | 给模型与 `anycode skills list` 用的一句话说明（英文或通用）。 |
-| **`description_zh`** | 可选；中文摘要，会出现在系统提示的 **Available skills** 列表中。 |
+可选 **`run`**：在**任务工作目录**下执行（不是技能目录）。设置环境变量 `ANYCODE_SKILL_DIR`、`ANYCODE_WORKING_DIR`。默认 **`skills.minimal_env=true`**。
 
-最小 **`SKILL.md`** 示例：
+若 frontmatter 写 **`permissions.network: false`**，主机**拒绝执行 `run`**（失败即拒绝）。可无 `args` 只加载说明。
 
-```markdown
----
-name: my-skill
-description: 给模型和 anycode skills list 用的一句话说明
----
+## 配置
 
-# my-skill
+见英文版表格（`docs/user/en/guide/skills.md`）。默认 `minimal_env: true`。
 
-给人看的正文（可选）。
-```
+## 工作台
 
-可选 **`run`**：须为普通文件；以技能目录为 **cwd** 执行，可将 CLI 参数原样传入。
+在 **设置 → 技能** 管理。终端 `anycode skills` CLI 已随 CLI 产品面移除。
 
-## 配置（`~/.anycode/config.json`）
+## Skill App（技能小程序）
 
-**`skills`** 段字段：
+Skill 可在 `ui/` 下提供沙箱 HTML 小程序（见 [ADR 020](https://github.com/qingjiuzys/anycode/blob/main/docs/adr/020-skill-apps.md)），挂到右侧 dock、会话主区或项目钉。Agent 工具：`SkillAppPresent` / `SkillAppPush` / `SkillAppRead`。示例：`skills-starter/skill-app-hello`、`anycode-ppt/ui`、`anycode-video/ui`。
 
-| 字段 | 含义 |
-|------|------|
-| **`enabled`** | 为 `true` 时，启动时扫描 **`extra_dirs`** 再扫 **`~/.anycode/skills`**，生成目录并往默认系统提示栈注入 **## Available skills**（若设置了整段 **`system_prompt_override`** 则不注入）。 |
-| **`extra_dirs`** | 额外搜索根（优先级低于 **`~/.anycode/skills`**；同一 id 后者覆盖前者）。 |
-| **`allowlist`** | 若设置，仅这些 id 进入目录与提示。 |
-| **`run_timeout_ms`** | **`run`** 子进程超时（代码侧有下限）。 |
-| **`minimal_env`** | 为 `true` 时子进程仅保留少量环境变量（**PATH**、**HOME**、**USER** 等）。 |
-| **`expose_on_explore_plan`** | 在 **`enabled`** 同时为 `true` 时，让 **explore** / **plan** 也注册 **Skill** 工具（默认 `false`，控制任意代码执行面）。 |
+内置 **anycode-ppt** 工作台：选一种皮肤（Open Design 版式或色板），再点「交给 Agent」。由模型调用 `SkillAppPresent` 打开工作台；页数与主视觉由模型推断，不要硬凑 12 页。
 
-## 命令行
-
-```bash
-anycode skills list   # id、是否有 run、描述、根路径
-anycode skills path   # 生效的搜索根与 skills.enabled
-anycode skills init <name>   # 在 ~/.anycode/skills/<name>/ 生成 SKILL.md 与 run 模板
-anycode skills install-starter   # 安装仓库 skills-starter 包（含 cn-daily-brief 等中文场景技能）
-```
-
-## 模型侧可见性
-
-在启用技能且使用默认系统提示栈时，会附带 **Available skills** 列表（id + 描述）。实际执行仍通过 **Skill** 工具，例如 **`{"name": "<id>", "args": [...]}`**。
-
-## 相关
-
-- [配置与安全](./config-security)  
-- [发现与 test-security](./cli-diagnostics)  
-- [架构](./architecture)  
-
-English: [Agent skills](/guide/skills).
+内置 **anycode-video** 工作台：锁定画幅并多选 html-video 模板，再点「交给 Agent」；Agent 只填 inputs、保持视觉签名，`run` 导出 MP4（不是云端 `GenerateVideo`）。

@@ -23,6 +23,13 @@ const icons: Record<string, ReactNode> = {
     </>
   ),
   add: <path d="M12 5v14M5 12h14" />,
+  archive: (
+    <>
+      <path d="M4 7h16v3H4z" />
+      <path d="M6 10v9h12v-9" />
+      <path d="M10 14h4" />
+    </>
+  ),
   arrow_upward: <path d="M12 19V5M5 12l7-7 7 7" />,
   analytics: (
     <>
@@ -76,6 +83,14 @@ const icons: Record<string, ReactNode> = {
   ),
   chevron_left: <path d="m14.5 6-6 6 6 6" />,
   chevron_right: <path d="m9.5 6 6 6-6 6" />,
+  apps: (
+    <>
+      <rect x="4" y="4" width="6" height="6" rx="1" />
+      <rect x="14" y="4" width="6" height="6" rx="1" />
+      <rect x="4" y="14" width="6" height="6" rx="1" />
+      <rect x="14" y="14" width="6" height="6" rx="1" />
+    </>
+  ),
   close: <path d="M6 6l12 12M18 6 6 18" />,
   dock_to_left: (
     <>

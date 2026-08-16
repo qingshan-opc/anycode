@@ -2,7 +2,8 @@
 //!
 //! - `WorkflowGet`：发现/读取工作区 `workflow.yml`（或指定 `script` / `scriptPath`），
 //!   解析为 [`WorkflowDefinition`]，校验 DAG（`workflow_topo_layers`）并返回结构化摘要。
-//!   执行仍由 scheduler / channel-bridge 负责（ADR 014 §6），本工具只读。
+//!   执行：Workbench 经 `anycode_agent::GraphEngine`；cron 仍走 channel-bridge
+//!   （ADR 014 §6 / ADR 000 §4）。本工具只读。
 
 use crate::paths::resolve_path_fields;
 use anycode_core::{

@@ -46,7 +46,8 @@ impl Tool for WebSearchTool {
             Returns concise web search snippets / instant answers.\n\
             - When ANYCODE_WEB_SEARCH_URL and ANYCODE_WEB_SEARCH_API_KEY are set, calls that provider; else falls back to DuckDuckGo instant answer JSON.\n\
             - Not a substitute for fetching full pages—use WebFetch when you need article body text.\n\
-            - Network access may require approval.",
+            - Network access may require approval.\n\
+            - Can be batched with other read-only tools (Grep/Glob/FileRead) in the same turn.",
             self.description()
         )
     }

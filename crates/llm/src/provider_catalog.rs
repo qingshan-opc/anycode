@@ -394,7 +394,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
     ProviderCatalogEntry {
         id: "anycode_cloud",
         label: "anyCode Cloud",
-        hint: Some("托管模型 via anycode.work；运行 `anycode auth login` 完成设备链接"),
+        hint: Some("托管模型 via anycode.work；在工作台点击「连接云账号」完成设备授权"),
         transport: LlmTransport::OpenAiChatCompletions,
         suggested_openai_base: Some("https://anycode.work/v1/chat/completions"),
         placeholder_only: false,

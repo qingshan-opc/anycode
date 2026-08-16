@@ -6,7 +6,7 @@ use super::agentic_loop::{
 };
 use super::agentic_turn::{
     MessageAppendSink, NoToolRecovery, TurnToolBatchOutcome, TurnToolCancel, TurnToolCancelOutcome,
-    TurnToolCtx, TurnToolState,
+    TurnToolCtx, TurnToolDispatchKernel, TurnToolState,
 };
 use super::budget::{
     record_llm_usage, tick_budget, token_budget_context_section, RuntimeBudgetState,
@@ -176,20 +176,8 @@ impl AgentRuntime {
                 {
                     let preflight =
                         super::compile_context::delivery_preflight_marker(&compiled.parts);
+                    // Diagnostics stay in the task log only — do not emit as chat ProgressUpdate.
                     logger.line(task_id, &preflight);
-                    live_trace_emit::try_emit(
-                        &live_trace_tx,
-                        LiveTraceEvent::ProgressUpdate {
-                            turn: 0,
-                            seq: 0,
-                            phase: "intent".into(),
-                            work_stage: Some("compile".into()),
-                            summary: preflight,
-                            next: None,
-                            discovery: None,
-                            evidence_refs: compiled.parts.selected_skill_ids.clone(),
-                        },
-                    );
                 }
                 if let Some(plan) = &compiled.gate_plan {
                     let marker = super::compile_context::gate_plan_marker(
@@ -198,38 +186,12 @@ impl AgentRuntime {
                         arm,
                     );
                     logger.line(task_id, &marker);
-                    live_trace_emit::try_emit(
-                        &live_trace_tx,
-                        LiveTraceEvent::ProgressUpdate {
-                            turn: 0,
-                            seq: 1,
-                            phase: "gate".into(),
-                            work_stage: Some("compile".into()),
-                            summary: marker,
-                            next: None,
-                            discovery: None,
-                            evidence_refs: vec![],
-                        },
-                    );
                 }
                 if !compiled.parts.selected_skill_ids.is_empty() {
                     let marker = super::compile_context::skill_resolved_marker(
                         &compiled.parts.selected_skill_ids,
                     );
                     logger.line(task_id, &marker);
-                    live_trace_emit::try_emit(
-                        &live_trace_tx,
-                        LiveTraceEvent::ProgressUpdate {
-                            turn: 0,
-                            seq: 2,
-                            phase: "skill".into(),
-                            work_stage: Some("compile".into()),
-                            summary: marker,
-                            next: None,
-                            discovery: None,
-                            evidence_refs: compiled.parts.selected_skill_ids.clone(),
-                        },
-                    );
                 }
                 {
                     let mut g = messages.lock().await;
@@ -879,15 +841,6 @@ impl AgentRuntime {
                 }
             }
 
-            logger.line(
-                task_id,
-                &format!(
-                    "[turn_end] turn={} tool_calls={}",
-                    turn,
-                    turn_tool_calls.len()
-                ),
-            );
-
             let tool_ctx = TurnToolCtx {
                 task_id,
                 agent_type,
@@ -904,18 +857,22 @@ impl AgentRuntime {
                 budget_state: budget_state.clone(),
                 progress_seq,
                 checked_deliverables: std::collections::HashSet::new(),
+                sandbox_escape_streak: 0,
+                last_sandbox_escape_key: None,
             };
             let mut sink = MessageAppendSink::Shared(&messages);
             match self
-                .dispatch_turn_tool_calls(
+                .run_turn_tool_dispatch_kernel(
                     &logger,
-                    &tool_ctx,
                     &mut tool_state,
-                    &TurnToolCancel::Coop(coop_cancel.clone()),
                     &mut sink,
-                    turn_tool_calls,
-                    true,
-                    TurnToolCancelOutcome::TurnCancelled,
+                    TurnToolDispatchKernel {
+                        tool_ctx,
+                        cancel: TurnToolCancel::Coop(coop_cancel.clone()),
+                        turn_tool_calls,
+                        record_evidence: true,
+                        cancel_outcome: TurnToolCancelOutcome::TurnCancelled,
+                    },
                 )
                 .await?
             {

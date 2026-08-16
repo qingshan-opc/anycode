@@ -13,6 +13,7 @@ import {
   writeStoredModelId,
   type ComposerModelOption,
 } from "@/lib/composerModels";
+import { useAccountCloud } from "@/hooks/useAccountCloud";
 
 function formatModelLabel(
   option: ComposerModelOption,
@@ -68,6 +69,7 @@ export function ModelPicker({ disabled = false, compact = false }: Props) {
   const queryClient = useQueryClient();
   const embedded = useEmbeddedControlCenter();
   const { openControlCenter } = useControlCenter();
+  const { cloudLinked } = useAccountCloud();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -91,7 +93,10 @@ export function ModelPicker({ disabled = false, compact = false }: Props) {
   });
 
   const registryItems = registry.data?.items ?? [];
-  const chatOptions = useMemo(() => listChatModels(registryItems), [registryItems]);
+  const chatOptions = useMemo(
+    () => listChatModels(registryItems, { includeCloud: cloudLinked }),
+    [registryItems, cloudLinked],
+  );
 
   const selectedOption = useMemo((): ComposerModelOption | null => {
     if (!selectedId) return null;

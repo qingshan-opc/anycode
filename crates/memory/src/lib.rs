@@ -9,6 +9,7 @@ pub mod e2ee_sync;
 #[cfg(feature = "embedding-local")]
 pub mod embedding_fastembed;
 pub mod embedding_http;
+pub mod lightrag;
 pub mod multistore;
 pub mod ops;
 pub mod pipeline;
@@ -32,6 +33,10 @@ pub use e2ee_sync::{
 #[cfg(feature = "embedding-local")]
 pub use embedding_fastembed::FastEmbedEmbeddingProvider;
 pub use embedding_http::OpenAiCompatibleEmbeddingProvider;
+pub use lightrag::{
+    probe_lightrag_reachable, resolve_lightrag_base_url, LightRagMemoryStore,
+    DEFAULT_LIGHTRAG_BASE_URL,
+};
 pub use multistore::{
     content_hash, detect_conflicts, initial_version, next_version, MemoryConflict,
     MemoryStoreDescriptor, MemoryStoreId, MemoryStoreKind, MemoryStoreRegistry,

@@ -1,4 +1,8 @@
-//! Shared helpers for multi-turn LLM + tool agentic loops (`execute_task` / `execute_turn_from_messages`).
+//! Shared helpers for multi-turn LLM + tool agentic loops.
+//!
+//! Workbench chat (`execute_turn_from_messages`) and cron/headless tasks (`execute_task`) share the
+//! same tool-dispatch kernel in `agentic_turn::run_turn_tool_dispatch_kernel`; this module holds
+//! cancel polling, token estimation, and stream rehydration helpers both paths use.
 
 use anycode_core::prelude::*;
 use std::future::pending;

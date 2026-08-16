@@ -1,10 +1,20 @@
-# anyCode PPT 视觉格式（FDE Editorial）
+# anyCode PPT 视觉格式
 
-金标准：`digital-fde-platform/class/bootcamp/day-05/section-01-worldview-plain/video/index.html`
+用户锁定 **皮肤**（`brief.family` / `brief.tokens`）；**页数与主视觉由模型推断**。  
+`templates/` 是可选参考，不是必拷清单。
 
-本 skill 交付 **静态 HTML 分页幻灯片**（1920×1080），不含 `<video>` / `<audio>` / GSAP timing / avatar-lipsync。不导出 pptx。
+本 skill 交付 **HTML 分页幻灯片**（1920×1080）。可含 CSS 动效、SVG、canvas、本地 ECharts。不含 `<video>` / `<audio>` / 口播时间轴。不导出 pptx。
 
-## 设计令牌
+## 风格 vs 内容
+
+| | 谁定 |
+|--|--|
+| 背景 / 文字 / 强调色 / 字体 | VisualBrief（工作台点风格） |
+| 页数、大纲、排版、图表与插画 | 模型按题目发挥 |
+
+工作台 **不要** 再让用户勾页型。`brief.templates` 应为空。
+
+## 默认令牌（仅无 VisualBrief 时）
 
 ```css
 :root {
@@ -20,26 +30,28 @@
 }
 ```
 
+有 `brief.tokens` 时，以上全部让位给 brief（含渐变底、大字号、留白等创意排版，只要 token 一致）。
+
 ## 画布
 
-- 1920×1080，一页一 HTML 文件
-- padding：`72px 96px`
-- 可选 `#brand-bar`：左下 mono 小字品牌/项目标识
+- 1920×1080，一页一 HTML
+- 可用 padding / 全出血 / 分栏；不必固定 `72px 96px`
+- 可选左下品牌小字
 
-## 必用组件类名（勿改名）
+## 页数（推断，勿硬凑）
 
-- `.sec-label` + `.num` — mono 编号标签 + 6px 粗线
-- `.display` / `.statement` / `.lede` — 标题层级
-- `.ladder` + `.rung.on|.hot` — 流程梯子
-- `.layer-stack` + `.layer-card` — 分层图
-- `.agent-cycle` — 环状循环
-- `.duo` / `.trio` + `.card` — 对比 / 三列
-- `.metrics` + `.stat` — KPI
-- `.timeline` + `.mile` — 路线图
-- `.checklist` + `.check-item` — 行动清单
-- `.quote` — 金句块
+- ≥2 页；**禁止**为凑旧模板表硬凑到 12
+- 短 briefing：约 5–8；市场/投标研究：约 8–14；更长仅在叙事需要时
+
+## 主视觉（每页至少一类）
+
+- inline `<svg>`（可 CSS/`<animate>`）
+- `<canvas>`（粒子、轨道、银河等）
+- 本地 ECharts（`vendor/echarts.min.js`，禁止 CDN）
+- `<img>` 或原有组件 class（ladder / metrics / …）作参考
 
 ## 禁忌
 
-- 渐变背景、卡片阴影、大圆角、emoji 图标
-- 只有标题无主视觉的空页
+- 空页（只有标题）
+- lingqi 企业蓝/绿、CDN、导出 pptx
+- 无视 brief 仍刷 FDE 三色

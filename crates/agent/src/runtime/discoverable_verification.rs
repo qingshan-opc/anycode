@@ -233,10 +233,21 @@ fn bash_exit_success(tool_text: &str) -> bool {
     if lower.contains("command failed") {
         return false;
     }
+    if let Some(code) = parse_lean_exit_code(tool_text) {
+        return code == 0;
+    }
     if lower.contains("\"exit_code\":") {
         return lower.contains("\"exit_code\":0") || lower.contains("\"exit_code\": 0");
     }
     !lower.contains("exit_code=1") && !tool_text.trim().is_empty()
+}
+
+fn parse_lean_exit_code(tool_text: &str) -> Option<i64> {
+    tool_text.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("exit_code=")
+            .and_then(|rest| rest.trim().parse().ok())
+    })
 }
 
 pub fn hollow_completion_phrase(text: &str) -> bool {
@@ -407,6 +418,10 @@ mod tests {
             "Bash",
             r#"{"exit_code":1,"stderr":"fail"}"#
         ));
+        assert!(verification_tool_succeeded("Bash", "exit_code=0"));
+        assert!(verification_tool_succeeded("Bash", "hi\nexit_code=0"));
+        assert!(!verification_tool_succeeded("Bash", ""));
+        assert!(!verification_tool_succeeded("Bash", "exit_code=1"));
     }
 
     #[test]

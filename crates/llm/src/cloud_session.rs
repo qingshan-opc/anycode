@@ -22,13 +22,36 @@ pub struct CloudSessionFile {
     pub user_email: Option<String>,
 }
 
+/// Shown when hosted cloud chat has no linked device session.
+pub const CLOUD_DEVICE_UNLINKED_HINT: &str =
+    "anyCode Cloud：未关联本机。请在工作台点击「连接云账号」完成设备授权";
+
 pub fn cloud_session_path() -> PathBuf {
     crate::copilot_token::anycode_credentials_dir().join("cloud-session.json")
 }
 
+fn cloud_session_candidate_paths() -> Vec<PathBuf> {
+    let mut paths = vec![cloud_session_path()];
+    // Legacy location from an older comment/path; keep reading it.
+    let legacy = crate::copilot_token::anycode_home_dir().join("cloud-session.json");
+    if legacy != paths[0] {
+        paths.push(legacy);
+    }
+    paths
+}
+
 pub fn read_cloud_session() -> Option<CloudSessionFile> {
-    let text = std::fs::read_to_string(cloud_session_path()).ok()?;
-    serde_json::from_str(&text).ok()
+    for path in cloud_session_candidate_paths() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(parsed) = serde_json::from_str::<CloudSessionFile>(&text) {
+            if !parsed.access_token.trim().is_empty() {
+                return Some(parsed);
+            }
+        }
+    }
+    None
 }
 
 pub fn write_cloud_session(session: &CloudSessionFile) -> std::io::Result<()> {
@@ -189,7 +212,8 @@ fn gateway_chat_http_probe(chat_url: &str) -> bool {
 pub fn gateway_chat_url_reachable(chat_url: &str) -> bool {
     let host_base = gateway_host_base(chat_url);
     if is_production_portal_host(&host_base) {
-        return false;
+        // Hosted catalog is served by anycode.work; skip the local-gateway probe.
+        return true;
     }
     if is_loopback_gateway_host(&host_base) {
         return gateway_host_reachable(&host_base);
@@ -236,14 +260,12 @@ pub fn resolve_anycode_cloud_endpoint(
 
     let mut key = api_key.unwrap_or("").trim().to_string();
     if key.is_empty() {
-        key = read_cloud_access_token().ok_or_else(|| {
-            "anyCode Cloud：请运行 `anycode auth login` 并完成设备关联".to_string()
-        })?;
+        key = read_cloud_access_token().ok_or_else(|| CLOUD_DEVICE_UNLINKED_HINT.to_string())?;
     }
 
     if !gateway_chat_url_reachable(&url) {
         return Err(format!(
-            "anyCode Cloud 网关不可达（{url}）。请启动本地 model-gateway（端口 43210）后重试。"
+            "anyCode Cloud 网关不可达（{url}）。请检查网络，或在工作台重新连接云账号。"
         ));
     }
 
@@ -375,10 +397,29 @@ mod tests {
     }
 
     #[test]
-    fn production_portal_is_not_chat_gateway() {
+    fn production_hosted_gateway_is_reachable() {
         assert!(is_production_portal_host("https://anycode.work"));
-        assert!(!gateway_chat_url_reachable(
+        assert!(gateway_chat_url_reachable(
             "https://anycode.work/v1/chat/completions"
         ));
+    }
+
+    #[test]
+    fn production_cloud_endpoint_resolves_with_token() {
+        let got = resolve_anycode_cloud_endpoint(
+            "deepseek-v4-pro",
+            Some("https://anycode.work/v1/chat/completions"),
+            Some("acct_test"),
+        )
+        .expect("hosted anycode.work is a valid chat gateway");
+        assert_eq!(got.api_key, "acct_test");
+        assert_eq!(got.model, "deepseek-v4-pro");
+        assert!(got.base_url.contains("anycode.work"));
+    }
+
+    #[test]
+    fn missing_device_link_does_not_mention_removed_cli() {
+        assert!(!CLOUD_DEVICE_UNLINKED_HINT.contains("anycode auth login"));
+        assert!(CLOUD_DEVICE_UNLINKED_HINT.contains("连接云账号"));
     }
 }

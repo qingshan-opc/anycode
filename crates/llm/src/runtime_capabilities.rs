@@ -16,7 +16,7 @@ pub const WEAK_LOCAL_TOOL_GUIDANCE: &str = "# Weak local model constraints\n\n\
 - The **Working directory** in Environment is the only writable project root. \
 Use **relative paths** in FileWrite/Edit/FileRead/Glob (e.g. `notes.md`, `docs/plan.md`) — never invent `/Users/...` or `~/.anycode/workspace` paths.\n\
 - For **Glob**, omit `path` or use `.` — the Environment working directory is already the search root.\n\
-- When calling tools, emit **one** valid tool call with plain JSON arguments.\n\
+- When calling tools, emit valid JSON arguments. Independent read-only tools (Glob/Grep/FileRead) may be batched in one turn.\n\
 - **Do not** output `<think>`, chain-of-thought, or long planning prose — call tools immediately.\n\
 - For deliverables (md/ppt/doc), call FileWrite first, then confirm in one short sentence.";
 
@@ -74,6 +74,18 @@ pub fn resolve_runtime_model_capabilities(
         context_tokens,
         tool_loop_verified: !weak_local_model,
         weak_local_model,
+    }
+}
+
+/// OpenAI Chat Completions `parallel_tool_calls`. Omitted when no tools are
+/// offered or the model is a weak local (1B) profile that struggles with
+/// multi-call batches.
+#[must_use]
+pub fn openai_parallel_tool_calls(tools_empty: bool, config: &ModelConfig) -> Option<bool> {
+    if tools_empty || capabilities_for_model_config(config).weak_local_model {
+        None
+    } else {
+        Some(true)
     }
 }
 
@@ -235,5 +247,28 @@ mod tests {
             text(MessageRole::User, "run tests"),
             text(MessageRole::Assistant, "ok"),
         ]));
+    }
+
+    #[test]
+    fn parallel_tool_calls_on_for_cloud_models_with_tools() {
+        let cfg = ModelConfig {
+            provider: LLMProvider::Custom("deepseek".into()),
+            model: "deepseek-chat".into(),
+            ..Default::default()
+        };
+        assert_eq!(openai_parallel_tool_calls(false, &cfg), Some(true));
+        assert_eq!(openai_parallel_tool_calls(true, &cfg), None);
+    }
+
+    #[test]
+    fn parallel_tool_calls_omitted_for_weak_local() {
+        let cfg = ModelConfig {
+            provider: LLMProvider::Local,
+            model: "qwen3-1b".into(),
+            base_url: Some("http://127.0.0.1:11434/v1/chat/completions".into()),
+            ..Default::default()
+        };
+        assert!(capabilities_for_model_config(&cfg).weak_local_model);
+        assert_eq!(openai_parallel_tool_calls(false, &cfg), None);
     }
 }

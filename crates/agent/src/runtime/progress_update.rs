@@ -85,7 +85,17 @@ fn tool_evidence_ref(_user_turn: u32, tool_turn: u32, idx: u32) -> String {
     format!("{tool_turn}:{idx}")
 }
 
-/// User-facing progress for a tool round (supports empty assistant text).
+fn next_step_hint(summary: &str, tool_names: &[String]) -> Option<String> {
+    let name = tool_names.first()?;
+    // Avoid tautology: "正在运行 Bash" + "接下来：接着运行 Bash".
+    if summary.is_empty() || summary.contains(name) {
+        return None;
+    }
+    Some(format!("接着运行 {name}"))
+}
+
+/// User-facing progress for a tool round.
+/// Empty assistant text → empty summary (tool cards / composer show the tool name).
 pub(crate) fn build_tool_round_progress(
     turn: u32,
     seq: u32,
@@ -96,19 +106,8 @@ pub(crate) fn build_tool_round_progress(
     prefer_intent: bool,
 ) -> LiveTraceEvent {
     if prefer_intent {
-        let summary = {
-            let s = first_sentence(text);
-            if s.is_empty() {
-                if tool_names.is_empty() {
-                    "正在开始执行任务".to_string()
-                } else {
-                    format!("正在开始：{}", tool_names.join("、"))
-                }
-            } else {
-                s
-            }
-        };
-        let next = tool_names.first().map(|name| format!("接着运行 {name}"));
+        let summary = first_sentence(text);
+        let next = next_step_hint(&summary, tool_names);
         let evidence_refs: Vec<String> = tool_indices
             .iter()
             .map(|idx| format!("{tool_turn}:{idx}"))
@@ -135,17 +134,9 @@ pub(crate) fn build_execute_update(
     tool_turn: u32,
     tool_indices: &[u32],
 ) -> LiveTraceEvent {
+    // Only surface real assistant prose — do not invent "正在运行 Bash".
     let summary = first_sentence(text);
-    let summary = if summary.is_empty() {
-        if let Some(name) = tool_names.first() {
-            format!("正在运行 {name}")
-        } else {
-            "正在执行工具".to_string()
-        }
-    } else {
-        summary
-    };
-    let next = tool_names.first().map(|name| format!("接着运行 {name}"));
+    let next = next_step_hint(&summary, tool_names);
     let evidence_refs: Vec<String> = tool_indices
         .iter()
         .map(|idx| format!("{tool_turn}:{idx}"))
@@ -210,9 +201,15 @@ mod tests {
         let evt =
             build_tool_round_progress(1, 1, "", &["Glob".into(), "Read".into()], 1, &[1, 2], true);
         match evt {
-            LiveTraceEvent::ProgressUpdate { summary, phase, .. } => {
+            LiveTraceEvent::ProgressUpdate {
+                summary,
+                phase,
+                next,
+                ..
+            } => {
                 assert_eq!(phase, "intent");
-                assert!(summary.contains("Glob"));
+                assert!(summary.is_empty(), "no invented hero summary: {summary}");
+                assert!(next.is_none(), "no tautological next: {next:?}");
             }
             _ => panic!("expected ProgressUpdate"),
         }
@@ -222,9 +219,27 @@ mod tests {
     fn build_execute_update_uses_summary() {
         let evt = build_execute_update(2, 1, "先检查测试。", &["Glob".into()], 2, &[1]);
         match evt {
-            LiveTraceEvent::ProgressUpdate { summary, phase, .. } => {
+            LiveTraceEvent::ProgressUpdate {
+                summary,
+                phase,
+                next,
+                ..
+            } => {
                 assert_eq!(phase, "execute");
                 assert!(summary.contains("检查"));
+                assert_eq!(next.as_deref(), Some("接着运行 Glob"));
+            }
+            _ => panic!("expected ProgressUpdate"),
+        }
+    }
+
+    #[test]
+    fn build_execute_update_skips_invented_running_line() {
+        let evt = build_execute_update(2, 1, "", &["Bash".into()], 2, &[1]);
+        match evt {
+            LiveTraceEvent::ProgressUpdate { summary, next, .. } => {
+                assert!(summary.is_empty());
+                assert!(next.is_none());
             }
             _ => panic!("expected ProgressUpdate"),
         }

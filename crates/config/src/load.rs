@@ -305,7 +305,7 @@ pub async fn load_config(config_file: Option<PathBuf>) -> anyhow::Result<Config>
         }
     }
 
-    Ok(Config {
+    let mut config = Config {
         llm: LLMConfig {
             provider: cfg.provider,
             plan: cfg.plan,
@@ -403,7 +403,9 @@ pub async fn load_config(config_file: Option<PathBuf>) -> anyhow::Result<Config>
         lsp: lsp_runtime,
         mcp: cfg.mcp.clone().into(),
         notifications: cfg.notifications,
-    })
+    };
+    apply_desktop_shipping_security_guards(&mut config);
+    Ok(config)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -438,6 +440,13 @@ pub async fn load_config_for_session(
 }
 
 fn apply_ignore_approval_cli(config: &mut Config, ignore_approval: bool) {
+    if ignore_approval && embedded_desktop_env() {
+        tracing::warn!(
+            target: "anycode_config",
+            "embedded desktop: ignoring ANYCODE_IGNORE_APPROVAL / -I"
+        );
+        return;
+    }
     config.security.session_skip_interactive_approval = ignore_approval;
     if ignore_approval {
         if config.security.require_approval {
@@ -450,10 +459,49 @@ fn apply_ignore_approval_cli(config: &mut Config, ignore_approval: bool) {
 /// True when `ANYCODE_IGNORE_APPROVAL` (or equivalent truthy values) is set for this process.
 #[must_use]
 pub fn env_ignore_approval() -> bool {
+    if embedded_desktop_env() {
+        return false;
+    }
     matches!(
         std::env::var("ANYCODE_IGNORE_APPROVAL").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON")
     )
+}
+
+/// Packaged Desktop (`ANYCODE_DASHBOARD_EMBEDDED_DESKTOP`) blocks bypass / ignore-approval escapes.
+#[must_use]
+pub fn embedded_desktop_env() -> bool {
+    std::env::var("ANYCODE_DASHBOARD_EMBEDDED_DESKTOP")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+/// Downgrade dangerous permission modes on shipping Desktop builds.
+pub fn apply_desktop_shipping_security_guards(config: &mut Config) {
+    if !embedded_desktop_env() {
+        return;
+    }
+    if config
+        .security
+        .permission_mode
+        .eq_ignore_ascii_case("bypass")
+    {
+        tracing::warn!(
+            target: "anycode_config",
+            "embedded desktop: security.permission_mode=bypass is not allowed; using default"
+        );
+        config.security.permission_mode = "default".into();
+    }
+    if config.security.session_skip_interactive_approval {
+        tracing::warn!(
+            target: "anycode_config",
+            "embedded desktop: ANYCODE_IGNORE_APPROVAL / session skip is not allowed"
+        );
+        config.security.session_skip_interactive_approval = false;
+        if !config.security.require_approval {
+            config.security.require_approval = true;
+        }
+    }
 }
 
 pub fn security_wants_interactive_approval_callback(config: &Config) -> bool {

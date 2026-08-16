@@ -16,35 +16,36 @@ pub fn is_private_ip(ip: &IpAddr) -> bool {
     }
 }
 
+/// Resolve peer IP for LAN ACL.
+///
+/// **Never trust `X-Forwarded-For` / `X-Real-IP` from the client** — the LAN
+/// listener binds on the LAN interface and any peer can spoof those headers.
+/// Only the TCP peer address (`remote`) is authoritative.
+#[must_use]
 pub fn peer_addr_from_headers(
-    forwarded: Option<&str>,
-    real_ip: Option<&str>,
+    _forwarded: Option<&str>,
+    _real_ip: Option<&str>,
     remote: Option<std::net::SocketAddr>,
 ) -> Option<IpAddr> {
-    if let Some(fwd) = forwarded {
-        if let Some(first) = fwd.split(',').next() {
-            if let Ok(ip) = first.trim().parse() {
-                return Some(ip);
-            }
-        }
-    }
-    if let Some(rip) = real_ip {
-        if let Ok(ip) = rip.trim().parse() {
-            return Some(ip);
-        }
-    }
     remote.map(|a| a.ip())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     #[test]
     fn private_ipv4_detected() {
         assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))));
         assert!(is_private_ip(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
         assert!(!is_private_ip(&IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn ignores_spoofed_forwarded_headers() {
+        let remote = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 9));
+        let ip = peer_addr_from_headers(Some("192.168.1.50"), Some("10.0.0.1"), Some(remote));
+        assert_eq!(ip, Some(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
     }
 }

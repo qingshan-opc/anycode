@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""anycode-ppt: editorial HTML slide deck (fde-editorial) — no pptx export."""
+"""anycode-ppt: creative HTML slide deck — skin from VisualBrief, no pptx export."""
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,19 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent
 REPO = SKILL_DIR.parents[1] if (SKILL_DIR.parents[1] / "brand-kits").is_dir() else SKILL_DIR.parents[2]
 BRAND = "fde-editorial"
+
+
+def ensure_echarts_vendor(deck_dir: Path) -> None:
+    """Copy local ECharts into the deck so file:// pages work offline."""
+    src = SKILL_DIR / "vendor" / "echarts.min.js"
+    if not src.is_file():
+        return
+    dest_dir = deck_dir / "vendor"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "echarts.min.js"
+    if not dest.is_file() or dest.stat().st_size != src.stat().st_size:
+        shutil.copy2(src, dest)
+        print(f"vendor: {dest}")
 
 
 def main() -> int:
@@ -38,6 +52,7 @@ def main() -> int:
         slides = sorted((src / "slides").glob("*.html"))
     slides = [s for s in slides if s.name.lower() != "index.html"]
     deck_dir = slides[0].parent if slides else src
+    ensure_echarts_vendor(deck_dir)
     index = deck_dir / "index.html"
     print(f"slides: {len(slides)} pages in {deck_dir}")
     print(f"deck: {index}")

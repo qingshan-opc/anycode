@@ -152,12 +152,26 @@ pub fn resolve_memory_directory(path_opt: Option<PathBuf>) -> anyhow::Result<Pat
 pub fn normalize_memory_backend(raw: &str) -> anyhow::Result<String> {
     let b = raw.trim().to_lowercase();
     let b = if b.is_empty() { "file".to_string() } else { b };
+    if let Some(rest) = b.strip_prefix("plugin:") {
+        let id = rest.trim();
+        if id.is_empty() {
+            anyhow::bail!(
+                "invalid memory.backend: {:?} (plugin: requires id)",
+                raw.trim()
+            );
+        }
+        return Ok(format!("plugin:{id}"));
+    }
     match b.as_str() {
         "noop" | "none" | "off" => Ok("noop".to_string()),
         "file" => Ok("file".to_string()),
         "hybrid" => Ok("hybrid".to_string()),
         "pipeline" | "layered" | "guigen" => Ok("pipeline".to_string()),
-        _ => anyhow::bail!("invalid memory.backend: {:?}", raw.trim()),
+        "lightrag" | "light-rag" | "graph" => Ok("lightrag".to_string()),
+        _ => anyhow::bail!(
+            "invalid memory.backend: {:?} (allowed: noop, file, hybrid, pipeline, lightrag, plugin:<id>)",
+            raw.trim()
+        ),
     }
 }
 

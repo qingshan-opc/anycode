@@ -91,6 +91,7 @@ export function GenericFileCard({
         <DeliverableContextMenu
           x={menu.x}
           y={menu.y}
+          absPath={absPath}
           onClose={() => setMenu(null)}
           onReveal={onReveal}
           onCopyPath={onCopyPath}

@@ -8,17 +8,17 @@ impl DashboardDb {
     pub async fn session_facets(&self) -> Result<SessionFacetsResponse> {
         let status = label_counts(
             self,
-            "SELECT status AS label, COUNT(*) AS cnt FROM sessions GROUP BY status ORDER BY cnt DESC",
+            "SELECT status AS label, COUNT(*) AS cnt FROM sessions WHERE COALESCE(archived, 0) = 0 GROUP BY status ORDER BY cnt DESC",
         )
         .await?;
         let trusted_status = label_counts(
             self,
-            "SELECT trusted_status AS label, COUNT(*) AS cnt FROM sessions GROUP BY trusted_status ORDER BY cnt DESC",
+            "SELECT trusted_status AS label, COUNT(*) AS cnt FROM sessions WHERE COALESCE(archived, 0) = 0 GROUP BY trusted_status ORDER BY cnt DESC",
         )
         .await?;
         let kind = label_counts(
             self,
-            "SELECT kind AS label, COUNT(*) AS cnt FROM sessions GROUP BY kind ORDER BY cnt DESC",
+            "SELECT kind AS label, COUNT(*) AS cnt FROM sessions WHERE COALESCE(archived, 0) = 0 GROUP BY kind ORDER BY cnt DESC",
         )
         .await?;
         let pending_approval_total = crate::approval_ipc::pending_summary().pending_total as i64;
@@ -66,7 +66,7 @@ impl DashboardDb {
         if kinds.is_some_and(|k| k.is_empty()) {
             return Ok(vec![]);
         }
-        let mut conditions = vec!["1=1".to_string()];
+        let mut conditions = vec!["COALESCE(s.archived, 0) = 0".to_string()];
         if kinds.is_some() {
             conditions.push(format!(
                 "s.kind IN ({})",
@@ -273,7 +273,7 @@ impl DashboardDb {
             SELECT id, kind, task_id, title, status, trusted_status, agent_type, model,
                    started_at, ended_at
             FROM sessions
-            WHERE project_id = ?
+            WHERE project_id = ? AND COALESCE(archived, 0) = 0
             ORDER BY started_at DESC
             LIMIT ?
             "#,
@@ -446,6 +446,7 @@ impl DashboardDb {
               AND kind = 'repl'
               AND status NOT IN ('running', 'pending')
               AND trusted_status != 'blocked'
+              AND COALESCE(archived, 0) = 0
               AND (
                 json_extract(metadata_json, '$.web_chat') = 1
                 OR json_extract(metadata_json, '$.source') = 'conversations_start'
@@ -562,6 +563,18 @@ impl DashboardDb {
         .bind(session_id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_archived(&self, session_id: &str, archived: bool) -> Result<()> {
+        let res = sqlx::query("UPDATE sessions SET archived = ? WHERE id = ?")
+            .bind(if archived { 1_i64 } else { 0_i64 })
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            anyhow::bail!("session not found");
+        }
         Ok(())
     }
 
@@ -943,6 +956,62 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].title, "real-run");
         assert_eq!(sessions[0].model, "glm-5");
+    }
+
+    #[tokio::test]
+    async fn archived_sessions_are_hidden_from_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DashboardDb::open(dir.path().join("sessions-archive.db"))
+            .await
+            .unwrap();
+        let project = db
+            .upsert_project(UpsertProjectRequest {
+                root_path: "/tmp/sessions-archive".into(),
+                name: Some("demo".into()),
+                description: None,
+                create_root: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let keep = db
+            .create_session(CreateSessionRequest {
+                project_id: project.id.clone(),
+                kind: "run".into(),
+                task_id: None,
+                title: "keep".into(),
+                prompt_preview: None,
+                agent_type: Some("code".into()),
+                model: Some("glm-5".into()),
+                metadata_json: None,
+            })
+            .await
+            .unwrap();
+        let hide = db
+            .create_session(CreateSessionRequest {
+                project_id: project.id.clone(),
+                kind: "run".into(),
+                task_id: None,
+                title: "hide".into(),
+                prompt_preview: None,
+                agent_type: Some("code".into()),
+                model: Some("glm-5".into()),
+                metadata_json: None,
+            })
+            .await
+            .unwrap();
+        db.set_session_archived(&hide.id, true).await.unwrap();
+
+        let listed = db.list_sessions(&project.id, 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, keep.id);
+        let all = db
+            .list_all_sessions(10, None, None, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, keep.id);
+        assert!(db.get_session(&hide.id).await.unwrap().is_some());
     }
 
     #[tokio::test]

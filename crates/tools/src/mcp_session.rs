@@ -269,7 +269,7 @@ impl McpStdioSession {
                     "server": self.server_slug,
                 }),
                 error: Some(format!(
-                    "MCP stdio server {:?} is not running (subprocess exited); restart the CLI or fix ANYCODE_MCP_COMMAND. See docs/adr/007-mcp-session-reconnect-policy.md.",
+                    "MCP stdio server {:?} is not running (subprocess exited); reconnect MCP from Workbench Settings or restart anyCode Desktop, or fix ANYCODE_MCP_COMMAND. See docs/adr/007-mcp-session-reconnect-policy.md.",
                     self.server_slug
                 )),
                 duration_ms: 0,

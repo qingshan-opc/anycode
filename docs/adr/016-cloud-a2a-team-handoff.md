@@ -6,12 +6,12 @@ Accepted (2026-07)
 
 ## Context
 
-ADR 015 covers LAN colleague handoff (mDNS + direct HTTP upload on port 43181). Remote teammates cannot use LAN discovery or private-IP routes. Uploading bundles to object storage (OSS/S3) adds cost, compliance surface, and breaks the「数据不出端」product posture for project payloads.
+ADR 019 covers LAN colleague handoff (mDNS + direct HTTP upload on port 43181). Remote teammates cannot use LAN discovery or private-IP routes. Uploading bundles to object storage (OSS/S3) adds cost, compliance surface, and breaks the「数据不出端」product posture for project payloads.
 
 We need a **cloud relay** on `anycode.work` that:
 
 1. Reuses org identity from ADR 011 (device link, `/org/members`).
-2. Preserves ADR 015 semantics: explicit approval, one-time stream token, `handoff_v1` bundle, no credentials in payload.
+2. Preserves ADR 019 semantics: explicit approval, one-time stream token, `handoff_v1` bundle, no credentials in payload.
 3. Transfers bundle bytes over a **long-lived streaming connection** — **no OSS**, relay holds bytes in memory only for the active session.
 4. Aligns with [Google A2A](https://google.github.io/A2A/) concepts (Agent Card, Task lifecycle) for future third-party agents, without requiring full JSON-RPC in P1.
 
@@ -33,7 +33,7 @@ We need a **cloud relay** on `anycode.work` that:
 - **Relay correctness**: chunks are **buffered with replay** so a late receiver still gets the full payload; empty frame = EOF (only via `publish_eof`). Sender marks `importing` after EOF; **receiver** marks `completed`.
 - **Cloud bundle cap**: in-memory replay buffer defaults to **64 MiB** (aligned with Desktop cloud export). Larger projects use LAN or raise the shared constant later.
 - **Storage**: MySQL stores session **metadata only** (parties, state, token hash + short-lived ephemeral stream token for status polls). Bundle bytes **never** written to DB or OSS; relay buffer is in-process memory with TTL and size cap.
-- **LAN fast path** (ADR 015) remains; cloud path is selected when peer `transport: "cloud"`.
+- **LAN fast path** (ADR 019) remains; cloud path is selected when peer `transport: "cloud"`.
 
 ### Agent Card
 
@@ -106,7 +106,7 @@ Desktop loopback proxy: `/api/cloud/a2a/*` forwards to account-service with clou
 ## References
 
 - ADR 011 Cloud Account Platform
-- ADR 015 LAN Colleague Handoff
+- ADR 019 LAN Colleague Handoff
 - [A2A Protocol Specification](https://google.github.io/A2A/)
 - `docs/a2a/agent-card.schema.json`
 - `docs/a2a/task-mapping.md`

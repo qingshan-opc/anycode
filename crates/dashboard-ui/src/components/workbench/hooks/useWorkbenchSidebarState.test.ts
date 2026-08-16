@@ -222,4 +222,47 @@ describe("workbenchSidebarStore", () => {
     expect(persisted.tabbedPanels).toEqual(["browser"]);
     expect(persisted.conversationTab).toBe("browser");
   });
+
+  it("collapseTab collapses the dock when the tab is dock-expanded", () => {
+    workbenchSidebarStore.openTab("browser");
+    workbenchSidebarStore.collapseTab("browser");
+    const s = workbenchSidebarStore.getState();
+    expect(s.expanded).toBe(false);
+    expect(s.activeTab).toBe("browser"); // dock remembers the tab for reopen
+  });
+
+  it("collapseTab falls back to chat when the tab lives as a conversation tab", () => {
+    workbenchSidebarStore.moveToConversationTab("browser");
+    workbenchSidebarStore.collapseTab("browser");
+    const s = workbenchSidebarStore.getState();
+    expect(s.conversationTab).toBe("chat");
+    expect(s.tabbedPanels).toEqual(["browser"]); // tab entry stays for reopen
+    expect(s.expanded).toBe(false);
+  });
+
+  it("closeConversationTab removes the tab and returns to chat without expanding dock", () => {
+    workbenchSidebarStore.moveToConversationTab("skillApp");
+    workbenchSidebarStore.closeConversationTab("skillApp");
+    const s = workbenchSidebarStore.getState();
+    expect(s.conversationTab).toBe("chat");
+    expect(s.tabbedPanels).toEqual([]);
+    expect(s.expanded).toBe(false);
+  });
+
+  it("collapseTab is a no-op for a non-visible tab", () => {
+    workbenchSidebarStore.openTab("files");
+    workbenchSidebarStore.collapseTab("browser");
+    let s = workbenchSidebarStore.getState();
+    expect(s.expanded).toBe(true);
+    expect(s.activeTab).toBe("files");
+
+    workbenchSidebarStore.moveToConversationTab("browser");
+    workbenchSidebarStore.selectConversationTab("chat");
+    workbenchSidebarStore.openTab("files");
+    workbenchSidebarStore.collapseTab("browser");
+    s = workbenchSidebarStore.getState();
+    expect(s.conversationTab).toBe("chat");
+    expect(s.expanded).toBe(true);
+    expect(s.activeTab).toBe("files");
+  });
 });
