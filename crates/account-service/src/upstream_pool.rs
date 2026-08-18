@@ -32,10 +32,24 @@ pub struct UpstreamCredential {
 }
 
 pub fn default_deepseek_base_url() -> String {
-    std::env::var("DEEPSEEK_API_BASE_URL").unwrap_or_else(|_| "https://api.deepseek.com".into())
+    std::env::var("DEEPSEEK_API_BASE_URL")
+        .unwrap_or_else(|_| "https://api.deepseek.com/chat/completions".into())
 }
 
-/// 上游池默认端点：云端托管只有 DeepSeek，未知 provider 一律回落 DeepSeek。
+/// DeepSeek Chat Completions 官方路径是 `/chat/completions`（不是 `/v1/...`）。
+/// 账号池里常只存 `https://api.deepseek.com`，转发前补全。
+pub fn normalize_chat_completions_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return default_deepseek_base_url();
+    }
+    if trimmed.ends_with("/chat/completions") {
+        return trimmed.to_string();
+    }
+    format!("{trimmed}/chat/completions")
+}
+
+/// 上游池默认端点：云端托管只有 DeepSeek。
 pub fn default_upstream_base_url(_provider_id: &str) -> String {
     default_deepseek_base_url()
 }
@@ -107,13 +121,18 @@ pub async fn create_upstream_account(
     base_url: Option<&str>,
     weight: i32,
 ) -> Result<UpstreamAccountView> {
+    if provider_id.eq_ignore_ascii_case("agnes") {
+        return Err(anyhow!("agnes is no longer supported"));
+    }
     let account_id = format!("uacc_{}", Uuid::new_v4());
     let key_id = format!("ukey_{}", Uuid::new_v4());
     let (ciphertext, nonce) = encrypt_secret(api_key, master_secret)?;
-    let url = base_url
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| default_upstream_base_url(provider_id));
+    let url = normalize_chat_completions_url(
+        &base_url
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| default_upstream_base_url(provider_id)),
+    );
 
     let mut tx = db.pool().begin().await?;
     sqlx::query(
@@ -223,9 +242,11 @@ pub async fn select_upstream_credential(
             account_id,
             key_id: r.get("key_id"),
             api_key,
-            base_url: base_url
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| default_upstream_base_url(&provider)),
+            base_url: normalize_chat_completions_url(
+                &base_url
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| default_upstream_base_url(&provider)),
+            ),
         }));
     }
     Ok(None)
@@ -455,4 +476,25 @@ pub async fn list_health_events(
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_chat_completions_url;
+
+    #[test]
+    fn deepseek_host_becomes_chat_completions() {
+        assert_eq!(
+            normalize_chat_completions_url("https://api.deepseek.com"),
+            "https://api.deepseek.com/chat/completions"
+        );
+        assert_eq!(
+            normalize_chat_completions_url("https://api.deepseek.com/"),
+            "https://api.deepseek.com/chat/completions"
+        );
+        assert_eq!(
+            normalize_chat_completions_url("https://api.deepseek.com/chat/completions"),
+            "https://api.deepseek.com/chat/completions"
+        );
+    }
 }

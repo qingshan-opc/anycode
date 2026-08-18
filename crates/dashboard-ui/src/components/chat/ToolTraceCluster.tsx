@@ -98,10 +98,10 @@ export const ToolTraceCluster = memo(function ToolTraceCluster({
     if (anyFailed) {
       return t("conversations.toolTraceFailed").replace("{n}", String(summary.count));
     }
+    // Cursor-style settled pill: activity recap only ("Explored 13 files…"),
+    // not "Used N tools · Bash".
     if (activityRecap) {
-      return t("conversations.toolUsageSummaryDetail")
-        .replace("{n}", String(summary.count))
-        .replace("{detail}", activityRecap);
+      return activityRecap;
     }
     return t("conversations.toolUsageSummary").replace("{n}", String(summary.count));
   }, [summary.count, anyFailed, activityRecap, t]);
@@ -226,9 +226,6 @@ export const ToolTraceCluster = memo(function ToolTraceCluster({
             {toolUsageLine}
             {summary.totalDuration ? (
               <span className="agent-trace-meta__meta"> · {summary.totalDuration}</span>
-            ) : null}
-            {summary.lastLabel ? (
-              <span className="agent-trace-meta__meta"> · {summary.lastLabel}</span>
             ) : null}
           </span>
         </button>

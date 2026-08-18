@@ -117,6 +117,9 @@ impl ResolvedModelRegistry {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
+            .or_else(|| {
+                crate::provider_catalog::suggested_openai_base_for(&prov).map(str::to_string)
+            })
     }
 
     pub fn resolve_plan(&self, item: &ConfiguredModelFile) -> Option<String> {

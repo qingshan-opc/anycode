@@ -221,6 +221,7 @@ async fn run_inner(
         });
     }
     crate::api::spawn_cloud_a2a_heartbeat(state.clone());
+    crate::remote_chat::spawn_remote_chat_worker(state.clone());
     let _ = crate::audit::record_audit(
         &state.db,
         crate::audit::AuditEventInput::low(

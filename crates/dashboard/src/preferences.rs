@@ -10,13 +10,7 @@ pub fn preferences_path() -> PathBuf {
             return PathBuf::from(path);
         }
     }
-    std::env::var("HOME")
-        .map(|h| {
-            PathBuf::from(h)
-                .join(".anycode")
-                .join("dashboard_preferences.json")
-        })
-        .unwrap_or_else(|_| PathBuf::from(".anycode/dashboard_preferences.json"))
+    anycode_core::anycode_data_dir_or_cwd().join("dashboard_preferences.json")
 }
 
 pub fn load_preferences() -> Option<DashboardPreferences> {

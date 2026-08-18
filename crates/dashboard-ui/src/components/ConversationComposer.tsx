@@ -20,7 +20,11 @@ import {
   type OptimisticQueueItem,
 } from "@/lib/optimisticMessageQueue";
 import { useComposerIme } from "@/lib/composerIme";
-import { chatModelSupportsVision, imageAttachAllowed } from "@/lib/composerModels";
+import {
+  chatModelSupportsVision,
+  imageAttachAllowed,
+  readStoredModelId,
+} from "@/lib/composerModels";
 import {
   formatVideoMeta,
   isVideoFile,
@@ -103,6 +107,7 @@ type StartProps = {
   mode: "start";
   projectId: string;
   initialAgent?: string;
+  initialPrompt?: string;
   compact?: boolean;
   onSuccess?: (result: ConversationStartSuccess) => void;
   onCancel?: () => void;
@@ -177,7 +182,14 @@ export function ConversationComposer(props: Props) {
   const draftScope = isStart ? `project:${projectId}` : session?.id;
 
   const [sessionTitle, setSessionTitle] = useState("");
-  const [message, setMessage] = useState(() => loadComposerDraft(draftScope));
+  const [message, setMessage] = useState(() => {
+    const draft = loadComposerDraft(draftScope);
+    if (draft.trim()) return draft;
+    if (props.mode === "start" && props.initialPrompt?.trim()) {
+      return props.initialPrompt.trim();
+    }
+    return draft;
+  });
   const [agent, setAgent] = useState(() => {
     if (props.mode === "start") return props.initialAgent ?? "";
     const fromSession = session?.agent_type ?? "";
@@ -787,7 +799,7 @@ export function ConversationComposer(props: Props) {
     };
   }
 
-  function submitMessage() {
+  async function submitMessage() {
     if (waitingForQuestion || stopping) return;
 
     const parsed = parseComposerSlashInput(message);
@@ -834,6 +846,14 @@ export function ConversationComposer(props: Props) {
     });
     const exitGrill = grillActive && shouldExitGrillMode(outgoingPrompt);
     const exitPlan = planActive && shouldExitPlanMode(outgoingPrompt);
+    const modelId = readStoredModelId();
+    if (modelId) {
+      try {
+        await api.enableModel(modelId, ["chat"]);
+      } catch {
+        /* registry may already be active */
+      }
+    }
     if (isStart) {
       startSession.mutate({
         prompt: outgoingPrompt,

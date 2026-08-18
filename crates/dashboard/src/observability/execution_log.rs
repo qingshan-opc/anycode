@@ -36,11 +36,7 @@ pub struct ExecutionLogLine {
 
 #[must_use]
 pub fn tasks_root() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".anycode")
-        .join("tasks")
+    anycode_core::anycode_data_dir_or_cwd().join("tasks")
 }
 
 #[must_use]

@@ -19,8 +19,7 @@ struct EvidenceRow<'a> {
 }
 
 fn evidence_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".anycode/memory/evidence.jsonl"))
+    Some(anycode_core::user_home_dir()?.join(".anycode/memory/evidence.jsonl"))
 }
 
 fn hash_text(s: &str) -> String {

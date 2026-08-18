@@ -29,6 +29,7 @@ import { PrivacyPolicyPage } from "./pages/legal/PrivacyPolicyPage";
 import { UserAgreementPage } from "./pages/legal/UserAgreementPage";
 import { DocsRoutes } from "./pages/DocsRoutes";
 import { SITE_PATHS } from "@anycode/site-urls";
+import { MobileApp, RequireMobileAuth } from "./pages/mobile/MobileApp";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { authenticated, validating } = useAuth();
@@ -37,7 +38,16 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     return <p className="muted console-meta">Loading…</p>;
   }
   if (!authenticated) {
-    return <Navigate to={SITE_PATHS.login} replace state={{ from: loc.pathname + loc.search }} />;
+    const from = loc.pathname + loc.search;
+    const next =
+      from.startsWith("/console") && !from.startsWith("//") ? from : "/console";
+    // WeChat SSO hop — do not land on email form or 818 console.
+    if (typeof window !== "undefined") {
+      window.location.replace(
+        `/api/auth/hop/login?next=${encodeURIComponent(next)}`,
+      );
+    }
+    return <p className="muted console-meta">Redirecting…</p>;
   }
   return <>{children}</>;
 }
@@ -60,16 +70,17 @@ function AppRoutes() {
   const isDesignLab = import.meta.env.DEV && pathname === "/__design-prototype";
   const isMarketing = !isConsole;
   const isLegacyHome = pathname === "/home-nx" || pathname === "/home-classic";
-  const isOrbitSite = !isDesignLab && !isLegacyHome;
   const hideSiteFooter = pathname === SITE_PATHS.downloads;
+  const isMobile = pathname === SITE_PATHS.mobile || pathname.startsWith(`${SITE_PATHS.mobile}/`);
+  const isOrbitSite = !isDesignLab && !isLegacyHome && !isMobile;
 
   return (
     <div
-      className={`app app--nx${isHome ? " app--home" : ""}${isOrbitSite ? " app--orbit-site" : ""}${isDocs ? " app--docs" : ""}${isDesignLab ? " app--design-lab" : ""}`}
+      className={`app app--nx${isHome ? " app--home" : ""}${isOrbitSite ? " app--orbit-site" : ""}${isDocs ? " app--docs" : ""}${isDesignLab ? " app--design-lab" : ""}${isMobile ? " app--mobile" : ""}`}
     >
-      {!isDesignLab ? <TopNav /> : null}
+      {!isDesignLab && !isMobile ? <TopNav /> : null}
       <main
-        className={`main${isHome ? " main--landing" : ""}${isConsole ? " main--console" : ""}${isDocs ? " main--docs" : ""}${isMarketing && !isHome && !isDocs && !isDesignLab ? " main--site" : ""}`}
+        className={`main${isHome ? " main--landing" : ""}${isConsole ? " main--console" : ""}${isDocs ? " main--docs" : ""}${isMobile ? " main--mobile" : ""}${isMarketing && !isHome && !isDocs && !isDesignLab && !isMobile ? " main--site" : ""}`}
       >
         <Routes>
           <Route path="/" element={<HomePageOrbit />} />
@@ -84,6 +95,22 @@ function AppRoutes() {
           <Route path={SITE_PATHS.changelog} element={<ChangelogPage />} />
           <Route path="/cases/:caseId" element={<CaseDetailPage />} />
           <Route path="/home-classic" element={<HomePage />} />
+          <Route
+            path={`${SITE_PATHS.mobile}/*`}
+            element={
+              <RequireMobileAuth>
+                <MobileApp />
+              </RequireMobileAuth>
+            }
+          />
+          <Route
+            path={SITE_PATHS.mobile}
+            element={
+              <RequireMobileAuth>
+                <MobileApp />
+              </RequireMobileAuth>
+            }
+          />
           <Route path={SITE_PATHS.login} element={<LoginPage />} />
           <Route path={SITE_PATHS.register} element={<RegisterPage />} />
           <Route path="/join" element={<JoinTeamPage />} />
@@ -115,7 +142,9 @@ function AppRoutes() {
           <Route path="/devices/link" element={<LegacyDeviceLinkRedirect />} />
         </Routes>
       </main>
-      {isMarketing && !isHome && !isDesignLab && !hideSiteFooter ? <SiteFooter /> : null}
+      {isMarketing && !isHome && !isDesignLab && !hideSiteFooter && !isMobile ? (
+        <SiteFooter />
+      ) : null}
     </div>
   );
 }

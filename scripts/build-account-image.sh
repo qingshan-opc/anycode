@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Local signed DMG → account-portal public/downloads → Docker image → ACR push.
+# Optional local DMG/NSIS staging, then slim account+portal image → ACR.
+# Installers go to MinIO (`./scripts/upload-desktop-downloads-s3.sh`), never into the image.
 #
 # Prereqs:
-#   - macOS + ~/.anycode/release.env (see scripts/release.env.example)
+#   - macOS + ~/.anycode/release.env (see scripts/release.env.example) if building DMG
 #   - deploy/account-service/.env for local compose (WECHAT_PAY_* + secrets/*.pem)
 #   - Production: K8s Secrets anycode-account-secrets + anycode-wechat-certs (see README)
 #
 # Usage:
-#   ./scripts/build-account-image.sh              # build DMG (if needed) + push image
-#   ./scripts/build-account-image.sh --skip-dmg   # image only (DMG already in public/downloads)
+#   ./scripts/build-account-image.sh              # slim image only
+#   ./scripts/build-account-image.sh --with-dmg   # also build signed DMG first (still not baked)
 #   TAG=0.2.4 ./scripts/build-account-image.sh
 set -euo pipefail
 
@@ -20,43 +21,33 @@ source "$ROOT/scripts/lib/build-target.sh"
 export ANYCODE_BUILD_TARGET=cloud
 anycode_apply_build_target_exports
 
-SKIP_DMG=0
+WITH_DMG=0
 for arg in "$@"; do
   case "$arg" in
-    --skip-dmg) SKIP_DMG=1 ;;
+    --skip-dmg)
+      # kept for compatibility; image never includes installers
+      ;;
+    --with-dmg) WITH_DMG=1 ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,14p' "$0"
       exit 0
       ;;
     *)
-      echo "Unknown arg: $arg (try --skip-dmg)" >&2
+      echo "Unknown arg: $arg (try --with-dmg)" >&2
       exit 1
       ;;
   esac
 done
 
-DOWNLOAD_DIR="$ROOT/crates/account-portal/public/downloads"
-has_dmg() {
-  # Prefer Apple Silicon; accept any staged macOS DMG.
-  compgen -G "$DOWNLOAD_DIR/anyCode_"*"_aarch64.dmg" >/dev/null 2>&1 \
-    || compgen -G "$DOWNLOAD_DIR/anyCode_"*"_x86_64.dmg" >/dev/null 2>&1
-}
-
-if [[ "$SKIP_DMG" -eq 0 ]]; then
+if [[ "$WITH_DMG" -eq 1 ]]; then
   if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "DMG build requires macOS. Use --skip-dmg if DMG is already staged." >&2
+    echo "DMG build requires macOS." >&2
     exit 1
   fi
-echo "==> signed desktop DMG (stages into account-portal/public/downloads)"
-"$ROOT/scripts/build-account-portal.sh"
-"$ROOT/scripts/release-desktop-local.sh"
-elif ! has_dmg; then
-  echo "No DMG in $DOWNLOAD_DIR — run without --skip-dmg on macOS first." >&2
-  exit 1
+  echo "==> signed desktop DMG (stages locally; upload to MinIO separately)"
+  "$ROOT/scripts/build-account-portal.sh"
+  "$ROOT/scripts/release-desktop-local.sh"
 fi
 
-echo "==> portal downloads staged:"
-ls -lh "$DOWNLOAD_DIR"/*.dmg 2>/dev/null || ls -lh "$DOWNLOAD_DIR"
-
-echo "==> docker build + push (account API + portal + DMG baked in)"
+echo "==> docker build + push (account API + portal; no installers)"
 exec "$ROOT/deploy/account-service/build-push.sh"

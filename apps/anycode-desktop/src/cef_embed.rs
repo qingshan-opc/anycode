@@ -9,6 +9,16 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Runtime};
 
+pub(crate) fn user_home() -> PathBuf {
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
 static PUMP_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// 空闲兜底 pump 间隔（约 60fps）。external message pump 模式下 CDP 服务器依赖
@@ -119,7 +129,7 @@ struct CefGuardState {
 }
 
 fn guard_path() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".anycode/cef-guard.json")
+    user_home().join(".anycode/cef-guard.json")
 }
 
 fn read_guard(path: &std::path::Path) -> CefGuardState {
@@ -172,8 +182,7 @@ pub fn evaluate_crash_guard() {
              exits with CEF active) — embed disabled for this run, browser panel uses JPEG fallback"
         );
         let _ = std::fs::write(
-            PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                .join(".anycode/cef-status.txt"),
+            user_home().join(".anycode/cef-status.txt"),
             format!("crash-guard tripped threshold={GUARD_TRIP_THRESHOLD}\n"),
         );
     }
@@ -228,11 +237,11 @@ fn ensure_cef() -> Result<(), String> {
             ),
         );
         fw.clone()
-    } else if PathBuf::from(std::env::var("HOME").unwrap_or_default())
+    } else if user_home()
         .join(".local/share/cef/Chromium Embedded Framework.framework")
         .exists()
     {
-        PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share/cef")
+        user_home().join(".local/share/cef")
     } else {
         return Err(
             "Chromium Embedded Framework not found. Run scripts/prepare-cef.sh then sync desktop."
@@ -256,8 +265,7 @@ fn ensure_cef() -> Result<(), String> {
                 anycode_browser_cef::remote_debugging_port()
             );
             let _ = std::fs::write(
-                PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                    .join(".anycode/cef-status.txt"),
+                user_home().join(".anycode/cef-status.txt"),
                 format!(
                     "ok helper={} cef_root={} port={}\n",
                     helper.display(),
@@ -270,8 +278,7 @@ fn ensure_cef() -> Result<(), String> {
         Err(e) => {
             eprintln!("anycode-desktop: CEF init failed: {e}");
             let _ = std::fs::write(
-                PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                    .join(".anycode/cef-status.txt"),
+                user_home().join(".anycode/cef-status.txt"),
                 format!("err {e}\n"),
             );
             // Kill-switch: do not leave a half-published CDP port for attach.
@@ -375,7 +382,7 @@ fn assets_present() -> bool {
         && (framework_dir()
             .join("Chromium Embedded Framework.framework")
             .exists()
-            || PathBuf::from(std::env::var("HOME").unwrap_or_default())
+            || user_home()
                 .join(".local/share/cef/Chromium Embedded Framework.framework")
                 .exists())
 }

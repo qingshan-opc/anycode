@@ -24,6 +24,9 @@ pub const CREDIT_TOPUP_PRICE_FEN: i32 = 5_000;
 /// 充值赠送倍率：实付 × 2 入账额度（¥50 → ¥100）。
 pub const CREDIT_TOPUP_CREDIT_MULTIPLIER: i64 = 2;
 
+/// Free 新用户一次性试用额度（¥10）。
+pub const FREE_TRIAL_CREDIT_FEN: i64 = 1_000;
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PaymentOrderView {
     pub id: String,
@@ -97,7 +100,7 @@ async fn downgrade_expired_prepaid(db: &AccountDb, org_id: &str) -> Result<()> {
     sqlx::query(
         r#"
         UPDATE entitlements SET token_limit = ?, api_key_limit = ?, seat_limit = ?,
-          hosted_models_enabled = 0, cloud_unlimited_rate = 0,
+          hosted_models_enabled = ?, cloud_unlimited_rate = 0,
           quota_window_secs = 0, calls_limit_per_window = 0, calls_used_in_window = 0,
           quota_window_started_at = NULL, updated_at = NOW()
         WHERE organization_id = ?
@@ -106,6 +109,7 @@ async fn downgrade_expired_prepaid(db: &AccountDb, org_id: &str) -> Result<()> {
     .bind(limits.token_limit)
     .bind(limits.api_key_limit)
     .bind(limits.seat_limit)
+    .bind(limits.hosted_models_enabled)
     .bind(org_id)
     .execute(&mut *tx)
     .await?;
@@ -193,7 +197,9 @@ pub async fn activate_prepaid_period(db: &AccountDb, input: &PrepaidActivation) 
         UPDATE entitlements SET token_limit = ?, api_key_limit = ?, seat_limit = ?,
           hosted_models_enabled = ?, cloud_unlimited_rate = 0,
           quota_window_secs = ?, calls_limit_per_window = ?, calls_used_in_window = 0,
-          quota_window_started_at = NOW(), updated_at = NOW()
+          quota_window_started_at = NOW(),
+          credit_balance_fen = credit_balance_fen + ?,
+          updated_at = NOW()
         WHERE organization_id = ?
         "#,
     )
@@ -203,6 +209,7 @@ pub async fn activate_prepaid_period(db: &AccountDb, input: &PrepaidActivation) 
     .bind(limits.hosted_models_enabled)
     .bind(limits.quota_window_secs)
     .bind(limits.calls_per_window)
+    .bind(i64::from(amount_fen))
     .bind(org_id)
     .execute(&mut *tx)
     .await?;
@@ -352,7 +359,9 @@ pub async fn activate_stripe_subscription(
         UPDATE entitlements SET token_limit = ?, api_key_limit = ?, seat_limit = ?,
           hosted_models_enabled = ?, cloud_unlimited_rate = 0,
           quota_window_secs = ?, calls_limit_per_window = ?, calls_used_in_window = 0,
-          quota_window_started_at = NULL, updated_at = NOW() WHERE organization_id = ?
+          quota_window_started_at = NULL,
+          credit_balance_fen = credit_balance_fen + ?,
+          updated_at = NOW() WHERE organization_id = ?
         "#,
     )
     .bind(limits.token_limit)
@@ -361,6 +370,7 @@ pub async fn activate_stripe_subscription(
     .bind(limits.hosted_models_enabled)
     .bind(limits.quota_window_secs)
     .bind(limits.calls_per_window)
+    .bind(i64::from(limits.monthly_price_fen))
     .bind(org_id)
     .execute(&mut *tx)
     .await?;

@@ -19,6 +19,9 @@ pub const NESTED_TASK_COOPERATIVE_CANCEL_ERROR: &str = "cancelled";
 pub const DEFAULT_MAX_AGENT_TURNS: usize = 256;
 /// Default cumulative tool invocations per task before hard stop.
 pub const DEFAULT_MAX_TOOL_CALLS: usize = 256;
+/// Office / PPT tasks: tighter caps so a deck cannot burn 256 hops of full context.
+pub const OFFICE_MAX_AGENT_TURNS: usize = 48;
+pub const OFFICE_MAX_TOOL_CALLS: usize = 64;
 /// Upper clamp for configured `max_agent_turns`.
 pub const MAX_AGENT_TURNS_CLAMP: usize = 10_000;
 /// Upper clamp for configured `max_tool_calls`.
@@ -49,6 +52,15 @@ impl AgentLoopLimits {
             max_agent_turns,
             max_tool_calls,
         }
+    }
+
+    /// Cap loop limits for office/PPT family tasks (still respects a lower user config).
+    #[must_use]
+    pub fn for_office_delivery(self) -> Self {
+        Self::clamped(
+            self.max_agent_turns.min(OFFICE_MAX_AGENT_TURNS),
+            self.max_tool_calls.min(OFFICE_MAX_TOOL_CALLS),
+        )
     }
 }
 
@@ -412,6 +424,16 @@ mod tests {
     fn clamped_enforces_tool_floor() {
         let l = AgentLoopLimits::clamped(8, 4);
         assert_eq!(l.max_tool_calls, 8);
+    }
+
+    #[test]
+    fn office_delivery_caps_below_defaults() {
+        let capped = AgentLoopLimits::default().for_office_delivery();
+        assert_eq!(capped.max_agent_turns, OFFICE_MAX_AGENT_TURNS);
+        assert_eq!(capped.max_tool_calls, OFFICE_MAX_TOOL_CALLS);
+        let already_low = AgentLoopLimits::clamped(12, 20).for_office_delivery();
+        assert_eq!(already_low.max_agent_turns, 12);
+        assert_eq!(already_low.max_tool_calls, 20);
     }
 
     #[test]

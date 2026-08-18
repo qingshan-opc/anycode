@@ -398,6 +398,18 @@
     -webkit-app-region: no-drag;
   }
 
+  .dw-session-sidebar-footer--stacked {
+    @apply flex-col items-stretch gap-0;
+  }
+
+  .dw-session-sidebar-footer__row {
+    @apply flex items-center gap-2;
+  }
+
+  .dw-desktop-update-slot {
+    -webkit-app-region: no-drag;
+  }
+
   .dw-session-sidebar-footer__profile {
     @apply flex items-center gap-2 min-w-0 flex-1 py-2 cursor-pointer;
     -webkit-app-region: no-drag;
@@ -742,6 +754,11 @@
   /* Must follow .dw-main so p-0 / home padding win over the default p-5. */
   .dw-main--sessions {
     @apply max-w-none p-0 gap-0 overflow-hidden flex flex-col;
+    -webkit-app-region: no-drag;
+  }
+
+  .dw-device-switcher {
+    -webkit-app-region: no-drag;
   }
 
   .dw-main--home {

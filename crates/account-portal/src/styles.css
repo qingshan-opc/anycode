@@ -217,6 +217,14 @@ a:hover {
   width: 100%;
 }
 
+.app--mobile,
+.main--mobile {
+  max-width: none;
+  width: 100%;
+  padding: 0;
+  min-height: 100dvh;
+}
+
 .site-footer {
   border-top: 1px solid var(--border);
   padding: 24px;

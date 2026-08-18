@@ -5,10 +5,20 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn secrets_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".anycode")
-        .join("secrets")
+    crate::copilot_token::anycode_home_dir().join("secrets")
+}
+
+/// Strip BOM / CR / newlines / zero-width chars from pasted API keys (Windows clipboard).
+pub fn normalize_secret_token(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .filter(|c| {
+            !c.is_whitespace()
+                && !c.is_control()
+                && *c != '\u{7f}'
+                && !matches!(*c, '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{feff}')
+        })
+        .collect()
 }
 
 pub fn store_secret(name: &str, value: &str) -> Result<String> {
@@ -25,7 +35,7 @@ pub fn store_secret(name: &str, value: &str) -> Result<String> {
     let dir = secrets_dir();
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{safe}.txt"));
-    fs::write(&path, value.trim())?;
+    fs::write(&path, normalize_secret_token(value))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -64,7 +74,11 @@ pub fn resolve_secret_ref(reference: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    Ok(Some(text.trim().to_string()))
+    let token = normalize_secret_token(&text);
+    if token.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(token))
 }
 
 #[cfg(test)]
@@ -89,5 +103,10 @@ mod tests {
             resolve_secret_ref("agnes").unwrap().as_deref(),
             Some("sk-test")
         );
+    }
+
+    #[test]
+    fn normalize_secret_token_strips_windows_clipboard_junk() {
+        assert_eq!(normalize_secret_token(" sk-ab\r\ncd\u{200b} "), "sk-abcd");
     }
 }

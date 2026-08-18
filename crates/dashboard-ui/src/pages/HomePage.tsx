@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { api } from "@/api/client";
 import { HomeHeroComposer } from "@/components/HomeHeroComposer";
 import { NewProjectDialog } from "@/components/NewProjectDialog";
@@ -15,7 +15,6 @@ import type { EmbeddedPageProps } from "@/lib/pageProps";
 
 export function HomePage(_props: EmbeddedPageProps = {}) {
   const t = useT();
-  const navigate = useNavigate();
   const sseStatus = useSseStatus();
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -42,14 +41,7 @@ export function HomePage(_props: EmbeddedPageProps = {}) {
   const modelMissing = setup
     ? setup.steps.some((s) => s.id === "llm" && !s.complete)
     : false;
-  const needsFirstRunSetup = modelMissing && !setup?.setup_completed_at;
   const { pendingTotal } = usePendingApprovalCounts();
-
-  useEffect(() => {
-    if (needsFirstRunSetup) {
-      void navigate({ to: "/setup", replace: true });
-    }
-  }, [needsFirstRunSetup, navigate]);
 
   useEffect(() => {
     const seed = consumeComposerSeed();
@@ -115,11 +107,11 @@ export function HomePage(_props: EmbeddedPageProps = {}) {
                 : projectsError.message || t("projects.loadError")}
             </div>
           ) : null}
-          {modelMissing && !needsFirstRunSetup ? (
+          {modelMissing ? (
             <div className="dw-alert-error mb-4 flex items-center justify-between gap-3">
               <span className="text-sm">{t("setup.welcome.pointKey")}</span>
-              <Link to="/setup" className="dw-btn-primary shrink-0">
-                {t("setup.start")}
+              <Link to="/cloud-login" className="dw-btn-primary shrink-0">
+                {t("service.cloud.gateCta")}
               </Link>
             </div>
           ) : null}

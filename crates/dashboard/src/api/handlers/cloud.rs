@@ -106,6 +106,9 @@ pub struct CloudSessionResponse {
     /// Loopback workbench only: sync into browser sessionStorage for account portal API calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_token: Option<String>,
+    /// Linked device id from `~/.anycode/cloud-session.json` (setup session).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 async fn cloud_me_profile(token: &str) -> Option<(bool, Option<String>, Option<String>)> {
@@ -147,6 +150,7 @@ pub async fn get_cloud_session(
             user_email: None,
             display_name: None,
             access_token: None,
+            device_id: None,
         });
     }
     let token = read_cloud_access_token();
@@ -193,6 +197,7 @@ pub async fn get_cloud_session(
         } else {
             None
         },
+        device_id: anycode_setup::read_cloud_session().and_then(|s| s.device_id),
     })
 }
 
@@ -300,7 +305,7 @@ pub fn is_allowed_hosted_catalog_model(model_id: &str) -> bool {
 fn cloud_model_supports_vision(model_id: &str) -> bool {
     matches!(
         model_id,
-        "agnes-chat" | "gpt-4o" | "gpt-4o-mini" | "gemini-2.0-flash" | "gemini-1.5-pro"
+        "gpt-4o" | "gpt-4o-mini" | "gemini-2.0-flash" | "gemini-1.5-pro"
     )
 }
 
@@ -444,9 +449,8 @@ pub async fn post_cloud_sync_models(State(state): State<AppState>) -> impl IntoR
         synced += 1;
     }
 
-    if registry.active.get(&ModelCapability::Chat).is_none() {
-        set_active_capability(&mut registry.active, ModelCapability::Chat, "cloud-auto");
-    }
+    // Login-ready: always prefer Cloud Auto after a successful device link sync.
+    set_active_capability(&mut registry.active, ModelCapability::Chat, "cloud-auto");
 
     let legacy = sync_legacy_models_section(&registry);
     if let Err(e) = config_patch::patch_llm_config(&LlmConfigPatchBody {
@@ -462,6 +466,17 @@ pub async fn post_cloud_sync_models(State(state): State<AppState>) -> impl IntoR
             }),
         )
             .into_response();
+    }
+
+    // Mark first-run complete so Home no longer bounces to /setup.
+    {
+        let active = crate::api::handlers::settings::active_preferences(&state);
+        let mut prefs = crate::preferences::load_preferences().unwrap_or(active);
+        if prefs.setup_completed_at.is_none() {
+            prefs.setup_completed_at = Some(chrono::Utc::now().to_rfc3339());
+            prefs.updated_at = prefs.setup_completed_at.clone().unwrap_or_default();
+            let _ = crate::preferences::save_preferences(&prefs);
+        }
     }
 
     state.chat_runtime.invalidate_runtime().await;

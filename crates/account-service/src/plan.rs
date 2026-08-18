@@ -96,42 +96,42 @@ impl PlanCache {
 pub fn static_limits_for_plan(plan: &str) -> PlanLimits {
     match plan {
         "cloud_5h" => PlanLimits {
-            token_limit: 1_000_000_000,
+            token_limit: 0,
             api_key_limit: 3,
             seat_limit: 10,
-            monthly_price_fen: 9_800,
-            yearly_price_fen: 98_000,
+            monthly_price_fen: 4_900,
+            yearly_price_fen: 49_000,
             currency: "CNY",
             hosted_models_enabled: true,
             quota_window_secs: 0,
             calls_per_window: 0,
         },
         "pro" => PlanLimits {
-            token_limit: 10_000_000_000,
+            token_limit: 0,
             api_key_limit: 5,
             seat_limit: 10,
-            monthly_price_fen: 59_900,
-            yearly_price_fen: 599_000,
+            monthly_price_fen: 19_900,
+            yearly_price_fen: 199_000,
             currency: "CNY",
             hosted_models_enabled: true,
             quota_window_secs: 0,
             calls_per_window: 0,
         },
         "team" => PlanLimits {
-            token_limit: 15_000_000_000,
+            token_limit: 0,
             api_key_limit: 20,
             seat_limit: 10,
-            monthly_price_fen: 199_900,
-            yearly_price_fen: 1_999_000,
+            monthly_price_fen: 69_900,
+            yearly_price_fen: 699_000,
             currency: "CNY",
             hosted_models_enabled: true,
             quota_window_secs: 0,
             calls_per_window: 0,
         },
         _ => PlanLimits {
-            token_limit: 20_000_000,
+            token_limit: 0,
             api_key_limit: 1,
-            seat_limit: 10,
+            seat_limit: 1,
             monthly_price_fen: 0,
             yearly_price_fen: 0,
             currency: "CNY",
@@ -335,7 +335,8 @@ mod tests {
     #[test]
     fn free_plan_limits() {
         let l = static_limits_for_plan("free");
-        assert_eq!(l.token_limit, 20_000_000);
+        assert_eq!(l.token_limit, 0);
+        assert_eq!(l.seat_limit, 1);
         assert!(l.hosted_models_enabled);
         assert_eq!(l.calls_per_window, 0);
     }
@@ -343,8 +344,8 @@ mod tests {
     #[test]
     fn cloud_5h_quota() {
         let l = static_limits_for_plan("cloud_5h");
-        assert_eq!(l.token_limit, 1_000_000_000);
-        assert_eq!(l.monthly_price_fen, 9_800);
+        assert_eq!(l.token_limit, 0);
+        assert_eq!(l.monthly_price_fen, 4_900);
         assert_eq!(l.quota_window_secs, 0);
         assert_eq!(l.calls_per_window, 0);
     }
@@ -353,8 +354,8 @@ mod tests {
     fn pro_plan_limits() {
         let l = static_limits_for_plan("pro");
         assert_eq!(l.api_key_limit, 5);
-        assert_eq!(l.monthly_price_fen, 59_900);
-        assert_eq!(l.token_limit, 10_000_000_000);
+        assert_eq!(l.monthly_price_fen, 19_900);
+        assert_eq!(l.token_limit, 0);
         assert_eq!(l.currency, "CNY");
         assert_eq!(l.quota_window_secs, 0);
         assert_eq!(l.calls_per_window, 0);

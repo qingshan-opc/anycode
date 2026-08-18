@@ -129,6 +129,31 @@ impl AccountDb {
             include_str!("../migrations/026_enable_deepseek_v4_pro.sql"),
         )
         .await?;
+        self.apply_migration(
+            "027_retire_agnes",
+            include_str!("../migrations/027_retire_agnes.sql"),
+        )
+        .await?;
+        self.apply_migration(
+            "028_lingxi_user_id",
+            include_str!("../migrations/028_lingxi_user_id.sql"),
+        )
+        .await?;
+        self.apply_migration(
+            "029_cloud_remote_chat",
+            include_str!("../migrations/029_cloud_remote_chat.sql"),
+        )
+        .await?;
+        self.apply_migration(
+            "030_usage_events_upstream_account",
+            include_str!("../migrations/030_usage_events_upstream_account.sql"),
+        )
+        .await?;
+        self.apply_migration(
+            "031_wallet_plans",
+            include_str!("../migrations/031_wallet_plans.sql"),
+        )
+        .await?;
         Ok(())
     }
 

@@ -6,11 +6,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 fn default_db_path() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".anycode")
-        .join("projects.db")
+    anycode_core::anycode_data_dir_or_cwd().join("projects.db")
 }
 
 fn project_id_for_root(root_path: &str) -> String {

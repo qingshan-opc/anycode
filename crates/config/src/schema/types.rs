@@ -378,7 +378,11 @@ fn default_session_auto_compact() -> bool {
 }
 
 fn default_auto_compact_ratio() -> f32 {
-    0.6
+    0.4
+}
+
+fn default_auto_compact_min_input_tokens() -> u32 {
+    32_000
 }
 
 fn default_context_window_tokens() -> u32 {
@@ -396,7 +400,7 @@ pub struct SessionConfigFile {
     #[serde(default = "default_session_auto_compact")]
     pub auto_compact: bool,
     /// 绝对阈值（input tokens）；>0 时优先于比例阈值。
-    #[serde(default)]
+    #[serde(default = "default_auto_compact_min_input_tokens")]
     pub auto_compact_min_input_tokens: u32,
     #[serde(default = "default_auto_compact_ratio")]
     pub auto_compact_ratio: f32,
@@ -412,7 +416,7 @@ impl Default for SessionConfigFile {
     fn default() -> Self {
         Self {
             auto_compact: default_session_auto_compact(),
-            auto_compact_min_input_tokens: 0,
+            auto_compact_min_input_tokens: default_auto_compact_min_input_tokens(),
             auto_compact_ratio: default_auto_compact_ratio(),
             context_window_auto: default_context_window_auto(),
             context_window_tokens: default_context_window_tokens(),

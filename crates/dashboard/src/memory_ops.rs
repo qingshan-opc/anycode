@@ -16,6 +16,58 @@ struct RetentionRow {
     updated_at: String,
     action: String,
     reason: String,
+    /// Session / source provenance for Settings + doctor (empty on legacy rows).
+    provenance: String,
+}
+
+fn memory_provenance_label(memory: &anycode_core::Memory) -> String {
+    if let Some(meta) = &memory.meta {
+        if let Some(p) = meta
+            .provenance
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            return p.to_string();
+        }
+        let source = meta.source.trim();
+        if !source.is_empty() {
+            return source.to_string();
+        }
+        let hash = meta.evidence_hash.trim();
+        if !hash.is_empty() {
+            let short = hash.chars().take(12).collect::<String>();
+            return format!("evidence:{short}");
+        }
+    }
+    if memory
+        .tags
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("provenance"))
+    {
+        return "tag:provenance".into();
+    }
+    String::new()
+}
+
+fn is_protected_memory(memory: &anycode_core::Memory) -> bool {
+    if memory.meta.as_ref().is_some_and(|m| m.pinned) {
+        return true;
+    }
+    if memory
+        .meta
+        .as_ref()
+        .and_then(|m| m.provenance.as_ref())
+        .is_some_and(|p| !p.trim().is_empty())
+    {
+        return true;
+    }
+    memory.tags.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "pin" | "pinned" | "important" | "retain" | "provenance"
+        )
+    })
 }
 
 async fn run_memory_prune(dry_run: bool, apply: bool, older_than_days: i64) -> Result<Value> {
@@ -33,15 +85,11 @@ async fn run_memory_prune(dry_run: bool, apply: bool, older_than_days: i64) -> R
         MemoryType::Reference,
     ] {
         for memory in store.recall("", mem_type).await? {
-            let protect = memory.tags.iter().any(|t| {
-                matches!(
-                    t.as_str(),
-                    "pin" | "pinned" | "important" | "retain" | "provenance"
-                )
-            });
+            let provenance = memory_provenance_label(&memory);
+            let protect = is_protected_memory(&memory);
             let old = memory.updated_at < cutoff;
             let (action, reason) = if protect {
-                ("keep", "protected tag")
+                ("keep", "protected tag or provenance")
             } else if old {
                 ("delete", "older than retention window")
             } else {
@@ -61,6 +109,7 @@ async fn run_memory_prune(dry_run: bool, apply: bool, older_than_days: i64) -> R
                     action.to_string()
                 },
                 reason: reason.to_string(),
+                provenance,
             });
         }
     }
@@ -231,12 +280,26 @@ fn summarize_retention_rows(rows: &Value) -> Value {
     let mut would_delete = 0i64;
     let mut keep = 0i64;
     let mut protected = 0i64;
+    let mut with_provenance = 0i64;
     let Some(arr) = rows.as_array() else {
-        return serde_json::json!({ "would_delete": 0, "keep": 0, "protected": 0 });
+        return serde_json::json!({
+            "would_delete": 0,
+            "keep": 0,
+            "protected": 0,
+            "with_provenance": 0,
+        });
     };
     for row in arr {
         let action = row.get("action").and_then(|x| x.as_str()).unwrap_or("");
         let reason = row.get("reason").and_then(|x| x.as_str()).unwrap_or("");
+        let provenance = row
+            .get("provenance")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim();
+        if !provenance.is_empty() {
+            with_provenance += 1;
+        }
         if action.contains("delete") {
             would_delete += 1;
         } else if reason.contains("protected") {
@@ -249,22 +312,87 @@ fn summarize_retention_rows(rows: &Value) -> Value {
         "would_delete": would_delete,
         "keep": keep,
         "protected": protected,
+        "with_provenance": with_provenance,
     })
+}
+
+/// Doctor checks: retention reclaimables + provenance coverage (aligned with Settings panel).
+pub async fn memory_doctor_checks() -> Vec<crate::schema::DoctorCheck> {
+    use crate::schema::DoctorCheck;
+    match memory_retention_preview(90).await {
+        Ok(preview) => {
+            let summary = preview
+                .get("summary")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let would_delete = summary
+                .get("would_delete")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let protected = summary
+                .get("protected")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let with_provenance = summary
+                .get("with_provenance")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let status = if would_delete > 100 { "warn" } else { "ok" };
+            vec![DoctorCheck {
+                id: "memory_retention".into(),
+                status: status.into(),
+                message: format!(
+                    "Memory retention (90d): reclaimable={would_delete}, protected={protected}, with_provenance={with_provenance}"
+                ),
+            }]
+        }
+        Err(e) => vec![DoctorCheck {
+            id: "memory_retention".into(),
+            status: "warn".into(),
+            message: format!("Memory retention preview unavailable: {e}"),
+        }],
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anycode_core::{Memory, MemoryKind, MemoryMetaV2, MemoryScope, MemoryType};
+    use chrono::Utc;
 
     #[test]
     fn summarizes_rows() {
         let rows = serde_json::json!([
-            {"action": "would_delete", "reason": "older than retention window"},
-            {"action": "keep", "reason": "protected tag"},
-            {"action": "keep", "reason": "recently updated"}
+            {"action": "would_delete", "reason": "older than retention window", "provenance": ""},
+            {"action": "keep", "reason": "protected tag or provenance", "provenance": "session:abc"},
+            {"action": "keep", "reason": "recently updated", "provenance": ""}
         ]);
         let s = summarize_retention_rows(&rows);
         assert_eq!(s["would_delete"], 1);
         assert_eq!(s["protected"], 1);
+        assert_eq!(s["with_provenance"], 1);
+    }
+
+    #[test]
+    fn provenance_label_prefers_explicit_field() {
+        let mem = Memory {
+            id: "m1".into(),
+            mem_type: MemoryType::User,
+            title: "t".into(),
+            content: "c".into(),
+            tags: vec![],
+            scope: MemoryScope::Private,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            meta: Some(MemoryMetaV2 {
+                kind: MemoryKind::default(),
+                source: "legacy-source".into(),
+                provenance: Some("session:s1".into()),
+                evidence_hash: "deadbeef".into(),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(memory_provenance_label(&mem), "session:s1");
+        assert!(is_protected_memory(&mem));
     }
 }

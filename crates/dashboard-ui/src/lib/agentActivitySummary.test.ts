@@ -9,16 +9,16 @@ describe("briefThinkingSummary", () => {
     expect(briefThinkingSummary("先读一下现状")).toBe("先读一下现状");
   });
 
-  it("prefers the first sentence when the body is long", () => {
+  it("prefers the last sentence (current beat) when the body is long", () => {
     const long =
-      "先定位工具簇收起的问题。后面再改状态机和瀑布渲染，确保和 Cursor 一致。";
-    expect(briefThinkingSummary(long, 96)).toBe("先定位工具簇收起的问题。");
+      "让我先理解用户当前的情况。用户说还不够好。接下来改状态机和瀑布渲染。";
+    expect(briefThinkingSummary(long, 96)).toBe("接下来改状态机和瀑布渲染。");
   });
 
-  it("hard-truncates when there is no short sentence boundary", () => {
+  it("hard-truncates the trailing window when there is no sentence boundary", () => {
     const long = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".repeat(8);
     const out = briefThinkingSummary(long, 40);
-    expect(out.endsWith("…")).toBe(true);
+    expect(out.startsWith("…")).toBe(true);
     expect(out.length).toBeLessThanOrEqual(40);
   });
 });

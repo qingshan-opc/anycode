@@ -46,10 +46,14 @@ pick_artifact() {
         || true)"
       ;;
     nsis)
-      found="$(pick_first \
-        "$(ls -1 "$ROOT"/target/release/bundle/nsis/*.exe 2>/dev/null | head -1 || true)" \
-        "$(ls -1 "$ROOT"/target/"$WIN_TARGET"/release/bundle/nsis/*.exe 2>/dev/null | head -1 || true)" \
-        || true)"
+      # Prefer newest by mtime so an older anyCode_0.40.*_setup.exe is not
+      # chosen alphabetically ahead of anyCode_0.42.*_setup.exe.
+      found="$(
+        {
+          ls -1t "$ROOT"/target/release/bundle/nsis/*.exe 2>/dev/null || true
+          ls -1t "$ROOT"/target/"$WIN_TARGET"/release/bundle/nsis/*.exe 2>/dev/null || true
+        } | head -1 || true
+      )"
       ;;
   esac
   if [[ -n "$found" && -f "$found" ]]; then

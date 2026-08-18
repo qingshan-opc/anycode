@@ -49,6 +49,12 @@ export function MemoryRetentionPanel() {
             .replace("{delete}", String(summary.would_delete ?? 0))
             .replace("{keep}", String(summary.keep ?? 0))
             .replace("{protected}", String(summary.protected ?? 0))}
+          {summary.with_provenance != null ? (
+            <span className="text-secondary">
+              {" "}
+              · provenance={String(summary.with_provenance)}
+            </span>
+          ) : null}
         </p>
       )}
       <div className="flex flex-wrap gap-2">

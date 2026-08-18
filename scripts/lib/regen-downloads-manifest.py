@@ -121,8 +121,14 @@ def write_tauri_update_manifest(download_dir: Path) -> None:
     if not update_dir.is_dir():
         return
 
-    platforms: dict[str, dict] = {}
-    newest_mtime = 0.0
+    # target -> (version_tuple, payload, mtime)
+    best: dict[str, tuple[tuple[int, ...], dict, float]] = {}
+
+    def consider(target: str, version: str, payload: dict, mtime: float) -> None:
+        key = version_key(version)
+        prev = best.get(target)
+        if prev is None or key > prev[0]:
+            best[target] = (key, payload, mtime)
 
     def sig_text(artifact: Path) -> str | None:
         sig = artifact.with_name(artifact.name + ".sig")
@@ -142,11 +148,15 @@ def write_tauri_update_manifest(download_dir: Path) -> None:
             if not signature:
                 print(f"warn: {name} has no .sig — skipped in update manifest")
                 continue
-            platforms[f"darwin-{m.group('arch')}"] = {
-                "signature": signature,
-                "url": f"{BASE_URL}/update/{name}",
-            }
-            newest_mtime = max(newest_mtime, path.stat().st_mtime)
+            consider(
+                f"darwin-{m.group('arch')}",
+                m.group("version"),
+                {
+                    "signature": signature,
+                    "url": f"{BASE_URL}/update/{name}",
+                },
+                path.stat().st_mtime,
+            )
 
     # Windows / Linux: signature-only entries under update/, artifact stays flat.
     for sig in sorted(update_dir.glob("*.sig")):
@@ -155,31 +165,44 @@ def write_tauri_update_manifest(download_dir: Path) -> None:
         if m:
             flat = download_dir / f"anyCode_{m.group('version')}_x64.exe"
             if flat.is_file():
-                platforms["windows-x86_64"] = {
-                    "signature": sig.read_text(encoding="utf-8").strip(),
-                    "url": f"{BASE_URL}/{flat.name}",
-                }
-                newest_mtime = max(newest_mtime, sig.stat().st_mtime)
+                consider(
+                    "windows-x86_64",
+                    m.group("version"),
+                    {
+                        "signature": sig.read_text(encoding="utf-8").strip(),
+                        "url": f"{BASE_URL}/{flat.name}",
+                    },
+                    sig.stat().st_mtime,
+                )
             continue
         m = re.match(r"^anyCode_(?P<version>\d+\.\d+\.\d+)_x86_64\.AppImage$", base)
         if m:
             flat = download_dir / f"anyCode_{m.group('version')}_x86_64.AppImage"
             if flat.is_file():
-                platforms["linux-x86_64"] = {
-                    "signature": sig.read_text(encoding="utf-8").strip(),
-                    "url": f"{BASE_URL}/{flat.name}",
-                }
-                newest_mtime = max(newest_mtime, sig.stat().st_mtime)
+                consider(
+                    "linux-x86_64",
+                    m.group("version"),
+                    {
+                        "signature": sig.read_text(encoding="utf-8").strip(),
+                        "url": f"{BASE_URL}/{flat.name}",
+                    },
+                    sig.stat().st_mtime,
+                )
 
-    if not platforms:
+    if not best:
         return
 
-    versions = [
-        re.search(r"\d+\.\d+\.\d+", p["url"]).group(0)  # type: ignore[union-attr]
-        for p in platforms.values()
-    ]
+    platforms = {target: payload for target, (_, payload, _) in best.items()}
+    newest_mtime = max(mtime for _, _, mtime in best.values())
+    versions = [key for key, _, _ in best.values()]
+    version_labels = [".".join(str(n) for n in v) for v in versions]
+    if len(set(version_labels)) > 1:
+        print(
+            "warn: updater platforms have mixed versions "
+            f"{sorted(set(version_labels))}; top-level version is the newest"
+        )
     manifest = {
-        "version": max(versions, key=version_key),
+        "version": max(version_labels, key=version_key),
         "notes": "",
         "pub_date": datetime.fromtimestamp(newest_mtime, timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"

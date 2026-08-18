@@ -10,15 +10,8 @@ TAG="${TAG:-$VERSION}"
 GIT_SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 IMMUTABLE_TAG="${TAG}-${GIT_SHA}"
 
-DOWNLOAD_DIR="$ROOT/crates/account-portal/public/downloads"
-if ! compgen -G "$DOWNLOAD_DIR/anyCode_"*"_aarch64.dmg" >/dev/null 2>&1; then
-  echo "No macOS DMG in $DOWNLOAD_DIR" >&2
-  echo "Run: ./scripts/build-account-image.sh   (macOS, signed DMG + image)" >&2
-  echo "  or: ./scripts/release-desktop-local.sh && $0" >&2
-  exit 1
-fi
-echo "Desktop DMG baked into portal image:"
-ls -lh "$DOWNLOAD_DIR"/*.dmg 2>/dev/null | sed 's/^/  /'
+echo "Desktop installers are NOT baked into this image (MinIO bucket downloads)."
+echo "After staging locally, run: ./scripts/upload-desktop-downloads-s3.sh"
 
 echo "Building $REGISTRY:$IMMUTABLE_TAG (linux/amd64, immutable tag + latest alias)"
 # ACR: NEVER enable provenance/sbom — they push an OCI attestation index that

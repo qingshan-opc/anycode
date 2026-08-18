@@ -268,27 +268,30 @@ export function truncateThinkingPreview(text: string, max = 100): string {
 
 /**
  * One-line thinking/narration blurb for the Cursor-style waterfall.
- * Prefers the first sentence when the body continues; otherwise truncates hard.
+ * Prefers the *last* short sentence (current beat), not the opening scaffolding.
  */
 export function briefThinkingSummary(text: string, max = 96): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   if (!oneLine) return "";
 
-  // First sentence (CJK / Latin punctuation). Chinese often continues
-  // immediately after 。 — do not require a trailing space.
-  const sentence = oneLine.match(/^(.+?[。！？.!?])/);
-  if (sentence) {
-    const candidate = sentence[1]!.trim();
-    const rest = oneLine.slice(candidate.length).trim();
-    if (rest.length > 0 && candidate.length >= 4) {
-      return candidate.length <= max
-        ? candidate
-        : truncateThinkingPreview(candidate, max);
+  // Split on CJK / Latin sentence punctuation; keep trailing mark with each part.
+  const parts = oneLine
+    .split(/(?<=[。！？.!?])\s*/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
+  if (parts.length > 1) {
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+      const candidate = parts[i]!;
+      if (candidate.length < 4) continue;
+      if (candidate.length <= max) return candidate;
+      return truncateThinkingPreview(candidate, max);
     }
   }
 
   if (oneLine.length <= max) return oneLine;
-  return truncateThinkingPreview(oneLine, max);
+  // No useful sentence boundary: show the trailing window (current beat).
+  return `…${oneLine.slice(-(max - 1))}`;
 }
 
 export function isStatusMessage(block: TranscriptBlock): boolean {

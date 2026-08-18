@@ -171,13 +171,11 @@ pub fn build_report(
 }
 
 fn reports_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".anycode/reports"))
+    Some(anycode_core::user_home_dir()?.join(".anycode/reports"))
 }
 
 fn audit_log_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".anycode/audit/tool-calls.jsonl"))
+    Some(anycode_core::user_home_dir()?.join(".anycode/audit/tool-calls.jsonl"))
 }
 
 pub fn iso_week_stamp(now: chrono::DateTime<chrono::Utc>) -> String {
@@ -265,10 +263,10 @@ fn read_audit_rows(window_days: u32) -> Vec<AuditRow> {
 
 /// P2.8:读取窗口内的 delivery-gates.jsonl 行(坏行保留给 summarize 内部跳过)。
 fn read_gate_lines(window_days: u32) -> Vec<String> {
-    let Some(home) = std::env::var_os("HOME") else {
+    let Some(home) = anycode_core::user_home_dir() else {
         return Vec::new();
     };
-    let path = PathBuf::from(home).join(anycode_agent::DELIVERY_GATES_LOG);
+    let path = home.join(anycode_agent::DELIVERY_GATES_LOG);
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };

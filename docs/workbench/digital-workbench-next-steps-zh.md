@@ -1,6 +1,6 @@
 # Digital Workbench — 下一步规划
 
-**当前位置：** V1 MVP + V2 + **V3 Week 1–10** 已完成（本地控制面）。下一步 **0.3** 主线：**网页账号控制台** — 登录、套餐/订阅、用量、账单、API 管理、企业能力入口。Agent **执行仍在 CLI / 本地 runtime**；**0.3 不做网页端操作 Agent**。详见 [`roadmap.md`](../roadmap.md) §3.5。
+**当前位置：** V1–V3 本地控制面已完成；**0.41+ 主产品**为 Desktop Workbench（进程内操作 Agent）。**0.3** 云端主线仍是 **Portal 账号控制台**（登录、套餐/订阅、用量、账单、API、企业入口）— **云端 Portal 不跑 Agent**；Agent 在本地 App。详见 [`roadmap.md`](../roadmap.md) §2 / §3.5。
 
 ## 已有能力
 

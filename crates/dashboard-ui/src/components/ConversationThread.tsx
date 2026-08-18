@@ -1,10 +1,12 @@
-import { useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { SessionWithProject, TranscriptBlock } from "@/api/types";
 import { ConversationComposer } from "@/components/ConversationComposer";
 import { ConversationTranscript } from "@/components/ConversationTranscript";
 import { Icon } from "@/components/Icon";
+import { NewProjectDialog } from "@/components/NewProjectDialog";
+import { ProjectPicker } from "@/components/ProjectPicker";
 import { SecurityApprovalInbox } from "@/components/SecurityApprovalInbox";
 import { AskUserQuestionInbox } from "@/components/AskUserQuestionInbox";
 import { SessionTitleMenu } from "@/components/session/SessionTitleMenu";
@@ -29,6 +31,7 @@ import {
 } from "@/hooks/useSessionEventStream";
 import { transcriptQueryOptions } from "@/lib/sessionQuery";
 import { computeLatestTurnProgress } from "@/lib/turnProgressSummary";
+import { consumeComposerSeed } from "@/lib/composerSeed";
 
 interface Props {
   sessions: SessionWithProject[];
@@ -222,7 +225,25 @@ export function ConversationThread({
   const t = useT();
   const locale = useLocale();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { sessionSidebarCollapsed, setSessionSidebarCollapsed } = useConversationShell();
+  const {
+    sessionSidebarCollapsed,
+    setSessionSidebarCollapsed,
+    projectId,
+    projectOptions,
+    beginPendingSession,
+    markSessionStreaming: markShellStreaming,
+    selectSession,
+    goHome,
+  } = useConversationShell();
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [startPromptSeed, setStartPromptSeed] = useState("");
+
+  useEffect(() => {
+    const seed = consumeComposerSeed();
+    if (seed) setStartPromptSeed(seed);
+  }, []);
+
+  const effectiveProjectId = projectId || projectOptions[0]?.id || "";
 
   const running = conversationThreadRunning(
     session?.status ?? "idle",
@@ -297,9 +318,53 @@ export function ConversationThread({
 
   if (!session) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-secondary p-8">
-        <Icon name="forum" size={40} className="opacity-40 mb-3" />
-        <p className="m-0 text-sm">{t("conversations.selectSession")}</p>
+      <div className="flex flex-col h-full min-h-0">
+        <NewProjectDialog
+          open={newProjectOpen}
+          onClose={() => setNewProjectOpen(false)}
+          navigateOnSuccess={false}
+          onCreated={(project) => {
+            setNewProjectOpen(false);
+            goHome(project.id);
+          }}
+        />
+        <div className="flex flex-col flex-1 items-center justify-center text-secondary p-8 min-h-0">
+          <Icon name="forum" size={40} className="opacity-40 mb-3" />
+          <p className="m-0 text-sm">{t("conversations.emptyDesc")}</p>
+        </div>
+        <div className="conv-thread-composer-dock">
+          <div className="conv-thread-composer">
+            <div className="px-2 pb-2">
+              <ProjectPicker
+                value={effectiveProjectId}
+                onChange={goHome}
+                options={projectOptions.map((p) => ({ id: p.id, name: p.name }))}
+                onSelectDirectory={() => setNewProjectOpen(true)}
+              />
+            </div>
+            {effectiveProjectId ? (
+              <ConversationComposer
+                mode="start"
+                projectId={effectiveProjectId}
+                initialPrompt={startPromptSeed || undefined}
+                onStreamingStart={markSessionStreaming ?? markShellStreaming}
+                onSuccess={(result) => {
+                  beginPendingSession(result.session, {
+                    id: effectiveProjectId,
+                    name:
+                      projectOptions.find((p) => p.id === effectiveProjectId)?.name ??
+                      effectiveProjectId,
+                  });
+                  selectSession(result.session.id);
+                }}
+              />
+            ) : (
+              <p className="text-xs text-secondary px-3 pb-3 m-0">
+                {t("home.hero.selectDirectory")}
+              </p>
+            )}
+          </div>
+        </div>
       </div>
     );
   }

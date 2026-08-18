@@ -27,20 +27,7 @@ struct CopilotTokenApiBody {
 }
 
 pub fn anycode_home_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("ANYCODE_HOME") {
-        let t = p.trim();
-        if !t.is_empty() {
-            return PathBuf::from(t);
-        }
-    }
-    std::env::var("HOME")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".anycode")
+    anycode_core::anycode_data_dir_or_cwd()
 }
 
 pub fn anycode_credentials_dir() -> PathBuf {

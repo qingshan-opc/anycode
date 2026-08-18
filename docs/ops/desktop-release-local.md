@@ -50,36 +50,45 @@ Public URLs (after deploy):
 
 ## Deploy to anycode.work (recommended)
 
-DMG is **baked into the account+portal Docker image** — deploy the image and downloads go live automatically.
+Installers live on **cluster MinIO** (same S3 as FDE courses, bucket `downloads`).
+Do **not** bake `*.dmg` / `*.exe` / updater tarballs into the account image.
 
 ```bash
-# macOS: signed DMG → portal public/downloads → docker build → ACR push
+# 1. Stage artifacts locally (already done by the release scripts above)
+# 2. Upload to MinIO (port-forwards svc/minio)
+./scripts/upload-desktop-downloads-s3.sh
+
+# 3. Slim account+portal image (no installers)
 ./scripts/build-account-image.sh
-# or: TAG=0.2.4 ./scripts/build-account-image.sh
+# or: TAG=0.42.4 ./scripts/build-account-image.sh
 
-kubectl set image deployment/anycode-account \
-  anycode-account=registry.cn-zhangjiakou.aliyuncs.com/818cloud/anycode:0.2.4
-kubectl rollout status deployment/anycode-account
+kubectl -n dis-cloud set image deployment/anycode \
+  anycode=registry.cn-zhangjiakou.aliyuncs.com/818cloud/anycode:0.42.4
+kubectl -n dis-cloud rollout status deployment/anycode
 ```
 
-No separate rsync/upload step on deploy. Portal Vite build copies `public/downloads/` into the image at `/app/portal/downloads/`.
+Public URLs stay `https://anycode.work/downloads/...` via Ingress regex `/downloads/.+` → MinIO.
 
-If DMG is already staged and you only need to rebuild the image:
+First-time cluster wiring: `kubectl -n dis-cloud apply -f deploy/account-service/k8s/downloads-minio-proxy.yaml`
 
-```bash
-./scripts/build-account-image.sh --skip-dmg
-```
+If downloads 502: ingress-nginx cannot resolve ExternalName; the manifest pins MinIO ClusterIP in Endpoints `minio-downloads`. Refresh with `kubectl -n base-service get svc minio -o jsonpath='{.spec.clusterIP}'`.
 
 ## Verify on a clean Mac
 
 ```bash
 spctl -a -vv -t install target/release/bundle/macos/anyCode.app
 # expect: accepted / Notarized Developer ID
+
+xcrun stapler validate crates/account-portal/public/downloads/anyCode_*_aarch64.dmg
+spctl -a -t open --context context:primary-signature -vv \
+  crates/account-portal/public/downloads/anyCode_*_aarch64.dmg
+# expect: accepted / Notarized Developer ID
+# An unsigned DMG is rejected as “damaged” after a browser download.
 ```
 
-Signed/notarized releases **omit bundled Chromium** (Playwright cannot be re-signed for notarization). Browser MCP installs Chromium on first use.
+The release pipeline signs, notarizes, and staples **both** the `.app` and the DMG (`scripts/notarize-mac-dmg.sh`). Playwright Chromium is still omitted from signed builds; CEF is deep-signed with the app.
 
-`createUpdaterArtifacts` is off until `TAURI_SIGNING_PRIVATE_KEY` is configured; updates ship via new DMG in the portal image.
+`createUpdaterArtifacts` is off until `TAURI_SIGNING_PRIVATE_KEY` is configured; updates ship via new DMG on MinIO.
 
 ## GitHub Releases (optional)
 

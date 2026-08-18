@@ -504,10 +504,17 @@ pub fn builtin_web_and_rust_pack() -> ExperiencePack {
                 ],
                 task_breakdown: vec![
                     "use Skill anycode-ppt".into(),
-                    "copy templates → slides/*.html".into(),
-                    "run → validate + index.html".into(),
+                    "write slides/OUTLINE.md then slides/slides.json (or one short Agent/Task per page)".into(),
+                    "run compile slides/slides.json then run slides/ once".into(),
                 ],
-                tool_order: vec!["SkillSearch".into(), "Skill".into(), "Write".into(), "Bash".into()],
+                tool_order: vec![
+                    "SkillSearch".into(),
+                    "Skill".into(),
+                    "SkillAppPresent".into(),
+                    "Write".into(),
+                    "Agent".into(),
+                    "Bash".into(),
+                ],
                 key_checks: vec![
                     "slides/*.html exist (≥2 pages)".into(),
                     "index.html deck viewer generated".into(),
@@ -516,14 +523,18 @@ pub fn builtin_web_and_rust_pack() -> ExperiencePack {
                     "sparse title-only slides".into(),
                     "exporting pptx instead of HTML".into(),
                     "skipping skill validate".into(),
+                    "writing every HTML page in the parent session (token blow-up)".into(),
+                    "copying all templates into context".into(),
                 ],
-                recovery: vec!["copy templates from components.md and fill content".into()],
+                recovery: vec![
+                    "prefer slides.json + run compile; do not FileRead the whole templates/ folder".into(),
+                ],
                 examples: vec![
                     "Deliver slides/ + index.html; open in browser for presentation.".into(),
                 ],
                 model_compat: weak_compat(),
                 regression_score: 0.91,
-                version: "0.7.0".into(),
+                version: "0.8.0".into(),
             },
             ExperienceCard {
                 id: "office.pptx-education-lesson".into(),

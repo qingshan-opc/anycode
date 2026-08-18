@@ -258,15 +258,13 @@ fn show_workbench(app: &tauri::AppHandle, ready: bool) {
                 ) {
                     Ok(s) => {
                         let _ = std::fs::write(
-                            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                                .join(".anycode/cef-smoke.txt"),
+                            cef_embed::user_home().join(".anycode/cef-smoke.txt"),
                             format!("ok port={} url={:?}\n", s.remote_debugging_port, s.url),
                         );
                     }
                     Err(e) => {
                         let _ = std::fs::write(
-                            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                                .join(".anycode/cef-smoke.txt"),
+                            cef_embed::user_home().join(".anycode/cef-smoke.txt"),
                             format!("err {e}\n"),
                         );
                     }
@@ -387,6 +385,7 @@ fn chrono_lite_timestamp() -> String {
 }
 
 fn main() {
+    dashboard_backend::ensure_home_env();
     install_panic_log_hook();
 
     // If CEF was explicitly disabled, drop a leftover CDP port so screencast
@@ -430,6 +429,10 @@ fn main() {
             apply_dashboard_env(app.handle());
             start_in_process(app.handle().clone());
 
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+            }
+
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let dashboard_ok = wait_for_dashboard_ready(90);
@@ -467,6 +470,10 @@ fn main() {
         .run(|app, event| {
             // Deep links are handled via tauri_plugin_deep_link::DeepLinkExt::on_open_url
             // (see register_deep_link_handlers); RunEvent::Opened does not exist in Tauri 2.
+            #[cfg(target_os = "macos")]
+            if matches!(event, RunEvent::Reopen { .. }) {
+                show_workbench(app, dashboard_http_ready());
+            }
             if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
                 if let Some(state) = app.try_state::<DashboardServerState>() {
                     state.stop();

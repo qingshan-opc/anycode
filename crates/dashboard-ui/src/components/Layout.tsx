@@ -13,7 +13,6 @@ import { docsHomeUrl, helpGuideUrl } from "@/lib/docLinks";
 import { ExternalNavLink } from "@/components/ExternalNavLink";
 import { useSseStatus } from "@/context/SseContext";
 import { FeatureRouteSync } from "@/components/control-center/FeatureRouteSync";
-import { DesktopUpdateBanner } from "@/components/DesktopUpdateBanner";
 import { ControlCenterProvider } from "@/context/ControlCenterContext";
 import { ConversationShellProvider, useConversationShell } from "@/context/ConversationShellContext";
 import { api } from "@/api/client";
@@ -102,10 +101,9 @@ function SessionFirstShellInner({ isHome }: { isHome: boolean }) {
       className={`dw-shell dw-shell--sessions${
         sessionSidebarCollapsed ? " dw-sessions-sidebar-collapsed" : ""
       }`}
-      data-tauri-drag-region
     >
       <SessionSidebar />
-      <div className="dw-main-wrap dw-main-wrap--sessions">
+      <div className="dw-main-wrap dw-main-wrap--sessions dw-no-drag">
         {/* No shell Topbar: home has no chrome strip; conversations use the thread title bar. */}
         <main className={`dw-main dw-main--sessions${isHome ? " dw-main--home" : ""}`}>
           {sessionSidebarCollapsed && isHome ? (
@@ -171,7 +169,6 @@ export function Layout() {
   return (
     <ControlCenterProvider>
       <FeatureRouteSync />
-      <DesktopUpdateBanner />
       {isFullPageRoute ? <StandardShell /> : <SessionFirstShell />}
     </ControlCenterProvider>
   );

@@ -138,17 +138,11 @@ export function ModelPicker({ disabled = false, compact = false }: Props) {
   function pickModel(option: ComposerModelOption) {
     setSelectedId(option.id);
     writeStoredModelId(option.id);
-    enableModel.mutate(
-      { id: option.id },
-      {
-        onSuccess: () => {
-          void queryClient.invalidateQueries({ queryKey: ["models-registry"] });
-          void queryClient.invalidateQueries({ queryKey: ["llm-config"] });
-        },
-      },
-    );
     setOpen(false);
     setQuery("");
+    void enableModel.mutateAsync({ id: option.id }).catch(() => {
+      /* submit path also awaits enableModel */
+    });
   }
 
   function openModelSettings() {

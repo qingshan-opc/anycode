@@ -79,7 +79,7 @@ export function DesktopUpdateBanner() {
   return (
     <div
       role="status"
-      className="fixed top-3 left-1/2 -translate-x-1/2 z-[400] flex items-center gap-3 rounded-xl border border-outline-variant bg-surface-container-low px-4 py-2.5 shadow-lg"
+      className="dw-desktop-update-slot mx-2 mb-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 flex flex-col gap-1.5"
     >
       {state.kind === "available" && (
         <>

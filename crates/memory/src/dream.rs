@@ -228,6 +228,7 @@ pub fn consolidate_episodes(
                     valid_from: Some(ep.created_at),
                     valid_until: None,
                     source: format!("episode:{}", ep.id),
+                    provenance: Some(format!("episode:{}", ep.id)),
                     evidence_hash: ep.evidence_hash.clone(),
                     ttl_secs: None,
                     conflicts_with: Vec::new(),

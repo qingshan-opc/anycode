@@ -1,4 +1,5 @@
 import { useAuth } from "@/auth/context";
+import { DesktopUpdateBanner } from "@/components/DesktopUpdateBanner";
 import { Icon } from "@/components/Icon";
 import { NotificationsDropdown } from "@/components/NotificationsDropdown";
 import { useControlCenter } from "@/context/ControlCenterContext";
@@ -34,7 +35,9 @@ export function SidebarFooter() {
     .toUpperCase();
 
   return (
-    <footer className="dw-session-sidebar-footer">
+    <footer className="dw-session-sidebar-footer dw-session-sidebar-footer--stacked">
+      <DesktopUpdateBanner />
+      <div className="dw-session-sidebar-footer__row">
       <button
         type="button"
         className="dw-session-sidebar-footer__profile w-full text-left border-0 bg-transparent p-0 cursor-pointer"
@@ -66,6 +69,7 @@ export function SidebarFooter() {
         >
           <Icon name="settings" size={18} />
         </button>
+      </div>
       </div>
     </footer>
   );

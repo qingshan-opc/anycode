@@ -54,30 +54,32 @@ cargo run -p anycode-model-gateway
 
 Open **http://127.0.0.1:43200/** — cloud portal (not a bare API 404).
 
-## Deploy to anycode.work (image includes portal + DMG)
+## Deploy to anycode.work (portal image + MinIO installers)
 
-One command on **macOS** (signed DMG → portal `public/downloads` → Docker image → ACR):
+Desktop packages are **not** in the Docker image. Upload them to cluster MinIO, then push a slim image:
 
 ```bash
+./scripts/upload-desktop-downloads-s3.sh
 ./scripts/build-account-image.sh
-# or pin tag: TAG=0.2.4 ./scripts/build-account-image.sh
+# or pin tag: TAG=0.42.4 ./scripts/build-account-image.sh
 ```
 
-Then roll K8s:
+Then roll K8s (`dis-cloud` deployment `anycode`):
 
 ```bash
-kubectl set image deployment/anycode-account anycode-account=registry.cn-zhangjiakou.aliyuncs.com/818cloud/anycode:0.2.4
-kubectl rollout status deployment/anycode-account
+kubectl -n dis-cloud set image deployment/anycode \
+  anycode=registry.cn-zhangjiakou.aliyuncs.com/818cloud/anycode:0.42.4
+kubectl -n dis-cloud rollout status deployment/anycode
 ```
 
-Download URLs (same deployment, no extra upload):
+Download URLs (Ingress `/downloads/` → MinIO bucket `downloads`):
 
 - https://anycode.work/downloads/anyCode_latest_aarch64.dmg
 - https://anycode.work/downloads/latest.json
 
-DMG-only refresh without rebuilding API image: still run full image build (portal stage embeds DMG).
-
 See [docs/ops/desktop-release-local.md](../../docs/ops/desktop-release-local.md).
+
+## Device link
 
 1. Sign in on the portal → **设备** → **打开 anyCode 桌面应用**
 2. Desktop receives `anycode://link?code=...` or run: `anycode auth link --code <code>`

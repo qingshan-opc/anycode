@@ -58,6 +58,7 @@ import { isArtifactScaffoldOnly } from "@/lib/artifactMarker";
 import { sanitizeAssistantDisplay } from "@/lib/assistantText";
 import {
   isScrollNearBottom,
+  lastAssistantBodyLength,
   SCROLL_RESIZE_THROTTLE_MS,
   shouldSkipScrollToBottom,
   streamFollowSignature as buildStreamFollowSignature,
@@ -232,7 +233,7 @@ export function ConversationTranscript({
   });
 
   const scrollToBottom = useCallback(
-    (behavior: ScrollBehavior = "auto") => {
+    (_behavior: ScrollBehavior = "auto") => {
       if (useVirtual) {
         if (turns.length > 0) {
           virtualizer.scrollToIndex(turns.length - 1, { align: "end", behavior: "auto" });
@@ -244,10 +245,10 @@ export function ConversationTranscript({
         if (shouldSkipScrollToBottom(container)) {
           return;
         }
-        container.scrollTo({ top: container.scrollHeight, behavior });
+        container.scrollTop = container.scrollHeight;
         return;
       }
-      bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+      bottomRef.current?.scrollIntoView({ behavior: _behavior, block: "end" });
     },
     [scrollContainerRef, turns.length, useVirtual, virtualizer],
   );
@@ -305,6 +306,7 @@ export function ConversationTranscript({
         turnHasActivity,
         turnPhase: sessionLive?.turnPhase ?? null,
         liveBlocksLength: liveBlocks.length,
+        assistantBodyLength: lastAssistantBodyLength(blocks),
       }),
     [
       blocks,
@@ -1066,8 +1068,13 @@ function TimelineProgressLine({
   const mdBody = summary || body;
   const isThinking = block.meta?.source === "thinking_delta";
   // Waterfall / thinking: short blurb only — no expand chevron, keep large type.
+  // Use raw thinking body so zh/en scaffold filters don't erase the current beat.
   const useBrief = waterfall || isThinking;
-  const briefSource = (mdBody || preview).replace(/\s+/g, " ").trim();
+  const briefSource = (
+    isThinking ? (block.body ?? "") : mdBody || preview
+  )
+    .replace(/\s+/g, " ")
+    .trim();
   const briefText = useBrief ? briefThinkingSummary(briefSource, isThinking ? 88 : 110) : "";
   const lineClass = [
     "agent-work-line",

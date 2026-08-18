@@ -2,16 +2,25 @@
 //!
 //! anyCode 无 Anthropic cache_edits；采用与 **time-based microcompact** 相同的**内容清空**策略：
 //! 对可压缩工具保留最近 `keep_recent` 条 tool_result，其余替换为占位文案。
+//!
+//! 额外（DeepSeek / OpenAI-compat 无 cache_edits）：
+//! - 成功 FileWrite/Edit 后 stub `tool_calls[].input` 正文，避免整页 HTML 每 hop 回传；
+//! - 旧 `reasoning_content` 只保留最近一轮 assistant（上游仍能 echo 当前链）。
 
 use anycode_core::prelude::*;
 use anycode_tools::catalog::{
-    TOOL_BASH, TOOL_EDIT, TOOL_FILE_READ, TOOL_FILE_WRITE, TOOL_GLOB, TOOL_GREP,
-    TOOL_NOTEBOOK_EDIT, TOOL_POWERSHELL, TOOL_WEB_FETCH, TOOL_WEB_SEARCH,
+    TOOL_BASH, TOOL_BROWSER_SCREENSHOT, TOOL_EDIT, TOOL_FILE_READ, TOOL_FILE_WRITE, TOOL_GLOB,
+    TOOL_GREP, TOOL_NOTEBOOK_EDIT, TOOL_POWERSHELL, TOOL_SKILL, TOOL_TASK_OUTPUT, TOOL_WEB_FETCH,
+    TOOL_WEB_SEARCH,
 };
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 /// 与 Claude `TIME_BASED_MC_CLEARED_MESSAGE` 一致（`microCompact.ts`）。
 pub const CLEARED_TOOL_RESULT_PLACEHOLDER: &str = "[Old tool result content cleared]";
+
+/// Stub marker so we do not re-hash already-stubbed write/edit args.
+const STUBBED_ARGS_KEY: &str = "_anycode_stubbed";
 
 fn is_compactable_tool(name: &str) -> bool {
     matches!(
@@ -26,7 +35,14 @@ fn is_compactable_tool(name: &str) -> bool {
             | TOOL_EDIT
             | TOOL_FILE_WRITE
             | TOOL_NOTEBOOK_EDIT
+            | TOOL_SKILL
+            | TOOL_TASK_OUTPUT
+            | TOOL_BROWSER_SCREENSHOT
     )
+}
+
+fn is_write_like_tool(name: &str) -> bool {
+    matches!(name, TOOL_FILE_WRITE | TOOL_EDIT | TOOL_NOTEBOOK_EDIT)
 }
 
 fn collect_tool_use_id_to_name(msgs: &[Message]) -> HashMap<String, String> {
@@ -81,6 +97,202 @@ fn tool_name_for_result_msg(msg: &Message, id_to_name: &HashMap<String, String>)
         .get("tool_name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+/// Successful (non-error) tool_use ids present in history.
+fn successful_tool_use_ids(msgs: &[Message]) -> HashSet<String> {
+    let mut ok = HashSet::new();
+    for msg in msgs {
+        if msg.role != MessageRole::Tool {
+            continue;
+        }
+        let MessageContent::ToolResult {
+            tool_use_id,
+            is_error,
+            ..
+        } = &msg.content
+        else {
+            continue;
+        };
+        if !*is_error {
+            ok.insert(tool_use_id.clone());
+        }
+    }
+    ok
+}
+
+fn stub_write_edit_input(name: &str, input: &serde_json::Value) -> serde_json::Value {
+    if input
+        .get(STUBBED_ARGS_KEY)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return input.clone();
+    }
+    let path = input
+        .get("file_path")
+        .or_else(|| input.get("path"))
+        .or_else(|| input.get("notebook_path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let body = if name == TOOL_FILE_WRITE {
+        input
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .as_bytes()
+    } else {
+        // Edit / NotebookEdit: hash the replaced payload, not the whole file.
+        let old = input
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let new = input
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        // Allocate once for hashing
+        let combined = format!("{old}\n---\n{new}");
+        return serde_json::json!({
+            "file_path": path,
+            "bytes": combined.len(),
+            "sha256": hex::encode(Sha256::digest(combined.as_bytes())),
+            STUBBED_ARGS_KEY: true,
+            "note": "full edit args cleared after success; FileRead the path to revise"
+        });
+    };
+    serde_json::json!({
+        "file_path": path,
+        "bytes": body.len(),
+        "sha256": hex::encode(Sha256::digest(body)),
+        STUBBED_ARGS_KEY: true,
+        "note": "full write body cleared after success; FileRead the path to revise"
+    })
+}
+
+/// After successful FileWrite/Edit, replace stored tool-call arguments with path+hash stub.
+/// Keeps tool_use / tool_result pairing intact. Returns number of calls stubbed.
+pub fn stub_successful_write_edit_args(messages: &mut [Message]) -> usize {
+    let ok_ids = successful_tool_use_ids(messages);
+    if ok_ids.is_empty() {
+        return 0;
+    }
+    let mut stubbed = 0usize;
+    for msg in messages.iter_mut() {
+        if msg.role != MessageRole::Assistant {
+            continue;
+        }
+        let Some(raw) = msg.metadata.get_mut(ANYCODE_TOOL_CALLS_METADATA_KEY) else {
+            continue;
+        };
+        let Ok(mut calls) = serde_json::from_value::<Vec<ToolCall>>(raw.clone()) else {
+            continue;
+        };
+        let mut changed = false;
+        for c in &mut calls {
+            if !is_write_like_tool(c.name.as_str()) {
+                continue;
+            }
+            if !ok_ids.contains(&c.id) {
+                continue;
+            }
+            if c.input
+                .get(STUBBED_ARGS_KEY)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            // Skip tiny payloads (no token win).
+            let approx = serde_json::to_string(&c.input)
+                .map(|s| s.len())
+                .unwrap_or(0);
+            if approx < 512 {
+                continue;
+            }
+            c.input = stub_write_edit_input(c.name.as_str(), &c.input);
+            stubbed += 1;
+            changed = true;
+        }
+        if changed {
+            *raw = serde_json::to_value(&calls).unwrap_or_else(|_| raw.clone());
+        }
+    }
+    stubbed
+}
+
+/// Keep `reasoning_content` only on the latest assistant message that has it.
+/// Older thinking is unanchored for DeepSeek echo and burns tokens every hop.
+pub fn strip_stale_reasoning_content(messages: &mut [Message]) -> usize {
+    let mut last_with_rc: Option<usize> = None;
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.role != MessageRole::Assistant {
+            continue;
+        }
+        if msg
+            .metadata
+            .get(ANYCODE_REASONING_CONTENT_METADATA_KEY)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            last_with_rc = Some(i);
+        }
+    }
+    let Some(keep) = last_with_rc else {
+        return 0;
+    };
+    let mut cleared = 0usize;
+    for (i, msg) in messages.iter_mut().enumerate() {
+        if i == keep || msg.role != MessageRole::Assistant {
+            continue;
+        }
+        if msg
+            .metadata
+            .remove(ANYCODE_REASONING_CONTENT_METADATA_KEY)
+            .is_some()
+        {
+            cleared += 1;
+        }
+    }
+    cleared
+}
+
+/// Before each LLM hop: stub successful writes and drop stale thinking.
+/// Does **not** clear tool_results (model may still need the latest turn).
+pub fn prepare_messages_for_llm_hop(messages: &mut [Message]) -> LiveContextTrimStats {
+    let stubbed_writes = stub_successful_write_edit_args(messages);
+    let cleared_reasoning = strip_stale_reasoning_content(messages);
+    LiveContextTrimStats {
+        cleared_results: 0,
+        stubbed_writes,
+        cleared_reasoning,
+    }
+}
+
+/// Live post-tool pass: microcompact results + stub writes + drop stale thinking.
+pub fn apply_live_context_trim(messages: &mut [Message]) -> LiveContextTrimStats {
+    let cleared_results = apply_microcompact_keep_latest_turn(messages);
+    let stubbed_writes = stub_successful_write_edit_args(messages);
+    let cleared_reasoning = strip_stale_reasoning_content(messages);
+    LiveContextTrimStats {
+        cleared_results,
+        stubbed_writes,
+        cleared_reasoning,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveContextTrimStats {
+    pub cleared_results: usize,
+    pub stubbed_writes: usize,
+    pub cleared_reasoning: usize,
+}
+
+impl LiveContextTrimStats {
+    pub fn any(&self) -> bool {
+        self.cleared_results > 0 || self.stubbed_writes > 0 || self.cleared_reasoning > 0
+    }
 }
 
 /// 清空较早的可压缩 tool_result，保留时间轴上最后 `keep_recent` 条（与 Claude `slice(-keepRecent)` 一致）。
@@ -300,5 +512,100 @@ mod tests {
     fn keep_latest_turn_noop_without_tool_calls() {
         let mut msgs = vec![tool_res("x", TOOL_BASH, "out")];
         assert_eq!(apply_microcompact_keep_latest_turn(&mut msgs), 0);
+    }
+
+    #[test]
+    fn skill_results_are_compactable() {
+        let mut msgs = vec![
+            asst_with_tools(vec![ToolCall {
+                id: "s1".into(),
+                name: TOOL_SKILL.into(),
+                input: serde_json::json!({"name": "anycode-ppt"}),
+            }]),
+            tool_res("s1", TOOL_SKILL, &"x".repeat(4000)),
+            asst_with_tools(vec![ToolCall {
+                id: "s2".into(),
+                name: TOOL_SKILL.into(),
+                input: serde_json::json!({"name": "anycode-ppt"}),
+            }]),
+            tool_res("s2", TOOL_SKILL, "latest skill body"),
+        ];
+        let n = apply_microcompact_keep_latest_turn(&mut msgs);
+        assert_eq!(n, 1);
+        let c = |id: &str| {
+            msgs.iter()
+                .find_map(|m| match &m.content {
+                    MessageContent::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } if tool_use_id == id => Some(content.as_str()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(c("s1"), CLEARED_TOOL_RESULT_PLACEHOLDER);
+        assert_eq!(c("s2"), "latest skill body");
+    }
+
+    #[test]
+    fn stubs_large_filewrite_args_after_success() {
+        let html = format!("<!DOCTYPE html>{}", "a".repeat(800));
+        let mut msgs = vec![
+            asst_with_tools(vec![ToolCall {
+                id: "w1".into(),
+                name: TOOL_FILE_WRITE.into(),
+                input: serde_json::json!({
+                    "file_path": "/tmp/slides/01.html",
+                    "content": html,
+                }),
+            }]),
+            tool_res(
+                "w1",
+                TOOL_FILE_WRITE,
+                r#"{"success":true,"path":"/tmp/slides/01.html"}"#,
+            ),
+        ];
+        let n = stub_successful_write_edit_args(&mut msgs);
+        assert_eq!(n, 1);
+        let raw = msgs[0]
+            .metadata
+            .get(ANYCODE_TOOL_CALLS_METADATA_KEY)
+            .unwrap();
+        let calls: Vec<ToolCall> = serde_json::from_value(raw.clone()).unwrap();
+        let args = &calls[0].input;
+        assert!(args.get("content").is_none());
+        assert_eq!(args["file_path"], "/tmp/slides/01.html");
+        assert!(args["_anycode_stubbed"].as_bool().unwrap());
+        assert!(args["sha256"].as_str().unwrap().len() == 64);
+        // Idempotent
+        assert_eq!(stub_successful_write_edit_args(&mut msgs), 0);
+    }
+
+    #[test]
+    fn strips_old_reasoning_keeps_latest() {
+        let mut m1 = asst_with_tools(vec![]);
+        m1.metadata.insert(
+            ANYCODE_REASONING_CONTENT_METADATA_KEY.to_string(),
+            serde_json::Value::String("old think".into()),
+        );
+        let mut m2 = asst_with_tools(vec![]);
+        m2.metadata.insert(
+            ANYCODE_REASONING_CONTENT_METADATA_KEY.to_string(),
+            serde_json::Value::String("new think".into()),
+        );
+        let mut msgs = vec![m1, m2];
+        assert_eq!(strip_stale_reasoning_content(&mut msgs), 1);
+        assert!(msgs[0]
+            .metadata
+            .get(ANYCODE_REASONING_CONTENT_METADATA_KEY)
+            .is_none());
+        assert_eq!(
+            msgs[1]
+                .metadata
+                .get(ANYCODE_REASONING_CONTENT_METADATA_KEY)
+                .and_then(|v| v.as_str()),
+            Some("new think")
+        );
     }
 }

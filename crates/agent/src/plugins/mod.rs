@@ -32,9 +32,7 @@ pub struct PluginsState {
 }
 
 pub fn anycode_home() -> PathBuf {
-    dirs::home_dir()
-        .map(|h| h.join(".anycode"))
-        .unwrap_or_else(|| PathBuf::from(".anycode"))
+    anycode_core::anycode_data_dir_or_cwd()
 }
 
 pub fn plugins_state_path() -> PathBuf {

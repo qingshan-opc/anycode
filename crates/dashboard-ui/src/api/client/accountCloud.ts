@@ -206,6 +206,74 @@ export const accountCloud = {
       `/api/v1/billing/orders/${encodeURIComponent(orderId)}/sync`,
       { method: "POST" },
     ),
+
+  listMineDevices: (base: string, thisDeviceId?: string | null) => {
+    const q = thisDeviceId
+      ? `?device_id=${encodeURIComponent(thisDeviceId)}`
+      : "";
+    return accountFetch<{ devices: RemoteMineDevice[] }>(base, `/api/v1/devices/mine${q}`);
+  },
+
+  listRemoteConversations: (base: string, homeDeviceId: string) =>
+    accountFetch<{ conversations: CloudRemoteConversation[] }>(
+      base,
+      `/api/v1/remote-chat/conversations?home_device_id=${encodeURIComponent(homeDeviceId)}`,
+    ),
+
+  getRemoteConversation: (base: string, conversationId: string, after = 0) =>
+    accountFetch<{ conversation: CloudRemoteConversation; events: CloudRemoteEvent[] }>(
+      base,
+      `/api/v1/remote-chat/conversations/${encodeURIComponent(conversationId)}?after=${after}`,
+    ),
+
+  postRemotePrompt: (
+    base: string,
+    body: {
+      home_device_id: string;
+      prompt: string;
+      conversation_id?: string;
+      title?: string;
+    },
+  ) =>
+    accountFetch<{ ok: boolean; conversation: CloudRemoteConversation }>(
+      base,
+      "/api/v1/remote-chat/prompt",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  postRemoteCancel: (base: string, conversationId: string) =>
+    accountFetch<{ ok: boolean }>(base, "/api/v1/remote-chat/cancel", {
+      method: "POST",
+      body: JSON.stringify({ conversation_id: conversationId }),
+    }),
+};
+
+export type RemoteMineDevice = {
+  id: string;
+  device_name: string;
+  platform: string;
+  last_seen_at: string;
+  online: boolean;
+  this_device: boolean;
+};
+
+export type CloudRemoteConversation = {
+  id: string;
+  home_device_id: string;
+  local_session_id?: string | null;
+  title: string;
+  project_name?: string | null;
+  status: string;
+  last_event_seq: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CloudRemoteEvent = {
+  seq: number;
+  kind: string;
+  payload: unknown;
+  created_at: string;
 };
 
 export function resolveAccountApiBase(healthUrl?: string | null): string {

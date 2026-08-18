@@ -1,0 +1,336 @@
+.ac-mobile {
+  --ac-bg: #0f1117;
+  --ac-surface: #16181f;
+  --ac-surface-2: #1c1f28;
+  --ac-text: #e8eaed;
+  --ac-muted: #9aa0ab;
+  --ac-accent: #6e6bff;
+  --ac-accent-fg: #f4f3ff;
+  --ac-outline: #3a3f4b;
+  --ac-error: #f2b8b5;
+  --ac-ok: #7ddea0;
+  --ac-touch: 44px;
+  min-height: 100dvh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--ac-bg);
+  color: var(--ac-text);
+  font-family: "PingFang SC", "Inter", system-ui, sans-serif;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+
+.ac-mobile button,
+.ac-mobile select,
+.ac-mobile textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.ac-mobile button:focus-visible,
+.ac-mobile select:focus-visible,
+.ac-mobile textarea:focus-visible {
+  outline: 2px solid var(--ac-accent);
+  outline-offset: 2px;
+}
+
+.ac-mobile__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--ac-touch);
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--ac-outline);
+}
+
+.ac-mobile__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ac-mobile__brand h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.ac-mobile__brand p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--ac-muted);
+}
+
+.ac-mobile__ghost {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ac-muted);
+  min-height: var(--ac-touch);
+  min-width: var(--ac-touch);
+  padding: 0 8px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.ac-mobile__ghost:hover {
+  color: var(--ac-text);
+  background: var(--ac-surface);
+}
+
+.ac-mobile__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ac-mobile__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ac-mobile__pad {
+  padding: 16px;
+}
+
+.ac-mobile__status {
+  margin: 0 0 16px;
+  color: var(--ac-muted);
+  font-size: 14px;
+}
+
+.ac-mobile__error {
+  margin: 0 16px 8px;
+  color: var(--ac-error);
+  font-size: 13px;
+}
+
+.ac-mobile__hint {
+  margin: 0;
+  color: var(--ac-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.ac-mobile__device {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  min-height: 64px;
+  padding: 12px 14px;
+  margin: 0 0 10px;
+  border: 1px solid var(--ac-outline);
+  border-radius: 16px;
+  background: var(--ac-surface);
+  cursor: pointer;
+}
+
+.ac-mobile__device--on {
+  border-color: color-mix(in srgb, var(--ac-accent) 55%, var(--ac-outline));
+}
+
+.ac-mobile__device strong {
+  display: block;
+  font-size: 15px;
+}
+
+.ac-mobile__device span {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ac-muted);
+}
+
+.ac-mobile__pill {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--ac-surface-2);
+  color: var(--ac-muted);
+}
+
+.ac-mobile__pill--on {
+  color: var(--ac-ok);
+  background: color-mix(in srgb, var(--ac-ok) 14%, transparent);
+}
+
+.ac-mobile__picker {
+  padding: 10px 16px 0;
+}
+
+.ac-mobile__picker label {
+  display: block;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ac-muted);
+  margin-bottom: 6px;
+}
+
+.ac-mobile__picker select {
+  width: 100%;
+  min-height: var(--ac-touch);
+  border-radius: 12px;
+  border: 1px solid var(--ac-outline);
+  background: var(--ac-surface);
+  padding: 0 12px;
+}
+
+.ac-mobile__row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  min-height: 56px;
+  padding: 12px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--ac-outline);
+  background: transparent;
+  cursor: pointer;
+}
+
+.ac-mobile__row--on {
+  background: var(--ac-surface);
+}
+
+.ac-mobile__row strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ac-mobile__row em {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--ac-muted);
+}
+
+.ac-mobile__new {
+  margin: 12px 16px 0;
+  min-height: var(--ac-touch);
+  width: calc(100% - 32px);
+  border: 1px solid var(--ac-outline);
+  border-radius: 12px;
+  background: var(--ac-surface);
+  cursor: pointer;
+}
+
+.ac-mobile__thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ac-mobile__msg {
+  max-width: 92%;
+}
+
+.ac-mobile__msg--user {
+  align-self: flex-end;
+}
+
+.ac-mobile__msg--user p {
+  background: var(--ac-accent);
+  color: var(--ac-accent-fg);
+  border-radius: 16px 16px 4px 16px;
+  padding: 10px 12px;
+}
+
+.ac-mobile__msg--assistant p,
+.ac-mobile__msg--tool p,
+.ac-mobile__msg--error p {
+  background: var(--ac-surface);
+  border-radius: 16px 16px 16px 4px;
+  padding: 10px 12px;
+}
+
+.ac-mobile__msg--error p {
+  color: var(--ac-error);
+}
+
+.ac-mobile__msg small {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ac-muted);
+}
+
+.ac-mobile__msg p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.ac-mobile__composer {
+  border-top: 1px solid var(--ac-outline);
+  padding: 10px 12px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  background: var(--ac-bg);
+}
+
+.ac-mobile__composer textarea {
+  flex: 1;
+  min-height: var(--ac-touch);
+  max-height: 140px;
+  resize: none;
+  border-radius: 12px;
+  border: 1px solid var(--ac-outline);
+  background: var(--ac-surface);
+  padding: 10px 12px;
+}
+
+.ac-mobile__send,
+.ac-mobile__stop {
+  min-height: var(--ac-touch);
+  min-width: 72px;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.ac-mobile__send {
+  background: var(--ac-accent);
+  color: var(--ac-accent-fg);
+}
+
+.ac-mobile__send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ac-mobile__stop {
+  background: var(--ac-surface-2);
+  color: var(--ac-error);
+}
+
+.ac-mobile__empty {
+  margin: auto 0;
+  text-align: center;
+  padding: 24px 8px;
+}

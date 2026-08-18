@@ -20,12 +20,12 @@ export function CloudLoginPage() {
 
   useEffect(() => {
     if (!cloudLinked) return;
-    void navigate({ to: "/account", replace: true });
+    void navigate({ to: "/conversations", replace: true });
   }, [cloudLinked, navigate]);
 
   useEffect(() => {
     const onLinked = () => {
-      void navigate({ to: "/account", replace: true });
+      void navigate({ to: "/conversations", replace: true });
     };
     window.addEventListener("anycode-cloud-linked", onLinked);
     return () => window.removeEventListener("anycode-cloud-linked", onLinked);
@@ -34,7 +34,7 @@ export function CloudLoginPage() {
   const onContinue = () => {
     void linkCloudAccount()
       .then(() => {
-        void navigate({ to: "/account", replace: true });
+        void navigate({ to: "/conversations", replace: true });
       })
       .catch(() => undefined);
   };

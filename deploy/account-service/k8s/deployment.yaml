@@ -50,6 +50,8 @@ spec:
               value: "https://anycode.work"
             - name: ACCOUNT_PORTAL_URL
               value: "https://anycode.work"
+            - name: ACCOUNTS_URL
+              value: "https://accounts.818cloud.com"
             - name: WECHAT_PAY_NOTIFY_URL
               value: "https://anycode.work/api/v1/billing/webhooks/wechat"
             - name: WECHAT_PAY_PRIVATE_KEY_PATH

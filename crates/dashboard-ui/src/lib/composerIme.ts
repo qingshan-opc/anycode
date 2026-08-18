@@ -21,10 +21,7 @@ export function useComposerIme() {
 
   const shouldIgnoreEnterForIme = useCallback((e: React.KeyboardEvent) => {
     if (composingRef.current) return true;
-    const ne = e.nativeEvent;
-    if (ne.isComposing) return true;
-    // Legacy WebKit / some IME backends
-    if (ne.keyCode === 229) return true;
+    if (e.nativeEvent.isComposing) return true;
     return false;
   }, []);
 

@@ -110,13 +110,14 @@ pub async fn register(
     .await?;
 
     sqlx::query(
-        "INSERT INTO entitlements (organization_id, token_limit, api_key_limit, seat_limit, hosted_models_enabled) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO entitlements (organization_id, token_limit, api_key_limit, seat_limit, hosted_models_enabled, credit_balance_fen) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&org_id)
     .bind(limits.token_limit)
     .bind(limits.api_key_limit)
     .bind(limits.seat_limit)
     .bind(limits.hosted_models_enabled)
+    .bind(crate::billing::FREE_TRIAL_CREDIT_FEN)
     .execute(&mut *tx)
     .await?;
 
@@ -147,6 +148,237 @@ pub async fn register(
         .ok_or_else(|| anyhow!("user missing"))?;
     let token = create_session(db, &user_id).await?;
     Ok((user, token))
+}
+
+fn stable_lingxi_join_email(lingxi_user_id: &str) -> String {
+    format!("lx-{lingxi_user_id}@accounts.818cloud.com")
+}
+
+/// Resolve or JIT-provision a portal user from lingxi-accounts SSO claims, then mint a session.
+pub async fn login_or_provision_lingxi(
+    db: &AccountDb,
+    lingxi_user_id: &str,
+    email: Option<&str>,
+    phone: Option<&str>,
+) -> Result<(AuthUser, String)> {
+    let lingxi_user_id = lingxi_user_id.trim();
+    if lingxi_user_id.is_empty() {
+        return Err(anyhow!("missing lingxi_user_id"));
+    }
+
+    if let Some(user) = find_user_by_lingxi_id(db, lingxi_user_id).await? {
+        mark_lingxi_identity_verified(db, &user.id).await?;
+        let token = create_session(db, &user.id).await?;
+        return Ok((user, token));
+    }
+
+    if let Some(email) = email.map(str::trim).filter(|s| !s.is_empty()) {
+        let email = email.to_lowercase();
+        if let Some(user) = find_user_by_email(db, &email).await? {
+            bind_lingxi_user_id(db, &user.id, lingxi_user_id).await?;
+            mark_lingxi_identity_verified(db, &user.id).await?;
+            let token = create_session(db, &user.id).await?;
+            return Ok((user, token));
+        }
+    }
+
+    let join_email = stable_lingxi_join_email(lingxi_user_id);
+    if let Some(user) = find_user_by_email(db, &join_email).await? {
+        bind_lingxi_user_id(db, &user.id, lingxi_user_id).await?;
+        mark_lingxi_identity_verified(db, &user.id).await?;
+        let token = create_session(db, &user.id).await?;
+        return Ok((user, token));
+    }
+
+    let display_name = phone
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            email
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|e| e.split('@').next().map(|s| s.to_string()))
+        })
+        .unwrap_or_else(|| lingxi_user_id.chars().take(8).collect::<String>());
+
+    let user = provision_lingxi_user(db, lingxi_user_id, &join_email, &display_name).await?;
+    let token = create_session(db, &user.id).await?;
+    Ok((user, token))
+}
+
+async fn find_user_by_lingxi_id(db: &AccountDb, lingxi_user_id: &str) -> Result<Option<AuthUser>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, organization_id, email, display_name, role
+        FROM users
+        WHERE lingxi_user_id = ? AND status IN ('active', 'identity_pending')
+        "#,
+    )
+    .bind(lingxi_user_id)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|r| AuthUser {
+        id: r.get("id"),
+        email: r.get("email"),
+        display_name: r.get("display_name"),
+        role: r.get("role"),
+        organization_id: r.get("organization_id"),
+    }))
+}
+
+async fn find_user_by_email(db: &AccountDb, email: &str) -> Result<Option<AuthUser>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, organization_id, email, display_name, role
+        FROM users
+        WHERE email = ? AND status IN ('active', 'identity_pending')
+        "#,
+    )
+    .bind(email)
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|r| AuthUser {
+        id: r.get("id"),
+        email: r.get("email"),
+        display_name: r.get("display_name"),
+        role: r.get("role"),
+        organization_id: r.get("organization_id"),
+    }))
+}
+
+async fn bind_lingxi_user_id(db: &AccountDb, user_id: &str, lingxi_user_id: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE users SET lingxi_user_id = ? WHERE id = ? AND (lingxi_user_id IS NULL OR lingxi_user_id = '')",
+    )
+    .bind(lingxi_user_id)
+    .bind(user_id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+async fn mark_lingxi_identity_verified(db: &AccountDb, user_id: &str) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET status = 'active',
+            identity_status = 'approved',
+            email_verified_at = COALESCE(email_verified_at, NOW()),
+            last_active_at = NOW()
+        WHERE id = ?
+        "#,
+    )
+    .bind(user_id)
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+async fn provision_lingxi_user(
+    db: &AccountDb,
+    lingxi_user_id: &str,
+    email: &str,
+    display_name: &str,
+) -> Result<AuthUser> {
+    let org_id = format!("org_{}", Uuid::new_v4());
+    let user_id = format!("usr_{}", Uuid::new_v4());
+    let org_name = if display_name.trim().is_empty() {
+        "Workspace".to_string()
+    } else {
+        format!("{} workspace", display_name.trim())
+    };
+    let (period_start, period_end) = current_billing_period();
+    let limits = limits_for_plan(db, "free").await;
+    let invoice_id = format!("inv_{}", Uuid::new_v4());
+    // Random password — WeChat SSO users do not use password login by default.
+    let password_hash = hash_password(&format!("lx-sso-{}", Uuid::new_v4()));
+
+    let mut tx = db.pool().begin().await?;
+    sqlx::query(
+        "INSERT INTO organizations (id, name, plan_tier, sso_status) VALUES (?, ?, 'free', 'disabled')",
+    )
+    .bind(&org_id)
+    .bind(&org_name)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO users
+          (id, organization_id, email, display_name, role, password_hash, status,
+           email_verified_at, identity_status, lingxi_user_id)
+        VALUES (?, ?, ?, ?, 'owner', ?, 'active', NOW(), 'approved', ?)
+        "#,
+    )
+    .bind(&user_id)
+    .bind(&org_id)
+    .bind(email)
+    .bind(display_name.trim())
+    .bind(password_hash)
+    .bind(lingxi_user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO user_consents (id, user_id, consent_type, policy_version) VALUES (?, ?, 'privacy', ?)",
+    )
+    .bind(format!("cons_{}", Uuid::new_v4()))
+    .bind(&user_id)
+    .bind("lingxi-sso")
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO subscriptions (organization_id, plan, status, billing_cycle, period_start, period_end)
+        VALUES (?, 'free', 'active', 'monthly', ?, ?)
+        "#,
+    )
+    .bind(&org_id)
+    .bind(period_start)
+    .bind(period_end)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO entitlements (organization_id, token_limit, api_key_limit, seat_limit, hosted_models_enabled, credit_balance_fen) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&org_id)
+    .bind(limits.token_limit)
+    .bind(limits.api_key_limit)
+    .bind(limits.seat_limit)
+    .bind(limits.hosted_models_enabled)
+    .bind(crate::billing::FREE_TRIAL_CREDIT_FEN)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("INSERT INTO billing_contacts (organization_id) VALUES (?)")
+        .bind(&org_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO invoices (
+          id, organization_id, number, period_start, period_end, amount_fen, currency, status
+        ) VALUES (?, ?, ?, ?, ?, 0, 'CNY', 'paid')
+        "#,
+    )
+    .bind(&invoice_id)
+    .bind(&org_id)
+    .bind(format!("AC-{}-0001", Utc::now().format("%Y%m")))
+    .bind(period_start)
+    .bind(period_end)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    tracing::info!(%lingxi_user_id, %user_id, "provisioned lingxi SSO user");
+
+    get_user_by_id(db, &user_id)
+        .await?
+        .ok_or_else(|| anyhow!("user missing after lingxi provision"))
 }
 
 /// Local dev: seed the first portal user when `users` is empty.
@@ -221,13 +453,14 @@ pub async fn bootstrap_portal_user_if_needed(
     .await?;
 
     sqlx::query(
-        "INSERT INTO entitlements (organization_id, token_limit, api_key_limit, seat_limit, hosted_models_enabled) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO entitlements (organization_id, token_limit, api_key_limit, seat_limit, hosted_models_enabled, credit_balance_fen) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&org_id)
     .bind(limits.token_limit)
     .bind(limits.api_key_limit)
     .bind(limits.seat_limit)
     .bind(limits.hosted_models_enabled)
+    .bind(crate::billing::FREE_TRIAL_CREDIT_FEN)
     .execute(&mut *tx)
     .await?;
 
@@ -393,13 +626,14 @@ pub async fn ensure_org_defaults(db: &AccountDb, org_id: &str) -> Result<()> {
             .await?;
     if ent_count == 0 {
         sqlx::query(
-            "INSERT INTO entitlements (organization_id, token_limit, api_key_limit, seat_limit, hosted_models_enabled) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO entitlements (organization_id, token_limit, api_key_limit, seat_limit, hosted_models_enabled, credit_balance_fen) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(org_id)
         .bind(limits.token_limit)
         .bind(limits.api_key_limit)
         .bind(limits.seat_limit)
         .bind(limits.hosted_models_enabled)
+        .bind(crate::billing::FREE_TRIAL_CREDIT_FEN)
         .execute(db.pool())
         .await?;
     }

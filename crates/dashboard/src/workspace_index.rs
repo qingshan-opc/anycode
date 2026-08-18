@@ -77,10 +77,7 @@ pub fn discover_paths_from_sessions() -> Vec<String> {
 }
 
 fn anycode_home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".anycode")
+    anycode_core::anycode_data_dir_or_cwd()
 }
 
 fn parse_index_paths(raw: &str) -> Option<Vec<String>> {

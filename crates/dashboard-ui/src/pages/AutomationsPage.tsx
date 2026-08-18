@@ -104,7 +104,7 @@ export function AutomationsPage(_props: EmbeddedPageProps = {}) {
   const goChatWithSeed = (text: string) => {
     setComposerSeed(text);
     closeControlCenter();
-    void navigate({ to: "/" });
+    void navigate({ to: "/conversations" });
   };
 
   const openCreate = (template?: AutomationTemplate) => {

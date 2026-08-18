@@ -82,8 +82,7 @@ fn cache_dir() -> Option<PathBuf> {
     if let Some(dir) = override_dir {
         return Some(dir);
     }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".anycode/sessions/precompact"))
+    Some(anycode_core::user_home_dir()?.join(".anycode/sessions/precompact"))
 }
 
 fn cache_path(session_id: &str) -> Option<PathBuf> {

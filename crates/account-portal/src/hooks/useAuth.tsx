@@ -37,9 +37,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setUnauthorizedHandler(() => {
       logout();
-      const next = `/login?reason=session_expired`;
-      if (window.location.pathname.startsWith("/console")) {
-        window.location.assign(next);
+      if (window.location.pathname.startsWith("/m")) {
+        window.location.assign(
+          `/api/auth/hop/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`,
+        );
+      } else if (window.location.pathname.startsWith("/console")) {
+        window.location.assign(`/login?reason=session_expired`);
       }
     });
     return () => setUnauthorizedHandler(null);

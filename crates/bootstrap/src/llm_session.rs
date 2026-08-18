@@ -2,8 +2,8 @@
 
 use anycode_config::{default_base_url_for, Config, ModelProfile};
 use anycode_llm::{
-    normalize_provider_id, read_github_oauth_access_token, transport_for_provider_id, LlmTransport,
-    ProviderConfig,
+    normalize_provider_id, read_github_oauth_access_token, suggested_openai_base_for,
+    transport_for_provider_id, LlmTransport, ProviderConfig,
 };
 
 pub fn effective_provider(global: &str, profile: Option<&ModelProfile>) -> String {
@@ -58,7 +58,12 @@ pub fn resolve_openai_shell_config(config: &Config) -> ProviderConfig {
                 .clone()
                 .or_else(|| Some(default_base_url_for(config.llm.plan.as_str()).to_string()))
         } else {
-            config.llm.base_url.clone()
+            config
+                .llm
+                .base_url
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| suggested_openai_base_for(&g).map(str::to_string))
         };
         return ProviderConfig {
             provider: config.llm.provider.clone(),
@@ -277,7 +282,9 @@ pub fn resolve_agent_base_url(
         .llm
         .base_url
         .clone()
-        .or_else(|| global_fallback.clone())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| global_fallback.clone().filter(|s| !s.trim().is_empty()))
+        .or_else(|| suggested_openai_base_for(&en).map(str::to_string))
 }
 
 #[cfg(test)]
@@ -456,6 +463,19 @@ mod tests {
         assert_eq!(
             resolve_profile_api_key(&c, &p, "z.ai").as_deref(),
             Some("per-agent")
+        );
+    }
+
+    #[test]
+    fn deepseek_byok_without_base_url_uses_official_chat_url() {
+        let mut c = base_config();
+        c.llm.provider = "deepseek".to_string();
+        c.llm.model = "deepseek-v4-pro".to_string();
+        c.llm.base_url = None;
+        let cfg = resolve_openai_shell_config(&c);
+        assert_eq!(
+            cfg.base_url.as_deref(),
+            Some("https://api.deepseek.com/chat/completions")
         );
     }
 

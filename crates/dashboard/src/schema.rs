@@ -1346,4 +1346,12 @@ mod tests {
             serde_json::from_str(r#"{"prompt":"hi","recycle_session":true}"#).unwrap();
         assert!(req.recycle_session);
     }
+
+    #[test]
+    fn start_conversation_ignores_unknown_temperature_field() {
+        let req: StartConversationRequest =
+            serde_json::from_str(r#"{"prompt":"hello","temperature":0.7,"kind":"run"}"#).unwrap();
+        assert_eq!(req.prompt, "hello");
+        assert_eq!(req.kind, "run");
+    }
 }

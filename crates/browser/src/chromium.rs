@@ -34,7 +34,7 @@ pub fn chromium_doctor_message() -> String {
     [
         "Chromium not found.",
         "Set ANYCODE_CHROMIUM_PATH, enable desktop browser bundle (ANYCODE_BROWSER_MCP_ROOT),",
-        "or install Google Chrome / Chromium on PATH.",
+        "or install Google Chrome / Microsoft Edge / Chromium.",
     ]
     .join(" ")
 }
@@ -92,6 +92,27 @@ fn system_chromium_candidates() -> Vec<PathBuf> {
         out.push(PathBuf::from(
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         ));
+        out.push(PathBuf::from(
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ));
+        out.push(PathBuf::from(
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        ));
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let local = PathBuf::from(local);
+            out.push(local.join(r"Google\Chrome\Application\chrome.exe"));
+            out.push(local.join(r"Microsoft\Edge\Application\msedge.exe"));
+        }
+        if let Ok(pf) = std::env::var("PROGRAMFILES") {
+            let pf = PathBuf::from(pf);
+            out.push(pf.join(r"Google\Chrome\Application\chrome.exe"));
+            out.push(pf.join(r"Microsoft\Edge\Application\msedge.exe"));
+        }
+        if let Ok(pf86) = std::env::var("PROGRAMFILES(X86)") {
+            let pf86 = PathBuf::from(pf86);
+            out.push(pf86.join(r"Google\Chrome\Application\chrome.exe"));
+            out.push(pf86.join(r"Microsoft\Edge\Application\msedge.exe"));
+        }
     }
     out
 }

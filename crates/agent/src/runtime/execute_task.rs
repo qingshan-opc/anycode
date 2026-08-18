@@ -261,7 +261,24 @@ impl AgentRuntime {
         let verification_shared = Arc::new(std::sync::Mutex::new(
             super::discoverable_verification::SessionVerificationState::default(),
         ));
-        let loop_limits = task.context.loop_limits;
+        let loop_limits = if task_family == Some(anycode_core::TaskFamily::OfficeDelivery) {
+            let capped = task.context.loop_limits.for_office_delivery();
+            if capped != task.context.loop_limits {
+                logger.line(
+                    task.id,
+                    &format!(
+                        "[office_loop_caps] turns={} tools={} (clamped from {}/{})",
+                        capped.max_agent_turns,
+                        capped.max_tool_calls,
+                        task.context.loop_limits.max_agent_turns,
+                        task.context.loop_limits.max_tool_calls
+                    ),
+                );
+            }
+            capped
+        } else {
+            task.context.loop_limits
+        };
         // 预算 hard-stop 的统一失败形态（loop 头 tick、no-tool 恢复、用量记录三处共用）。
         let budget_failure = || TaskResult::Failure {
             error: "运行时预算已用尽".to_string(),

@@ -77,7 +77,7 @@ export function ControlCenterOverlay() {
     (item: FeatureNavItem) => {
       if (item.to === "/") {
         closeControlCenter();
-        void navigate({ to: "/" });
+        void navigate({ to: "/conversations" });
         return;
       }
       setActivePath(item.to);

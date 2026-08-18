@@ -29,9 +29,7 @@ pub fn clear_config_value_override() {
 }
 
 pub fn default_config_path() -> PathBuf {
-    std::env::var("HOME")
-        .map(|h| PathBuf::from(h).join(".anycode").join("config.json"))
-        .unwrap_or_else(|_| PathBuf::from(".anycode/config.json"))
+    anycode_core::anycode_data_dir_or_cwd().join("config.json")
 }
 
 pub fn read_config_value(path: Option<&Path>) -> Result<(PathBuf, Value)> {
@@ -307,12 +305,17 @@ fn merge_profile(obj: &mut Map<String, Value>, patch: &ModelProfileFile) {
             obj.insert("base_url".into(), json!(u.trim()));
         }
     }
-    if let Some(k) = patch.api_key.as_ref().filter(|s| !s.trim().is_empty()) {
-        if let Ok(reference) = crate::secret_store::store_secret("default", k.trim()) {
+    if let Some(k) = patch
+        .api_key
+        .as_ref()
+        .map(|s| crate::secret_store::normalize_secret_token(s))
+        .filter(|s| !s.is_empty())
+    {
+        if let Ok(reference) = crate::secret_store::store_secret("default", &k) {
             obj.insert("api_key_ref".into(), json!(reference));
             obj.insert("api_key".into(), json!(""));
         } else {
-            obj.insert("api_key".into(), json!(k.trim()));
+            obj.insert("api_key".into(), json!(k));
         }
     }
 }
@@ -369,12 +372,17 @@ pub fn patch_llm_config_value(cfg: &mut Value, patch: &LlmConfigPatch) -> Result
             obj.insert("base_url".into(), json!(u.trim()));
         }
     }
-    if let Some(k) = patch.api_key.as_ref().filter(|s| !s.trim().is_empty()) {
-        if let Ok(reference) = crate::secret_store::store_secret("default", k.trim()) {
+    if let Some(k) = patch
+        .api_key
+        .as_ref()
+        .map(|s| crate::secret_store::normalize_secret_token(s))
+        .filter(|s| !s.is_empty())
+    {
+        if let Ok(reference) = crate::secret_store::store_secret("default", &k) {
             obj.insert("api_key_ref".into(), json!(reference));
             obj.insert("api_key".into(), json!(""));
         } else {
-            obj.insert("api_key".into(), json!(k.trim()));
+            obj.insert("api_key".into(), json!(k));
         }
     }
     if let Some(creds) = patch.provider_credentials.as_ref() {
@@ -444,8 +452,37 @@ pub fn patch_llm_config_value(cfg: &mut Value, patch: &LlmConfigPatch) -> Result
     }
 
     apply_registry_sync(cfg)?;
+    ensure_llm_scalar_defaults(cfg);
 
     Ok(())
+}
+
+/// GUI / cloud-sync patches write provider+model without temperature/max_tokens.
+fn ensure_llm_scalar_defaults(cfg: &mut Value) {
+    let Some(obj) = cfg.as_object_mut() else {
+        return;
+    };
+    if obj.get("temperature").is_none() {
+        obj.insert("temperature".into(), json!(0.7));
+    }
+    if obj.get("max_tokens").is_none() {
+        obj.insert("max_tokens".into(), json!(8192));
+    }
+    let provider = obj
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let missing_base = obj
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true);
+    if missing_base {
+        if let Some(url) = crate::provider_catalog::suggested_openai_base_for(&provider) {
+            obj.insert("base_url".into(), json!(url));
+        }
+    }
 }
 
 pub fn patch_llm_config(path: Option<&Path>, patch: &LlmConfigPatch) -> Result<(PathBuf, Value)> {
@@ -541,5 +578,54 @@ mod tests {
             cfg.pointer("/models/image/model").and_then(|v| v.as_str()),
             Some("dall-e-3")
         );
+    }
+
+    #[test]
+    fn default_config_path_uses_home_dir_not_cwd_fallback() {
+        let path = default_config_path();
+        assert_eq!(
+            path,
+            crate::copilot_token::anycode_home_dir().join("config.json")
+        );
+        assert!(path.ends_with("config.json"));
+    }
+
+    #[test]
+    fn patch_fills_missing_temperature_and_max_tokens() {
+        let mut cfg = json!({
+            "provider": "anycode_cloud",
+            "model": "deepseek-v4-flash"
+        });
+        patch_llm_config_value(
+            &mut cfg,
+            &LlmConfigPatch {
+                provider: Some("anycode_cloud".into()),
+                model: Some("deepseek-v4-flash".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.get("temperature").and_then(|v| v.as_f64()), Some(0.7));
+        assert_eq!(cfg.get("max_tokens").and_then(|v| v.as_u64()), Some(8192));
+    }
+
+    #[test]
+    fn patch_deepseek_byok_fills_official_base_url() {
+        let mut cfg = json!({});
+        patch_llm_config_value(
+            &mut cfg,
+            &LlmConfigPatch {
+                provider: Some("deepseek".into()),
+                model: Some("deepseek-v4-pro".into()),
+                api_key: Some("sk-test\r\n".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.get("base_url").and_then(|v| v.as_str()),
+            Some("https://api.deepseek.com/chat/completions")
+        );
+        assert_eq!(cfg.get("temperature").and_then(|v| v.as_f64()), Some(0.7));
     }
 }

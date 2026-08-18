@@ -1,6 +1,6 @@
 [package]
 name = "anycode-browser-cef"
-version = "0.42.1"
+version = "0.43.2"
 edition = "2021"
 description = "Embedded Chromium (CEF) host for anyCode Workbench browser panel"
 license = "MIT"

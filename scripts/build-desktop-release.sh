@@ -350,6 +350,7 @@ else
     "
   fi
   SIGN_APP_BUNDLE="$ROOT/target/release/bundle/macos/anyCode.app"
+  BUNDLE_DIR="$ROOT/target/release/bundle"
 fi
 
 # Embed Chromium Embedded Framework + Helper apps (hundreds of MB). Skip when
@@ -396,6 +397,33 @@ fi
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   step "repackage DMG with Applications drag target" "$ROOT/scripts/package-desktop-dmg.sh"
+  if [[ "${ANYCODE_DESKTOP_LOCAL_RELEASE:-}" != "1" ]]; then
+    REL_ENV="${ANYCODE_RELEASE_ENV:-$HOME/.anycode/release.env}"
+    if [[ -f "$REL_ENV" ]]; then
+      # shellcheck source=/dev/null
+      source "$REL_ENV"
+    fi
+    DMG_ARCH="${ANYCODE_DMG_ARCH_TAG:-}"
+    if [[ -z "$DMG_ARCH" ]]; then
+      case "$(uname -m)" in
+        arm64) DMG_ARCH=aarch64 ;;
+        x86_64) DMG_ARCH=x86_64 ;;
+        *) DMG_ARCH="$(uname -m)" ;;
+      esac
+    fi
+    VERSION="$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f&&/^version/{gsub(/.*version = "/,""); gsub(/".*/,""); print; exit}' Cargo.toml)"
+    DMG_CANDIDATES=(
+      "$BUNDLE_DIR/dmg/anyCode_${VERSION}_${DMG_ARCH}.dmg"
+      "$ROOT/target/${TAURI_TARGET:-}/release/bundle/dmg/anyCode_${VERSION}_${DMG_ARCH}.dmg"
+      "$ROOT/target/release/bundle/dmg/anyCode_${VERSION}_${DMG_ARCH}.dmg"
+    )
+    for dmg in "${DMG_CANDIDATES[@]}"; do
+      if [[ -f "$dmg" ]]; then
+        step "sign + notarize + staple DMG" "$ROOT/scripts/notarize-mac-dmg.sh" "$dmg"
+        break
+      fi
+    done
+  fi
 fi
 
 TOTAL=$((SECONDS - BUILD_START))

@@ -1,5 +1,4 @@
 import { Suspense, useCallback, useEffect, useRef } from "react";
-import { Link } from "@tanstack/react-router";
 import type { WorkbenchTab } from "@/api/types/workbench";
 import { ConversationThread } from "@/components/ConversationThread";
 import { ProjectGroupedSessionList } from "@/components/session/ProjectGroupedSessionList";
@@ -203,23 +202,6 @@ export function ConversationWorkspace() {
     return <p className="text-sm text-secondary p-4">{t("common.loading")}</p>;
   }
 
-  if (rows.length === 0 && active === "all" && sidebarFilteredRows.length === 0) {
-    return (
-      <div className="p-6 border border-outline-variant rounded-lg bg-surface-container-lowest m-4">
-        <EmptyState
-          title={t("conversations.emptyTitle")}
-          description={t("conversations.emptyDesc")}
-          icon="forum"
-        />
-        <div className="text-center mt-4">
-          <Link to="/" className="dw-btn-primary no-underline inline-flex">
-            {t("conversations.newSession")}
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   if (rows.length === 0 && active !== "all" && !selected) {
     return (
       <EmptyState
@@ -232,10 +214,6 @@ export function ConversationWorkspace() {
         icon="forum"
       />
     );
-  }
-
-  if (!selected && rows.length === 0) {
-    return null;
   }
 
   const onSelectWorkbenchTab = (tab: WorkbenchTab) => {

@@ -34,11 +34,11 @@ describe("composerModels", () => {
   it("sorts cloud auto before other cloud and local models", () => {
     const items = [
       chatItem({ id: "local", provider: "openai", model: "gpt-4" }),
-      chatItem({ id: "cloud-agnes", provider: "anycode_cloud", model: "agnes-chat", source: "cloud" }),
+      chatItem({ id: "cloud-flash", provider: "anycode_cloud", model: "deepseek-v4-flash", source: "cloud" }),
       chatItem({ id: "cloud-auto", provider: "anycode_cloud", model: "auto", source: "cloud" }),
     ];
     const options = listChatModels(items);
-    expect(options.map((o) => o.id)).toEqual(["cloud-auto", "cloud-agnes", "local"]);
+    expect(options.map((o) => o.id)).toEqual(["cloud-auto", "cloud-flash", "local"]);
   });
 
   it("hides cloud models when includeCloud is false", () => {
@@ -168,13 +168,13 @@ describe("composerModels", () => {
   it("allows attachments when active chat has vision capability", () => {
     const registry: ModelsRegistryView = {
       config_present: true,
-      active: { chat: "agnes" },
+      active: { chat: "vision-chat" },
       model_fallback: {},
       items: [
         chatItem({
-          id: "agnes",
+          id: "vision-chat",
           provider: "anycode_cloud",
-          model: "agnes-chat",
+          model: "gpt-4o",
           capabilities: ["chat", "vision"],
         }),
       ],

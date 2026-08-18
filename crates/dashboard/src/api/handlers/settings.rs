@@ -124,6 +124,9 @@ pub async fn get_doctor(State(state): State<AppState>) -> impl IntoResponse {
     report
         .checks
         .extend(crate::governance::workbench_doctor::workbench_doctor_checks(&state.db).await);
+    report
+        .checks
+        .extend(crate::memory_ops::memory_doctor_checks().await);
     report.status = crate::service_governance::doctor_overall_status(&report.checks).into();
     let has_projects = state
         .db

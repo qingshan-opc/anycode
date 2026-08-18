@@ -66,6 +66,7 @@ export function DownloadsPage() {
   const t = useT();
   const [releases, setReleases] = useState<ReleasesManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mobileQr, setMobileQr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +115,20 @@ export function DownloadsPage() {
         }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void import("qrcode").then((QRCode) =>
+      QRCode.toDataURL(siteUrl("mobile"), { width: 192, margin: 1, color: { dark: "#191919", light: "#ffffff" } }).then(
+        (url) => {
+          if (!cancelled) setMobileQr(url);
+        },
+      ),
+    );
     return () => {
       cancelled = true;
     };
@@ -190,6 +205,26 @@ export function DownloadsPage() {
               );
             })}
           </div>
+
+          <article className="nx-downloads-card nx-downloads-card--mobile">
+            <div className="nx-downloads-card__meta">
+              <span className="nx-downloads-card__os">{t("downloads.mobileTitle")}</span>
+              <strong>WeChat · /m</strong>
+            </div>
+            <p className="nx-page-hero__lead">{t("downloads.mobileLede")}</p>
+            {mobileQr ? (
+              <img
+                src={mobileQr}
+                alt={siteUrl("mobile")}
+                width={128}
+                height={128}
+                className="nx-downloads-card__qr"
+              />
+            ) : null}
+            <Link className="orbit-btn orbit-btn--primary nx-downloads-card__cta" to={SITE_PATHS.mobile}>
+              {t("downloads.mobileOpen")}
+            </Link>
+          </article>
 
           <nav className="nx-downloads-onepage__links" aria-label={t("downloads.otherChannels")}>
             <a href="/downloads/SHA256SUMS.txt">{t("downloads.checksums")}</a>

@@ -225,9 +225,9 @@ pub async fn credit_balance_fen(db: &AccountDb, org_id: &str) -> Result<i64> {
     Ok(balance)
 }
 
-pub async fn check_quota(db: &AccountDb, org_id: &str, needed_tokens: i64) -> Result<bool> {
+pub async fn check_quota(db: &AccountDb, org_id: &str, _needed_tokens: i64) -> Result<bool> {
     let row = sqlx::query(
-        "SELECT token_limit, tokens_used, hosted_models_enabled FROM entitlements WHERE organization_id = ?",
+        "SELECT credit_balance_fen, hosted_models_enabled FROM entitlements WHERE organization_id = ?",
     )
     .bind(org_id)
     .fetch_one(db.pool())
@@ -236,9 +236,8 @@ pub async fn check_quota(db: &AccountDb, org_id: &str, needed_tokens: i64) -> Re
     if !hosted {
         return Ok(false);
     }
-    let limit: i64 = row.get("token_limit");
-    let used: i64 = row.get("tokens_used");
-    Ok(used + needed_tokens <= limit)
+    let credit: i64 = row.get("credit_balance_fen");
+    Ok(credit > 0)
 }
 
 pub async fn resolve_org_by_api_key(db: &AccountDb, api_key: &str) -> Result<Option<String>> {

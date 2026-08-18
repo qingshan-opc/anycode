@@ -12,6 +12,7 @@ alwaysApply: true
 3. 推送后用 `docker manifest inspect <image>:<tag>` 确认有非空 `layers`；若无 layers，视为推送失败并重推
 4. 入口脚本：`./scripts/build-account-image.sh` → `deploy/account-service/build-push.sh`
 5. WeChat PEM **仅运行时挂载**到 `/app/wechat-certs/`（K8s Secret `anycode-wechat-certs`），**禁止**打进镜像
-6. 排障：看 `https://anycode.work/health` 的 `wechat_pay_configured` / `wechat_pay_missing`
+6. **禁止**把桌面安装包（dmg/exe/tar.gz）打进镜像；上传 MinIO：`./scripts/upload-desktop-downloads-s3.sh`（见 `desktop-downloads-s3` 规则）
+7. 排障：看 `https://anycode.work/health` 的 `wechat_pay_configured` / `wechat_pay_missing`
 
 历史踩坑（2026-07）：`0.2.4` 曾因 attestation 大小为空；支付失败曾因 `/run/secrets` 被挂载覆盖证书；商户号/AppID 勿提交 git（GitHub secret scanning）。

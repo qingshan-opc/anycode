@@ -276,11 +276,14 @@ impl AgentRuntime {
             .await?;
         let task_id = kernel.tool_ctx.task_id;
         sink.apply_mut(|msgs| {
-            let cleared = crate::compact::apply_microcompact_keep_latest_turn(msgs);
-            if cleared > 0 {
+            let stats = crate::compact::apply_live_context_trim(msgs);
+            if stats.any() {
                 logger.line(
                     task_id,
-                    &format!("[microcompact] cleared={cleared} keep=latest_turn"),
+                    &format!(
+                        "[microcompact] cleared={} stubbed_writes={} cleared_reasoning={} keep=latest_turn",
+                        stats.cleared_results, stats.stubbed_writes, stats.cleared_reasoning
+                    ),
                 );
             }
         })

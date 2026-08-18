@@ -7,8 +7,7 @@ import {
 } from "../api";
 
 const PROVIDERS = [
-  { id: "deepseek", label: "DeepSeek", placeholder: "https://api.deepseek.com" },
-  { id: "agnes", label: "Agnes", placeholder: "https://apihub.agnes-ai.com/v1/chat/completions" },
+  { id: "deepseek", label: "DeepSeek", placeholder: "https://api.deepseek.com/chat/completions" },
 ] as const;
 
 export default function PoolPage() {
@@ -30,7 +29,7 @@ export default function PoolPage() {
 
   const placeholder =
     PROVIDERS.find((p) => p.id === providerId)?.placeholder ??
-    "https://api.deepseek.com";
+    "https://api.deepseek.com/chat/completions";
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
@@ -55,7 +54,7 @@ export default function PoolPage() {
     <div>
       <h1>上游账号池</h1>
       <p className="ops-hint">
-        平台代付用的厂商 Key（DeepSeek / Agnes）。用户 Cloud API Key 在官网控制台维护，勿混用。
+        平台代付用的厂商 Key（DeepSeek）。用户 Cloud API Key 在官网控制台维护，勿混用。
       </p>
       <form className="ops-card ops-form" onSubmit={onCreate}>
         <h2>新增账号</h2>

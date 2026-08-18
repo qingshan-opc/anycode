@@ -13,10 +13,10 @@ pub struct DiskTaskOutput {
 impl DiskTaskOutput {
     /// 默认落盘：~/.anycode/tasks
     pub fn new_default() -> Result<Self, CoreError> {
-        let home = std::env::var("HOME").map_err(|e| anyhow::anyhow!("HOME env missing: {}", e))?;
-        Ok(Self {
-            root_dir: PathBuf::from(home).join(".anycode").join("tasks"),
-        })
+        let root_dir = crate::anycode_data_dir()
+            .ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?
+            .join("tasks");
+        Ok(Self { root_dir })
     }
 
     pub fn new(root_dir: PathBuf) -> Self {

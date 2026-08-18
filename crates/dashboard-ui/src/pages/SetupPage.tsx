@@ -102,7 +102,7 @@ export function SetupPage() {
     try {
       await setupClient.setupEnsureWorkspace();
       await setupClient.setupComplete({ scan_projects: true });
-      void navigate({ to: "/", replace: true });
+      void navigate({ to: "/conversations", replace: true });
     } catch (e) {
       setFinishing(false);
       setFinishError(e instanceof Error ? e.message : String(e));

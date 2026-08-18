@@ -386,21 +386,13 @@ impl ZaiClient {
 }
 
 pub(crate) fn sanitize_header_token(raw: &str, provider_name: &str) -> Result<String, CoreError> {
-    let token = raw.trim();
+    let token = crate::secret_store::normalize_secret_token(raw);
     if token.is_empty() {
         return Err(CoreError::LLMError(format!(
             "{provider_name} api_key is empty after trimming whitespace"
         )));
     }
-    if token
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\u{7f}'))
-    {
-        return Err(CoreError::LLMError(format!(
-            "{provider_name} api_key contains control characters; please reconfigure the key (remove newline/hidden chars)"
-        )));
-    }
-    Ok(token.to_string())
+    Ok(token)
 }
 
 fn normalize_zai_base_url(raw: &str) -> String {
@@ -1598,9 +1590,9 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_header_token_rejects_control_chars() {
-        let err = sanitize_header_token("sk-test\n123", "z.ai").unwrap_err();
-        assert!(err.to_string().contains("control characters"));
+    fn sanitize_header_token_strips_windows_clipboard_junk() {
+        let out = sanitize_header_token("sk-test\r\n123\u{200b}", "deepseek").unwrap();
+        assert_eq!(out, "sk-test123");
     }
 
     #[test]

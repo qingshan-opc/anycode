@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Changed
+
+- **Agent 上下文对齐 Claude（降 PPT token）**：云端模型 turn≥2 延后工具表（核心∪已用∪ToolSearch）；成功 FileWrite/Edit 后 stub 参数；旧 `reasoning_content` 只留最近一轮；Skill/TaskOutput/Screenshot 可 microcompact；默认自动压缩 40% / 硬顶 32k；办公任务轮次帽 48/64。
+- **anycode-ppt**：优先 `slides.json` + `run compile`；父会话只留大纲；Windows (`win32`) 启用；禁止模板全拷与一页一验证。
+
+## 0.43.2
+
+### Added
+
+- **手机指挥**（`https://anycode.work/m`）：微信 hop 登录（与门户同一 lingxi 应用，同一 OpenID），在手机上指挥已登录电脑上的会话。
+
+### Changed
+
+- **云端套餐改钱包制**：用量只扣 `credit_balance`（DeepSeek 官方非高峰 ×2）。Free 赠 ¥10；Plus ¥49 / Pro ¥199 / Team ¥699，支付多少入账多少。不再承诺天文 token 包。
+- **桌面端不再展示远程会话**：Mac / Windows 只保留本机会话；远程会话只给手机端用。电脑仍作为 `home_device` 执行。
+
+### Fixed
+
+- **macOS 安装损坏**：官网 DMG 补签名 + 公证 + 装订票据。下载后 Gatekeeper 不再把未签名镜像判成损坏。
+
+## 0.43.1
+
+### Added
+
+- **按设备指挥**：云端会话钉在 `home_device`；侧栏可切换本机/其他设备，执行仍在那台电脑。
+
+### Changed
+
+- 登录即可聊，不再把 `/setup` 当启动门闩；默认进入 `/conversations`。
+- 桌面更新入口移到左侧头像上方；安装完成后自动重启。
+- 云端托管下线 Agnes；目录与上游池仅保留 DeepSeek V4 Flash / Pro。
+
+### Fixed
+
+- **云端 DeepSeek**：`https://anycode.work/v1/chat/completions` 被门户静态文件吃掉（405），托管对话无法转发。现由账号服务内嵌网关处理，并补全 DeepSeek `/chat/completions` 路径。
+- **Windows**：Cloud Auto 发送前等待启用所选模型；会话区不再整壳拖拽；流式正文变长时跟随滚到底；发现本机 Chrome / Edge。
+- **Mac**：冷启动提前显示窗口并处理 Dock Reopen；bootstrap 令牌可重试；`latest.json` 按平台取最新包。
+
+## 0.42.4
+
+### Fixed
+
+- **Windows**：DeepSeek BYOK 未填 `base_url` 时无法发消息。现回落到官方 Chat Completions URL，并清洗剪贴板里的 CR/BOM/零宽字符。
+
+## 0.42.3
+
+### Fixed
+
+- **Windows**：设置/云同步写入的 `config.json` 常缺 `temperature`，发消息时 typed 解析失败。加载与 LLM patch 现补默认采样字段；进程启动时把 `USERPROFILE` 镜像到 `HOME`。
+
+## 0.42.2
+
+### Fixed
+
+- **Windows**：发消息 `400 …/conversations/start: environment variable not found`。配置加载误用 Unix `HOME`；现按 `USERPROFILE` / `dirs::home_dir()` 解析 `~/.anycode`。
+
 ## 0.39.0
 
 ### Added

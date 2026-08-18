@@ -28,11 +28,16 @@ export function McpServersPanel() {
   const [parseError, setParseError] = useState<string | null>(null);
   const [strict, setStrict] = useState<boolean | null>(null);
   const [allowlist, setAllowlist] = useState<string | null>(null);
+  const [maxCalls, setMaxCalls] = useState<string | null>(null);
 
   const save = useMutation({
     mutationFn: (payload: {
       servers: unknown[];
-      governance: { strict: boolean; allowed_tools: string[] };
+      governance: {
+        strict: boolean;
+        allowed_tools: string[];
+        max_calls_per_server: number;
+      };
     }) => api.setMcpServers(payload.servers, payload.governance),
     onSuccess: () => {
       setParseError(null);
@@ -49,6 +54,11 @@ export function McpServersPanel() {
   const strictVal = strict ?? Boolean(gov?.strict);
   const allowlistVal =
     allowlist ?? (gov?.allowed_tools?.length ? gov.allowed_tools.join(", ") : "");
+  const maxCallsVal =
+    maxCalls ??
+    (gov?.max_calls_per_server != null && gov.max_calls_per_server > 0
+      ? String(gov.max_calls_per_server)
+      : "");
 
   return (
     <SectionCard title={t("settings.mcpServers.title")}>
@@ -79,6 +89,17 @@ export function McpServersPanel() {
           onChange={(e) => setAllowlist(e.target.value)}
         />
       </label>
+      <label className="flex flex-col gap-1 text-sm mt-2">
+        <span className="text-secondary">{t("settings.mcpServers.maxCalls")}</span>
+        <input
+          className="dw-input text-sm font-code w-40"
+          type="number"
+          min={0}
+          value={maxCallsVal}
+          placeholder="0 = unlimited"
+          onChange={(e) => setMaxCalls(e.target.value)}
+        />
+      </label>
       {gov?.env_override_note ? (
         <p className="text-xs text-secondary m-0 mt-2">{gov.env_override_note}</p>
       ) : null}
@@ -102,13 +123,21 @@ export function McpServersPanel() {
                 .split(/[,\n]/)
                 .map((s) => s.trim())
                 .filter(Boolean);
+              const parsedMax = Number.parseInt(maxCallsVal, 10);
+              const max_calls_per_server =
+                Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 0;
               save.mutate({
                 servers: parsed,
-                governance: { strict: strictVal, allowed_tools: tools },
+                governance: {
+                  strict: strictVal,
+                  allowed_tools: tools,
+                  max_calls_per_server,
+                },
               });
               setDraft(null);
               setStrict(null);
               setAllowlist(null);
+              setMaxCalls(null);
             } catch {
               setParseError(t("settings.mcpServers.invalidJson"));
             }

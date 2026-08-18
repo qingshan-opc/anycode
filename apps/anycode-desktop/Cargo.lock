@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-agent"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-core",
  "anycode-llm",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-apple-media"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-bootstrap"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-agent",
  "anycode-browser",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-browser"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-browser-cef"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "cc",
  "cef",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-config"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-agent",
  "anycode-core",
@@ -288,11 +288,12 @@ dependencies = [
 
 [[package]]
 name = "anycode-core"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "dirs 5.0.1",
  "regex",
  "serde",
  "serde_json",
@@ -304,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-dashboard"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-agent",
  "anycode-bootstrap",
@@ -358,11 +359,11 @@ dependencies = [
 
 [[package]]
 name = "anycode-dashboard-ipc"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
+ "anycode-core",
  "anyhow",
  "chrono",
- "dirs 5.0.1",
  "serde",
  "serde_json",
  "uuid",
@@ -370,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-desktop"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-apple-media",
  "anycode-browser-cef",
@@ -396,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-llm"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-apple-media",
  "anycode-core",
@@ -425,14 +426,14 @@ dependencies = [
 
 [[package]]
 name = "anycode-locale"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "sys-locale",
 ]
 
 [[package]]
 name = "anycode-memory"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "aes-gcm",
  "anycode-core",
@@ -459,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-relay-gateway"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -474,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-security"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-core",
  "anyhow",
@@ -493,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-setup"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-core",
  "anycode-llm",
@@ -510,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "anycode-tools"
-version = "0.42.1"
+version = "0.43.2"
 dependencies = [
  "anycode-browser",
  "anycode-core",

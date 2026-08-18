@@ -142,6 +142,13 @@ else
   echo "    (0s)"
 fi
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  step "ad-hoc resign after resource sync (keeps local Gatekeeper from saying damaged)" bash -ec "
+    xattr -cr \"$INSTALL\" 2>/dev/null || true
+    codesign --force --deep --sign - --timestamp=none \"$INSTALL\"
+  "
+fi
+
 if [[ "${ANYCODE_DESKTOP_OPEN:-1}" != "0" ]]; then
   killall anycode-desktop 2>/dev/null || true
   sleep 0.5

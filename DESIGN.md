@@ -49,12 +49,17 @@ Skins: `indigo` (default), `mono`, `coral` — set via `data-skin` on `:root`.
 
 ## Cloud catalog (product)
 
-Only **Cloud Auto** (`auto`) and **Agnes Chat** (`agnes-chat`) in UI, API, and DB seeds. Retired models stay disabled in DB for usage history.
+Only **Cloud Auto** (`auto`), **DeepSeek V4 Flash** (`deepseek-v4-flash`), and **DeepSeek V4 Pro** (`deepseek-v4-pro`) in UI, API, and DB seeds. Agnes is retired.
 
 ## Platform capability contract
 
 - **Local Agent runtime** is the product core: projects, tools, skills, approvals, and automations execute locally.
 - **Extensible local models** are a platform capability, not a promise tied to one model family. Product copy should describe managed and user-configured local models without presenting MiniCPM or any benchmark label as the primary identity.
-- **Optional cloud inference** is limited to Cloud Auto and Agnes Chat in public product surfaces.
+- **Optional cloud inference** is limited to Cloud Auto and DeepSeek V4 Flash/Pro in public product surfaces.
 - **Native media on macOS** includes Apple Speech input, Apple Vision OCR, local TTS, and Keychain-backed credential storage.
 - Avoid claims such as “first”, “SOTA”, “best”, or “fully approved” unless a dated, reviewable evidence record exists.
+
+## Surfaces
+
+- **Desktop (Mac / Windows)**: local Agent only — local projects and local sessions. The app still registers as `home_device` and executes remote prompts. It must not show a cloud remote-conversation list or a device switcher.
+- **Phone (`/m`)**: WeChat hop login through the same lingxi Official Account as the portal (same OpenID / `lingxi_user_id`). Lists this account’s computers and commands those conversations. Touch targets stay at least 44×44.

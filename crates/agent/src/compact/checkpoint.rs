@@ -17,8 +17,7 @@ struct CompactionCheckpointRow {
 }
 
 fn checkpoint_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".anycode/sessions/checkpoints.jsonl"))
+    Some(anycode_core::user_home_dir()?.join(".anycode/sessions/checkpoints.jsonl"))
 }
 
 /// Best-effort append of compaction checkpoint metadata (does not block compaction on failure).

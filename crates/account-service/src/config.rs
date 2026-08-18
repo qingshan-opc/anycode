@@ -11,6 +11,8 @@ pub struct ServiceConfig {
     pub cors_origins: Vec<String>,
     pub portal_dir: Option<PathBuf>,
     pub portal_url: String,
+    /// lingxi-accounts origin for WeChat QR SSO hop (no trailing slash).
+    pub accounts_url: String,
     pub stripe_secret_key: Option<String>,
     pub stripe_webhook_secret: Option<String>,
     pub stripe_price_pro: Option<String>,
@@ -67,6 +69,10 @@ impl ServiceConfig {
             .filter(|p| p.is_dir());
         let portal_url =
             env::var("ACCOUNT_PORTAL_URL").unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
+        let accounts_url = env::var("ACCOUNTS_URL")
+            .unwrap_or_else(|_| "https://accounts.818cloud.com".into())
+            .trim_end_matches('/')
+            .to_string();
         let stripe_secret_key = env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty());
         let stripe_webhook_secret = env::var("STRIPE_WEBHOOK_SECRET")
             .ok()
@@ -190,6 +196,7 @@ impl ServiceConfig {
             cors_origins,
             portal_dir,
             portal_url,
+            accounts_url,
             stripe_secret_key,
             stripe_webhook_secret,
             stripe_price_pro,

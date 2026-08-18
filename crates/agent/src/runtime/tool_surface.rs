@@ -175,8 +175,8 @@ pub(crate) fn ensure_nonempty_tool_surface(
 }
 
 /// 每轮注入的工具 schema：
-/// - turn 1：weak 本地模型只给核心工具（[`WEAK_LOCAL_CORE_TOOLS`]），其余全量；
-/// - turn ≥ 2：收敛为「核心工具 ∪ 会话已用工具」，控制长会话每轮请求体积。
+/// - turn 1：weak 本地模型只给核心工具（[`WEAK_LOCAL_CORE_TOOLS`]）；云端仍全量（首轮发现面）。
+/// - turn ≥ 2：**所有模型**收敛为「核心工具 ∪ 会话已用工具」，控制长会话每轮请求体积。
 ///   `ToolSearch` 是逃生舱：模型可发现并解锁核心集之外的任何工具。
 pub(crate) fn schemas_for_model_turn(
     all: &[ToolSchema],
@@ -193,11 +193,6 @@ pub(crate) fn schemas_for_model_turn(
                 .cloned()
                 .collect();
         }
-        return all.to_vec();
-    }
-    if !weak {
-        // 云端模型上下文充裕：turn≥2 保持全量工具，避免 Browser/mcp/生成类工具被隐藏后
-        // 被迫额外 ToolSearch 解锁——那是「改页面」这类任务多出步骤的常见来源。
         return all.to_vec();
     }
     all.iter()
@@ -457,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn cloud_model_turn_ge_2_keeps_full_tool_set() {
+    fn cloud_model_turn_ge_2_defers_like_weak() {
         let reg = reg_with(&[
             "FileRead",
             "FileWrite",
@@ -485,15 +480,22 @@ mod tests {
             base_url: None,
             ..Default::default()
         };
-        // 云端模型：turn 1 与 turn≥2 都应保持全量工具（含 Browser/mcp/生成类），
-        // 避免非核心工具被隐藏后被迫额外 ToolSearch 解锁。
-        for turn in [1usize, 2, 3, 5] {
-            let out = schemas_for_model_turn(&all, &model, turn, &HashSet::new());
-            assert_eq!(out.len(), all.len(), "turn={turn} 云端应保持全量工具");
-        }
-        // 核心工具仍可用
-        let out = schemas_for_model_turn(&all, &model, 4, &HashSet::new());
-        assert!(out.iter().any(|sc| sc.name == "BrowserSnapshot"));
-        assert!(out.iter().any(|sc| sc.name == "mcp__foo__bar"));
+        // turn 1：云端仍全量，便于首轮发现 Browser/mcp 等。
+        let turn1 = schemas_for_model_turn(&all, &model, 1, &HashSet::new());
+        assert_eq!(turn1.len(), all.len());
+        // turn≥2：与弱模型同策略 — 核心 ∪ 已用；未用过的 Browser/mcp 需 ToolSearch。
+        let deferred = schemas_for_model_turn(&all, &model, 2, &HashSet::new());
+        assert!(deferred.len() < all.len());
+        assert!(deferred
+            .iter()
+            .all(|sc| ALWAYS_INJECT_CORE_TOOLS.contains(&sc.name.as_str())));
+        assert!(!deferred.iter().any(|sc| sc.name == "BrowserSnapshot"));
+        assert!(!deferred.iter().any(|sc| sc.name == "mcp__foo__bar"));
+        let mut used = HashSet::new();
+        used.insert("BrowserSnapshot".to_string());
+        used.insert("mcp__foo__bar".to_string());
+        let unlocked = schemas_for_model_turn(&all, &model, 3, &used);
+        assert!(unlocked.iter().any(|sc| sc.name == "BrowserSnapshot"));
+        assert!(unlocked.iter().any(|sc| sc.name == "mcp__foo__bar"));
     }
 }

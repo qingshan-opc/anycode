@@ -748,6 +748,18 @@ body:has(.app--orbit-site) {
   color: var(--orbit-accent);
 }
 
+.nx-downloads-card--mobile {
+  margin-bottom: 20px;
+}
+
+.nx-downloads-card__qr {
+  width: 128px;
+  height: 128px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px;
+}
+
 /* Legacy downloads card — orbit contrast fix (cached builds) */
 .app--orbit-site .nx-downloads__hero-card {
   border-color: var(--orbit-line);

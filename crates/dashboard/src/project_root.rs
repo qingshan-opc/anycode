@@ -84,7 +84,7 @@ pub fn is_dangerous_root_path(root: &Path) -> bool {
     if root == Path::new("/") || root == Path::new("\\") {
         return true;
     }
-    if let Ok(home) = std::env::var("HOME").map(PathBuf::from) {
+    if let Some(home) = anycode_core::user_home_dir() {
         if root == home {
             return true;
         }
@@ -154,8 +154,8 @@ mod tests {
     #[test]
     fn rejects_home_and_root_paths() {
         assert!(is_dangerous_root_path(Path::new("/")));
-        if let Ok(home) = std::env::var("HOME") {
-            assert!(is_dangerous_root_path(Path::new(&home)));
+        if let Some(home) = anycode_core::user_home_dir() {
+            assert!(is_dangerous_root_path(&home));
         }
     }
 

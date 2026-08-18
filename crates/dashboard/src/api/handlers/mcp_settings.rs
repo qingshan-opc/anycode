@@ -51,7 +51,11 @@ fn write_mcp_governance(cfg: &mut Value, body: &McpGovernanceBody) {
         gov.insert("strict".into(), json!(v));
     }
     if let Some(v) = body.max_calls_per_server {
-        gov.insert("max_calls_per_server".into(), json!(v));
+        if v == 0 {
+            gov.remove("max_calls_per_server");
+        } else {
+            gov.insert("max_calls_per_server".into(), json!(v));
+        }
     }
     if let Some(tools) = &body.allowed_tools {
         gov.insert(

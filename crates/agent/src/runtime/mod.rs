@@ -403,7 +403,9 @@ impl AgentRuntime {
         task_id: TaskId,
         logger: &RunLogger,
     ) -> Result<LLMResponse, CoreError> {
-        let messages = crate::reply_language::inject_ephemeral_reply_language_reminder(messages);
+        let mut messages = messages.to_vec();
+        let _ = crate::compact::prepare_messages_for_llm_hop(&mut messages);
+        let messages = crate::reply_language::inject_ephemeral_reply_language_reminder(&messages);
         if self.failover_chain.is_empty() {
             return self.llm_client.chat(messages, tools, primary).await;
         }

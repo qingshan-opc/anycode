@@ -227,6 +227,24 @@ impl AgentRuntime {
                 )
             }
         };
+        let loop_limits = if task_family == Some(anycode_core::TaskFamily::OfficeDelivery) {
+            let capped = loop_limits.for_office_delivery();
+            if capped != loop_limits {
+                logger.line(
+                    task_id,
+                    &format!(
+                        "[office_loop_caps] turns={} tools={} (clamped from {}/{})",
+                        capped.max_agent_turns,
+                        capped.max_tool_calls,
+                        loop_limits.max_agent_turns,
+                        loop_limits.max_tool_calls
+                    ),
+                );
+            }
+            capped
+        } else {
+            loop_limits
+        };
         let mut guard_state = super::guard_verdict::GuardLoopState::default();
         let verification_shared = Arc::new(std::sync::Mutex::new(
             super::discoverable_verification::SessionVerificationState::default(),
@@ -328,7 +346,8 @@ impl AgentRuntime {
                 SessionActivityGuard::start(logger.clone(), task_id, ActivityReason::ApiCall);
             let (mut response, mut llm_streamed) = 'llm_attempt: loop {
                 let messages_snapshot = {
-                    let g = messages.lock().await;
+                    let mut g = messages.lock().await;
+                    let _ = crate::compact::prepare_messages_for_llm_hop(&mut g);
                     crate::reply_language::inject_ephemeral_reply_language_reminder(&g)
                 };
                 // Prefer streaming: TUI can render deltas incrementally via shared `messages`.

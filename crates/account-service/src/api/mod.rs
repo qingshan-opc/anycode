@@ -17,6 +17,7 @@ pub struct AppState {
     pub version: String,
     pub config: Arc<ServiceConfig>,
     pub a2a_relay: Arc<crate::a2a::StreamRelay>,
+    pub remote_chat: crate::remote_chat::RemoteChatHub,
 }
 
 pub mod handlers;
@@ -43,7 +44,7 @@ pub fn router(state: AppState) -> Router {
         .route("/billing/webhooks/stripe", post(handlers::stripe_webhook))
         .route("/billing/webhooks/wechat", post(handlers::wechat_webhook))
         .route("/plans/catalog", get(handlers::plans_catalog))
-        .route("/gateway/authorize", post(handlers::gateway_authorize))
+        .route("/gateway/authorize", post(crate::gateway::authorize_http))
         .route("/gateway/usage", post(handlers::gateway_usage))
         .route(
             "/gateway/upstream-failure",
@@ -151,7 +152,24 @@ pub fn router(state: AppState) -> Router {
         .route("/org/invites/accept", post(handlers::accept_org_invite))
         .route("/devices/link/approve", post(handlers::device_link_approve))
         .route("/devices", get(handlers::list_devices))
+        .route("/devices/mine", get(crate::remote_chat::devices_mine))
         .route("/devices/{device_id}", delete(handlers::revoke_device))
+        .route(
+            "/remote-chat/conversations",
+            get(crate::remote_chat::list_remote_conversations),
+        )
+        .route(
+            "/remote-chat/conversations/{id}",
+            get(crate::remote_chat::get_remote_conversation),
+        )
+        .route(
+            "/remote-chat/prompt",
+            post(crate::remote_chat::post_remote_prompt),
+        )
+        .route(
+            "/remote-chat/cancel",
+            post(crate::remote_chat::post_remote_cancel),
+        )
         .route("/billing/checkout", post(handlers::billing_checkout))
         .route(
             "/billing/orders/{order_id}",
@@ -204,6 +222,18 @@ pub fn router(state: AppState) -> Router {
 
     let api = Router::new()
         .route("/health", get(handlers::health))
+        .route(
+            "/v1/chat/completions",
+            post(crate::gateway::chat_completions),
+        )
+        .route("/v1/models", get(crate::gateway::list_models))
+        // Outside /api/v1: must match lingxi ANYCODE_SSO_CALLBACK path.
+        .route("/api/auth/hop/login", get(crate::hop::hop_login))
+        .route("/api/auth/hop/callback", get(crate::hop::hop_callback))
+        .route(
+            "/api/v1/remote-chat/ws",
+            get(crate::remote_chat::remote_chat_ws),
+        )
         .nest(
             "/api/v1",
             public.merge(authed).merge(admin_public).merge(admin_authed),

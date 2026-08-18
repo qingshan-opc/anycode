@@ -35,6 +35,7 @@ pub mod project_knowledge;
 pub mod project_root;
 pub mod project_skills;
 pub mod recorder;
+pub mod remote_chat;
 pub mod report;
 pub mod report_archive;
 pub mod runtime_config;

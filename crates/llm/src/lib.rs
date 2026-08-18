@@ -99,8 +99,9 @@ pub use model_tiers::{
 };
 pub use multi_client::MultiProviderLlmClient;
 pub use provider_catalog::{
-    catalog_lookup, is_known_provider_id, normalize_provider_id, transport_for_provider_id,
-    LlmTransport, ProviderCatalogEntry, PROVIDER_CATALOG, ROUTING_AGENT_PRESETS, ZAI_AUTH_METHODS,
+    catalog_lookup, is_known_provider_id, normalize_provider_id, suggested_openai_base_for,
+    transport_for_provider_id, LlmTransport, ProviderCatalogEntry, PROVIDER_CATALOG,
+    ROUTING_AGENT_PRESETS, ZAI_AUTH_METHODS,
 };
 pub use retry_strategy::{
     is_retryable_status as retry_is_retryable_status, retry_delay_ms as retry_strategy_delay_ms,
@@ -183,6 +184,8 @@ pub fn build_zai_openai_stack_client(
             );
             if let Some(ref u) = effective.base_url {
                 client = client.with_base_url(u.clone());
+            } else if let Some(suggested) = suggested_openai_base_for(&norm) {
+                client = client.with_base_url(suggested.to_string());
             } else if norm != "z.ai" {
                 return Err(CoreError::LLMError(format!(
                     "provider `{}` 须配置 base_url（OpenAI 兼容 Chat Completions 完整 URL）",
@@ -359,6 +362,26 @@ pub async fn build_multi_llm_stack(
         copilot_client,
         responses_client,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deepseek_client_uses_catalog_url_when_base_url_omitted() {
+        let client = build_zai_openai_stack_client(&ProviderConfig {
+            provider: "deepseek".into(),
+            api_key: "sk-test".into(),
+            base_url: None,
+            model: "deepseek-v4-pro".into(),
+            temperature: Some(0.7),
+            max_tokens: Some(256),
+            zai_tool_choice_first_turn: false,
+        })
+        .expect("deepseek BYOK should not require an explicit base_url");
+        drop(client);
+    }
 }
 
 #[derive(Error, Debug)]

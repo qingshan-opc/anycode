@@ -28,8 +28,7 @@ struct ToolAuditRow<'a> {
 }
 
 fn audit_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".anycode/audit/tool-calls.jsonl"))
+    Some(anycode_core::user_home_dir()?.join(".anycode/audit/tool-calls.jsonl"))
 }
 
 fn hash_value(v: &serde_json::Value) -> String {

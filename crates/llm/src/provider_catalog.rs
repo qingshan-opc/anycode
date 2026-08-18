@@ -493,6 +493,11 @@ pub fn catalog_lookup(id: &str) -> Option<&'static ProviderCatalogEntry> {
     PROVIDER_CATALOG.iter().find(|e| e.id == n)
 }
 
+/// Catalog Chat Completions URL when `config.json` omitted `base_url` (common on Windows GUI / BYOK setup).
+pub fn suggested_openai_base_for(id: &str) -> Option<&'static str> {
+    catalog_lookup(id).and_then(|e| e.suggested_openai_base)
+}
+
 pub fn transport_for_provider_id(id: &str) -> LlmTransport {
     catalog_lookup(id)
         .map(|e| e.transport)
@@ -559,6 +564,10 @@ mod tests {
         assert_eq!(normalize_provider_id("fireworks-ai"), "fireworks");
         assert_eq!(normalize_provider_id("togetherai"), "together");
         assert_eq!(normalize_provider_id("deepseek-ai"), "deepseek");
+        assert_eq!(
+            suggested_openai_base_for("deepseek"),
+            Some("https://api.deepseek.com/chat/completions")
+        );
         assert_eq!(normalize_provider_id("x-ai"), "xai");
         assert_eq!(normalize_provider_id("byte-plus"), "byteplus");
         assert_eq!(normalize_provider_id("kilo-code"), "kilocode");

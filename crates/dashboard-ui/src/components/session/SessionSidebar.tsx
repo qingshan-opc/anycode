@@ -38,7 +38,6 @@ export function SessionSidebar() {
     optimisticStreamingSessionId,
     sessionSidebarCollapsed,
   } = useConversationShell();
-
   const [searchOpen, setSearchOpen] = useState(false);
   const colleaguesActive = open && activePath.startsWith("/colleagues");
 

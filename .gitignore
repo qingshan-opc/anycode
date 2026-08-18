@@ -39,14 +39,14 @@ crates/account-service/.env
 crates/account-portal/public/downloads/*.dmg
 crates/account-portal/public/downloads/*.exe
 crates/account-portal/public/downloads/*.msi
+crates/account-portal/public/downloads/*.AppImage
 crates/account-portal/public/downloads/latest.json
-# Tauri updater payloads belong on CDN / object storage — never commit binaries.
+# Tauri updater payloads belong on MinIO — never commit binaries.
 crates/account-portal/public/downloads/update/*.app.tar.gz
 crates/account-portal/public/downloads/update/*.app.tar.gz.sig
 deploy/account-service/.env
 deploy/account-service/secrets/
 crates/model-gateway/
-.dockerignore
 
 # Local / generated scratch
 sample_data.xlsx
@@ -68,3 +68,6 @@ crates/dashboard/mindmap-*.md
 crates/dashboard/mindmap-*.json
 .cursor/lingzhi-decisions.md
 .contrib/
+
+# Windows updater signatures (generated locally)
+crates/account-portal/public/downloads/update/*.exe.sig

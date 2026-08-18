@@ -115,7 +115,7 @@ pub async fn create_native_order(
     let description = if plan == crate::billing::CREDIT_TOPUP_PLAN {
         "anycode 额度充值（充 ¥50 得 ¥100 额度，永久有效）".to_string()
     } else if plan == "cloud_5h" {
-        "anycode Cloud 5h 配额包（1000次/5小时）".to_string()
+        "anycode Plus（每月入账等额云端额度）".to_string()
     } else {
         format!(
             "anycode {} {}",
@@ -581,6 +581,7 @@ mod tests {
             cors_origins: vec![],
             portal_dir: None,
             portal_url: "http://127.0.0.1:43200".into(),
+            accounts_url: "https://accounts.818cloud.com".into(),
             stripe_secret_key: None,
             stripe_webhook_secret: None,
             stripe_price_pro: None,

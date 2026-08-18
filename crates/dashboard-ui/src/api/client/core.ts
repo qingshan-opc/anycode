@@ -134,6 +134,7 @@ export const coreClient = {
       user_email?: string | null;
       display_name?: string | null;
       access_token?: string | null;
+      device_id?: string | null;
     }>("/api/cloud/session"),
   cloudLinkStart: () =>
     post<{

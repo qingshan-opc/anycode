@@ -22,6 +22,7 @@ mod memory_model;
 mod memory_pipeline;
 mod message;
 mod model_profile;
+mod paths;
 mod plan_tree;
 mod query_source;
 mod reasoning;
@@ -82,6 +83,7 @@ pub use memory_pipeline::{
 };
 pub use message::{Message, MessageContent, MessageRole};
 pub use model_profile::ModelRouteProfile;
+pub use paths::{anycode_data_dir, anycode_data_dir_or_cwd, user_home_dir};
 pub use plan_tree::{
     apply_plan_patches, format_plan_doc, format_plan_tree_summary, format_plan_tree_terminal,
     parse_plan_doc, plan_tree_all_completed, plan_tree_current_focus, plan_tree_from_storage,
@@ -104,7 +106,7 @@ pub use task::{
     resolve_agent_loop_limits, AgentLoopLimits, Artifact, NestedTaskInvoke, NestedTaskRun, Task,
     TaskBudget, TaskContext, TaskResult, TerminationReason, TurnOutput, TurnTokenUsage,
     DEFAULT_MAX_AGENT_TURNS, DEFAULT_MAX_TOOL_CALLS, MAX_AGENT_TURNS_CLAMP, MAX_TOOL_CALLS_CLAMP,
-    NESTED_TASK_COOPERATIVE_CANCEL_ERROR,
+    NESTED_TASK_COOPERATIVE_CANCEL_ERROR, OFFICE_MAX_AGENT_TURNS, OFFICE_MAX_TOOL_CALLS,
 };
 pub use task_gate_log::{
     append_gate_log, decode_log_text, encode_log_text, format_assistant_response_log_line,

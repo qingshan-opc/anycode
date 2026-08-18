@@ -28,9 +28,9 @@
 | 任务 | 主要文件 | 验收 |
 |------|----------|------|
 | **G6a** config 化：`McpConfigFile` 增 `strict_whitelist` / `max_calls_per_server`；`McpRuntime` 透传；env 回退 | `crates/config/src/schema/types.rs`、`load.rs`、`crates/tools/src/mcp_proxied_tool.rs` | 配置优先、env 回退；无配置不启用 |
-| **G6b** `mcp_governance_check` 改读 config（优先）+ env 回退；拒绝/超配额发 **trace 事件**（统一 `events.jsonl` 字段） | `crates/tools/src/mcp_proxied_tool.rs` | Dashboard 读到 `mcp_denied` / `mcp_quota_exceeded` |
-| **G6c** Dashboard Settings 暴露 MCP strict / 配额，写回 `config.json` | `crates/dashboard`、`crates/dashboard-ui` | UI 可开关并持久化 |
-| **G6d** 负向测试：白名单外工具、超配额、并发计数 | `crates/tools` 单测 + fixture | 缺 metadata 测试 fail（复用 M4 断言风格） |
+| **G6b** `mcp_governance_check` 改读 config（优先）+ env 回退；拒绝/超配额发 **trace 事件**（统一 `events.jsonl` 字段） | `crates/tools/src/mcp_proxied_tool.rs` | **落地**：`~/.anycode/audit/events.jsonl` 写 `mcp_denied` / `mcp_quota_exceeded` |
+| **G6c** Dashboard Settings 暴露 MCP strict / 配额，写回 `config.json` | `crates/dashboard`、`crates/dashboard-ui` | **落地**：含 `max_calls_per_server` |
+| **G6d** 负向测试：白名单外工具、超配额、并发计数 | `crates/tools` 单测 + fixture | **落地**：`mcp_proxied_tool` 负向单测 |
 
 ## Wave 2 — M7–M8 记忆治理（G8）≈ 1 周
 
@@ -38,9 +38,9 @@
 
 | 任务 | 主要文件 | 验收 |
 |------|----------|------|
-| **G8a** 记忆项补 **provenance** 字段（来源事件 / 会话溯源），向后兼容旧记录 | `crates/core/src/memory_*`、`crates/memory` | 序列化含 provenance，旧记录可读 |
-| **G8b** retention 汇总进 **Workbench Settings**，复用 `memory_ops` | `crates/dashboard`、`crates/dashboard-ui` | 与 CLI `memory prune --json` 结果一致 |
-| **G8c** provenance 与可回收项进 **memory doctor** 输出 | `crates/dashboard`、doctor 命令 | `doctor` 展示记忆来源与可回收项 |
+| **G8a** 记忆项补 **provenance** 字段（来源事件 / 会话溯源），向后兼容旧记录 | `crates/core/src/memory_*`、`crates/memory` | **落地**：`MemoryMetaV2.provenance`；旧记录可空 |
+| **G8b** retention 汇总进 **Workbench Settings**，复用 `memory_ops` | `crates/dashboard`、`crates/dashboard-ui` | **落地**：`RetentionRow.provenance` + summary.with_provenance |
+| **G8c** provenance 与可回收项进 **memory doctor** 输出 | `crates/dashboard`、doctor 命令 | **落地**：doctor `memory_retention` check |
 
 ## Wave 3 — 通道与 cron 决策（G12 / G9）≈ 3–4 天
 
@@ -48,7 +48,7 @@
 
 | 任务 | 决策 | 验收 |
 |------|------|------|
-| **G12** AskUserQuestion 通道扩展 | 采纳 **ADR 008 slice 3**：Discord 按钮交互或文本回落；与工具审批互斥 pending | ADR 或 comparison 更新 |
+| **G12** AskUserQuestion 通道扩展 | **关闭**：第三方 IM 已移除；Workbench HITL 为准 | 勿再排期 Discord/微信文本回落 |
 | **G9** NL→cron 定级 | 默认 **A（推荐）**：文档定级 v1 heuristic，Dashboard 提示「规则解析，非 LLM」；`ANYCODE_CRON_NL_LLM=1` 可选 B | comparison + UI 文案 |
 
 ## Wave 4 — 文档与发布（收尾）≈ 3 天

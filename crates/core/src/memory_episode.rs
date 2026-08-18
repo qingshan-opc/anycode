@@ -92,6 +92,10 @@ pub struct MemoryMetaV2 {
     pub valid_until: Option<DateTime<Utc>>,
     #[serde(default)]
     pub source: String,
+    /// Optional session / event provenance (session id, task id, or free-form).
+    /// Absent on legacy rows; prefer this over guessing from tags alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
     #[serde(default)]
     pub evidence_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -63,7 +63,7 @@ pub struct ScannedSkill {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(PathBuf::from)
+    anycode_core::user_home_dir()
 }
 
 pub fn count_skill_scan_roots(workspace_paths: &[String]) -> usize {

@@ -2,7 +2,9 @@
 
 use anycode_config::{default_base_url_for, Config, ModelProfile};
 use anycode_core::prelude::*;
-use anycode_llm::{apply_anycode_cloud_model_config, normalize_provider_id};
+use anycode_llm::{
+    apply_anycode_cloud_model_config, normalize_provider_id, suggested_openai_base_for,
+};
 
 use super::llm_session::{effective_provider, resolve_agent_base_url, resolve_profile_api_key};
 
@@ -15,7 +17,12 @@ pub fn default_base_url_for_config(config: &Config) -> Option<String> {
             .clone()
             .or_else(|| Some(default_base_url_for(config.llm.plan.as_str()).to_string()))
     } else {
-        config.llm.base_url.clone()
+        config
+            .llm
+            .base_url
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| suggested_openai_base_for(&g_norm).map(str::to_string))
     }
 }
 

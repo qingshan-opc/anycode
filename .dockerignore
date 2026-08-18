@@ -1,0 +1,17 @@
+# Never bake desktop installers into the account image (they live on MinIO).
+# See .cursor/rules/desktop-downloads-s3.mdc
+.git
+**/.git
+**/target
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+crates/dashboard-ui
+crates/account-portal/public/docs-src
+crates/account-portal/public/downloads/**
+deploy/account-service/.env
+deploy/account-service/secrets
+**/.env
+**/*.pem
+**/*.p12
+**/*.key

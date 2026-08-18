@@ -1,0 +1,15 @@
+---
+description: Desktop installers live on cluster MinIO (S3), never baked into the account image
+alwaysApply: true
+---
+
+# 桌面安装包：MinIO / S3，禁止打进镜像
+
+与 FDE 课件同一套集群 MinIO：`minio.base-service.svc.cluster.local:9000`。
+
+1. **禁止**把 `*.dmg` / `*.exe` / `*.msi` / `*.AppImage` / `*.app.tar.gz` 打进 `818cloud/anycode` 镜像（会到 3GB+，推送和 K8s 拉取极慢）。
+2. 构建后用 `./scripts/upload-desktop-downloads-s3.sh` 上传 `crates/account-portal/public/downloads/` 到 bucket **`downloads`**（path-style：`/downloads/<file>`）。
+3. 公网仍走 `https://anycode.work/downloads/<file>`（Ingress 正则 `/downloads/.+` → MinIO ClusterIP，不能用 ExternalName）。
+4. 镜像只保留门户 SPA + 账号 API；`latest.json` / `releases.json` 也放 MinIO。镜像构建后 `rm -rf dist/downloads`，避免 `/downloads` 被当成静态目录 307。
+5. 凭证只从本机 env / `~/.anycode/release.env` / FDE `deploy/k8s/818cloud/.env` 读，**禁止**写入 git。
+6. `docker buildx` 仍须 `--provenance=false --sbom=false`（见 ACR 规则）。

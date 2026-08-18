@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
         version: env!("CARGO_PKG_VERSION").into(),
         config: Arc::new(config.clone()),
         a2a_relay: Arc::new(anycode_account_service::a2a::StreamRelay::new()),
+        remote_chat: anycode_account_service::remote_chat::RemoteChatHub::new(),
     };
 
     let mut cors = CorsLayer::new()

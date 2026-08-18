@@ -25,11 +25,7 @@ pub fn dashboard_state_dir() -> PathBuf {
     if let Ok(p) = std::env::var("ANYCODE_DASHBOARD_STATE_DIR") {
         return PathBuf::from(p);
     }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".anycode")
-        .join("dashboard")
+    anycode_core::anycode_data_dir_or_cwd().join("dashboard")
 }
 
 fn active_dir() -> PathBuf {

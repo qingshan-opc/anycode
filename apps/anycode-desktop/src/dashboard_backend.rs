@@ -73,13 +73,27 @@ impl DashboardServerState {
         DESKTOP_API_PORT.store(0, Ordering::SeqCst);
     }
 
-    /// Take the one-shot desktop bootstrap token (first navigation only).
+    /// Peek the desktop bootstrap token (WKWebView may retry the handshake URL).
     pub fn take_bootstrap_token(&self) -> Option<String> {
-        self.bootstrap_token.lock().ok()?.take()
+        self.bootstrap_token.lock().ok()?.clone()
+    }
+}
+
+/// Windows Explorer / cmd.exe do not set `$HOME`. Mirror `USERPROFILE` so
+/// in-process Workbench finds `~\.anycode\config.json`.
+pub fn ensure_home_env() {
+    if std::env::var_os("HOME").is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        if !profile.trim().is_empty() {
+            std::env::set_var("HOME", profile);
+        }
     }
 }
 
 pub fn apply_dashboard_env(app: &AppHandle) {
+    ensure_home_env();
     apply_account_env_if_unset(app);
     if let Some(tpl) = resolve_resource_path(
         app,
@@ -324,4 +338,16 @@ fn http_get_body(host: &str, port: u16, path: &str) -> Option<String> {
     stream.read_to_string(&mut raw).ok()?;
     let (_head, body) = raw.split_once("\r\n\r\n")?;
     Some(body.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ensure_home_env_is_idempotent_when_home_set() {
+        let before = std::env::var("HOME").ok();
+        super::ensure_home_env();
+        if let Some(h) = before {
+            assert_eq!(std::env::var("HOME").ok().as_deref(), Some(h.as_str()));
+        }
+    }
 }

@@ -109,13 +109,23 @@ export const settingsClient = {
   memoryRetentionPreview: (olderThanDays = 90) =>
     get<{
       rows: unknown[];
-      summary: { would_delete: number; keep: number; protected: number };
+      summary: {
+        would_delete: number;
+        keep: number;
+        protected: number;
+        with_provenance?: number;
+      };
       older_than_days: number;
     }>(`/api/settings/memory/retention?older_than_days=${olderThanDays}`),
   memoryRetentionApply: (olderThanDays: number, confirm: boolean) =>
     post<{
       rows: unknown[];
-      summary: { would_delete: number; keep: number; protected: number };
+      summary: {
+        would_delete: number;
+        keep: number;
+        protected: number;
+        with_provenance?: number;
+      };
       older_than_days: number;
     }>("/api/settings/memory/retention", {
       older_than_days: olderThanDays,

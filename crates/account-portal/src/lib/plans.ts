@@ -10,9 +10,9 @@ export type PlanId = (typeof PLAN_IDS)[number];
 /** Seed-aligned list prices (fen) for marketing display. */
 export const STANDARD_PLAN_MONTHLY_FEN: Record<PlanId, number> = {
   free: 0,
-  cloud_5h: 9_800,
-  pro: 59_900,
-  team: 199_900,
+  cloud_5h: 4_900,
+  pro: 19_900,
+  team: 69_900,
 };
 
 export type PlanTier = {

@@ -260,8 +260,9 @@ function useConversationShellState(): ConversationShellContextValue {
       if (nextProjectId) {
         setProjectId(nextProjectId);
       }
+      // Stay on the conversation page — clear session for a fresh start composer.
       void navigate({
-        to: "/",
+        to: "/conversations",
         search: nextProjectId ? { project: nextProjectId } : {},
       });
     },

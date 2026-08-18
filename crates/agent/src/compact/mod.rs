@@ -25,7 +25,9 @@ pub use hooks::{
     CompactionHooks, CompactionPostContext, CompactionPreContext, DefaultCompactionHooks,
 };
 pub use microcompact::{
-    apply_microcompact, apply_microcompact_keep_latest_turn, default_keep_recent,
+    apply_live_context_trim, apply_microcompact, apply_microcompact_keep_latest_turn,
+    default_keep_recent, prepare_messages_for_llm_hop, strip_stale_reasoning_content,
+    stub_successful_write_edit_args, LiveContextTrimStats,
 };
 pub use policy::CompactPolicy;
 pub use post_compact::{
@@ -71,8 +73,8 @@ const BASE_COMPACT_BODY: &str = include_str!("base_compact_body.txt");
 
 const MAX_COMPACT_PTL_RETRIES: usize = 3;
 
-/// 摘要模型 `max_tokens` 上限（与 Claude `COMPACT_MAX_OUTPUT_TOKENS` 同量级）。
-pub const COMPACT_MAX_OUTPUT_TOKENS: u32 = 20_000;
+/// 摘要模型 `max_tokens` 上限（压缩摘要本身也计费；过长无益）。
+pub const COMPACT_MAX_OUTPUT_TOKENS: u32 = 4_000;
 
 static RE_ANALYSIS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<analysis>.*?</analysis>").expect("analysis regex"));

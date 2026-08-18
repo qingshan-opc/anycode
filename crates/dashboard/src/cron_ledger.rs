@@ -43,9 +43,7 @@ struct OrchestrationCronsOnly {
 }
 
 fn home_anycode_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|h| PathBuf::from(h).join(".anycode"))
+    anycode_core::anycode_data_dir()
 }
 
 #[must_use]

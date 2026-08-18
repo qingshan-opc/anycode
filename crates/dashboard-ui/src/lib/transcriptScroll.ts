@@ -34,7 +34,7 @@ export function lastAssistantBodyLength(blocks: TranscriptBlock[]): number {
   return 0;
 }
 
-/** Signature for structural stream changes (not raw SSE text length — scroll follows visible DOM). */
+/** Signature for stream follow: include visible assistant length so Windows WebView keeps pinning. */
 export function streamFollowSignature(input: {
   running: boolean;
   streamLive: boolean;
@@ -43,6 +43,7 @@ export function streamFollowSignature(input: {
   turnHasActivity: boolean;
   turnPhase?: string | null;
   liveBlocksLength: number;
+  assistantBodyLength?: number;
 }): string {
   if (!input.running && !input.streamLive) return "";
   return [
@@ -51,5 +52,6 @@ export function streamFollowSignature(input: {
     input.turnHasActivity ? 1 : 0,
     input.turnPhase ?? "",
     input.liveBlocksLength,
+    input.assistantBodyLength ?? 0,
   ].join("|");
 }

@@ -82,8 +82,9 @@ pub async fn post_auth_login(
     }
 }
 
-/// One-shot Desktop handshake: exchange an in-process bootstrap token for a
-/// local `dw_session` cookie, then 303 to `/` so the token never stays in the URL.
+/// Desktop handshake: exchange the in-process bootstrap token for a local
+/// `dw_session` cookie, then 303 so the token never stays in the URL.
+/// The token is reusable for this process so WKWebView retries do not 401.
 pub async fn get_desktop_bootstrap(
     State(state): State<AppState>,
     Query(query): Query<DesktopBootstrapQuery>,
@@ -104,13 +105,13 @@ pub async fn get_desktop_bootstrap(
             .into_response();
     }
     let expected = {
-        let mut guard = state.desktop_bootstrap_token.lock().await;
-        guard.take()
+        let guard = state.desktop_bootstrap_token.lock().await;
+        guard.clone()
     };
     let Some(expected) = expected else {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "bootstrap token already used or missing" })),
+            Json(json!({ "error": "bootstrap token missing" })),
         )
             .into_response();
     };

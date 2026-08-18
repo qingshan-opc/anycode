@@ -71,6 +71,7 @@ export async function downloadAndInstallDesktopUpdate(
     }
   });
   pendingUpdate = null;
+  await relaunchDesktopApp();
 }
 
 /** Restart the app (runs the normal exit cleanup: dashboard + CEF shutdown). */

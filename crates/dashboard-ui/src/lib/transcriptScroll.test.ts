@@ -56,7 +56,7 @@ describe("streamFollowSignature", () => {
     ).toBe("");
   });
 
-  it("changes on phase transition but not on raw assistant length alone", () => {
+  it("changes on phase transition and assistant body growth", () => {
     const base = {
       running: true,
       streamLive: true,
@@ -68,5 +68,8 @@ describe("streamFollowSignature", () => {
     const planning = streamFollowSignature({ ...base, turnPhase: "waiting_first_token" });
     const streaming = streamFollowSignature({ ...base, turnPhase: "streaming" });
     expect(planning).not.toBe(streaming);
+    expect(
+      streamFollowSignature({ ...base, assistantBodyLength: 12 }),
+    ).not.toBe(streamFollowSignature({ ...base, assistantBodyLength: 40 }));
   });
 });

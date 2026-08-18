@@ -62,10 +62,30 @@ pub(super) async fn pop_assistant_placeholder(
 pub(super) fn estimate_input_tokens_for_messages(messages: &[Message]) -> u32 {
     let chars: usize = messages
         .iter()
-        .map(|m| match &m.content {
-            MessageContent::Text(t) => t.chars().count(),
-            MessageContent::ToolResult { content, .. } => content.chars().count(),
-            _ => 0,
+        .map(|m| {
+            let mut n = match &m.content {
+                MessageContent::Text(t) => t.chars().count(),
+                MessageContent::ToolResult { content, .. } => content.chars().count(),
+                MessageContent::ToolUse { name, input } => {
+                    name.chars().count()
+                        + serde_json::to_string(input)
+                            .map(|s| s.chars().count())
+                            .unwrap_or(0)
+                }
+            };
+            if let Some(raw) = m.metadata.get(ANYCODE_TOOL_CALLS_METADATA_KEY) {
+                n += serde_json::to_string(raw)
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0);
+            }
+            if let Some(rc) = m
+                .metadata
+                .get(ANYCODE_REASONING_CONTENT_METADATA_KEY)
+                .and_then(|v| v.as_str())
+            {
+                n += rc.chars().count();
+            }
+            n
         })
         .sum();
     ((chars as u32).saturating_add(3)) / 4

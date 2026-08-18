@@ -2,9 +2,14 @@
 
 use crate::mcp_connected::McpConnected;
 use anycode_core::prelude::*;
+use anycode_core::ExecutionTraceEvent;
 use async_trait::async_trait;
+use serde_json::json;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
@@ -100,18 +105,28 @@ pub(crate) fn mcp_governance_check(
     mcp_tool_name: &str,
 ) -> Result<(), CoreError> {
     if mcp_strict_enabled() && !mcp_tool_allowed(server, logical_name, mcp_tool_name) {
-        return Err(CoreError::PermissionDenied(format!(
+        let detail = format!(
             "MCP strict mode denied {logical_name} (server={server}, tool={mcp_tool_name})"
-        )));
+        );
+        emit_mcp_governance_event("mcp_denied", server, logical_name, mcp_tool_name, &detail);
+        return Err(CoreError::PermissionDenied(detail));
     }
     if let Some(max) = mcp_max_calls_per_server() {
         let counts = MCP_SERVER_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
         let mut counts = counts.lock().expect("mcp server call counts");
         let count = counts.entry(server.to_string()).or_insert(0);
         if *count >= max {
-            return Err(CoreError::PermissionDenied(format!(
+            let detail = format!(
                 "MCP server {server} exceeded call quota {max} (set ANYCODE_MCP_MAX_CALLS_PER_SERVER to adjust)"
-            )));
+            );
+            emit_mcp_governance_event(
+                "mcp_quota_exceeded",
+                server,
+                logical_name,
+                mcp_tool_name,
+                &detail,
+            );
+            return Err(CoreError::PermissionDenied(detail));
         }
         *count += 1;
     }
@@ -165,16 +180,132 @@ fn mcp_tool_allowed(server: &str, logical_name: &str, mcp_tool_name: &str) -> bo
         || allow.contains(&format!("{server}:{mcp_tool_name}"))
 }
 
+fn audit_events_path() -> Option<PathBuf> {
+    Some(anycode_core::user_home_dir()?.join(".anycode/audit/events.jsonl"))
+}
+
+/// Best-effort governance trace for Dashboard / doctor (`mcp_denied` / `mcp_quota_exceeded`).
+fn emit_mcp_governance_event(
+    event_type: &str,
+    server: &str,
+    logical_name: &str,
+    mcp_tool_name: &str,
+    detail: &str,
+) {
+    let Some(path) = audit_events_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let evt = ExecutionTraceEvent::new(
+        event_type,
+        "warn",
+        format!("MCP {event_type}: {logical_name}"),
+        detail,
+        json!({
+            "server": server,
+            "tool": mcp_tool_name,
+            "logical_name": logical_name,
+        }),
+    );
+    let Ok(line) = serde_json::to_string(&evt) else {
+        return;
+    };
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_mcp_call_counts_for_tests() {
+    if let Some(counts) = MCP_SERVER_COUNTS.get() {
+        counts.lock().expect("mcp counts").clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::mcp_tool_allowed;
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn with_env_lock<R>(f: impl FnOnce() -> R) -> R {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        f()
+    }
 
     #[test]
     fn allowlist_accepts_logical_and_server_tool_names() {
-        std::env::set_var("ANYCODE_MCP_ALLOWED_TOOLS", "mcp__s__search,api:list");
-        assert!(mcp_tool_allowed("s", "mcp__s__search", "search"));
-        assert!(mcp_tool_allowed("api", "mcp__api__list", "list"));
-        assert!(!mcp_tool_allowed("api", "mcp__api__write", "write"));
-        std::env::remove_var("ANYCODE_MCP_ALLOWED_TOOLS");
+        with_env_lock(|| {
+            std::env::set_var("ANYCODE_MCP_ALLOWED_TOOLS", "mcp__s__search,api:list");
+            assert!(mcp_tool_allowed("s", "mcp__s__search", "search"));
+            assert!(mcp_tool_allowed("api", "mcp__api__list", "list"));
+            assert!(!mcp_tool_allowed("api", "mcp__api__write", "write"));
+            std::env::remove_var("ANYCODE_MCP_ALLOWED_TOOLS");
+        });
+    }
+
+    #[test]
+    fn strict_mode_denies_tools_outside_allowlist_and_emits_event() {
+        with_env_lock(|| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("ANYCODE_MCP_STRICT", "1");
+            std::env::set_var("ANYCODE_MCP_ALLOWED_TOOLS", "mcp__ok__ping");
+            std::env::remove_var("ANYCODE_MCP_MAX_CALLS_PER_SERVER");
+            reset_mcp_call_counts_for_tests();
+
+            let err = mcp_governance_check("evil", "mcp__evil__rm", "rm").expect_err("denied");
+            assert!(
+                matches!(err, CoreError::PermissionDenied(ref m) if m.contains("strict")),
+                "{err:?}"
+            );
+
+            let path = tmp.path().join(".anycode/audit/events.jsonl");
+            let body = std::fs::read_to_string(&path).expect("events written");
+            assert!(
+                body.contains("\"event_type\":\"mcp_denied\""),
+                "missing mcp_denied in {body}"
+            );
+
+            assert!(mcp_governance_check("ok", "mcp__ok__ping", "ping").is_ok());
+
+            std::env::remove_var("ANYCODE_MCP_STRICT");
+            std::env::remove_var("ANYCODE_MCP_ALLOWED_TOOLS");
+        });
+    }
+
+    #[test]
+    fn quota_exceeded_emits_event_and_blocks_further_calls() {
+        with_env_lock(|| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            std::env::set_var("HOME", tmp.path());
+            std::env::remove_var("ANYCODE_MCP_STRICT");
+            std::env::remove_var("ANYCODE_MCP_ALLOWED_TOOLS");
+            std::env::set_var("ANYCODE_MCP_MAX_CALLS_PER_SERVER", "2");
+            reset_mcp_call_counts_for_tests();
+
+            assert!(mcp_governance_check("s", "mcp__s__a", "a").is_ok());
+            assert!(mcp_governance_check("s", "mcp__s__b", "b").is_ok());
+            let err = mcp_governance_check("s", "mcp__s__c", "c").expect_err("quota");
+            assert!(
+                matches!(err, CoreError::PermissionDenied(ref m) if m.contains("quota")),
+                "{err:?}"
+            );
+
+            let path = tmp.path().join(".anycode/audit/events.jsonl");
+            let body = std::fs::read_to_string(&path).expect("events written");
+            assert!(
+                body.contains("\"event_type\":\"mcp_quota_exceeded\""),
+                "missing mcp_quota_exceeded in {body}"
+            );
+
+            // Other servers still allowed under their own counter.
+            assert!(mcp_governance_check("other", "mcp__other__x", "x").is_ok());
+
+            std::env::remove_var("ANYCODE_MCP_MAX_CALLS_PER_SERVER");
+        });
     }
 }

@@ -18,7 +18,7 @@ export function WorkspaceCreatePanel() {
   const openCronViaChat = () => {
     setComposerSeed(buildCreateViaChatPrompt(t));
     closeControlCenter();
-    void navigate({ to: "/" });
+    void navigate({ to: "/conversations" });
   };
 
   return (

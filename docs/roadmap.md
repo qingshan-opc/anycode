@@ -36,13 +36,22 @@
 
 ## 2. 最近已交付（摘要）
 
-- **Setup / 配置**：交互式记忆向导（`file` / `hybrid` / `pipeline` / HTTP 向量 / 可选 **`embedding-local`**）、**`noop` 禁用记忆** 向导项；实现见 `setup_memory.rs` / `app_config`。  
-- **Cron / 微信**：`scheduler.lock`；桥内嵌调度器；`CronCreate` 本地墙钟→UTC；**先推送微信再跑 agent**（`cron_notify`）；`weekday *` 避免一次性任务永不触发。  
-- **微信 UX**：不再向会话推送 `🔧`/`✓` 工具进度行。  
-- **会话与 CLI**：协作取消、流式 REPL 模块化、**Telegram `AskUserQuestion`**（`tg_ask`）、MCP stdio 超时 + **`mcp_stdio_dead`**、会话通知、HUD/`/context`/`/export`/`/cost` 等。  
-- **OpenClaw 对标**：本地已拉至 **2026.5.19** 线（`ddeaebfc`）；见 [`openclaw-sync-brief-2026-05.md`](comparisons/openclaw-sync-brief-2026-05.md)、[`weixin-plugin-parity.md`](comparisons/weixin-plugin-parity.md)。  
-- **5.19 小步**：stream→chat 不重复 assistant；DeepSeek `anyOf` schema 规范化；pipeline 向量/嵌入降级 WARN；`cron-runs.jsonl` + `CronCreate` 校验；流式 REPL resize tick 顺序；`WebFetch` 私网主机 + 重定向跳数上限；provider kebab 别名补全（`zhipu-ai` 等）；微信出站 `send_text` 重试。  
-- **Digital Workbench V1+V2**：`anyCode Workbench` 本地 WebUI（SQLite 录制、信任门禁、embedded-ui、V2 观测/GitHub POC/Gate Runner）。**已完成** — 规划见 [`digital-workbench-STATUS.md`](workbench/digital-workbench-STATUS.md)、[`digital-workbench-next-steps-zh.md`](workbench/digital-workbench-next-steps-zh.md)。
+**窗口：0.41–0.42（Desktop 主产品线）**
+
+- **Desktop CEF Workbench**：`anyCode.app` 内嵌 dashboard（进程内 ephemeral `127.0.0.1:0` + one-shot `dw_session`）；正式入口不再是终端 CLI / 第三方 IM。  
+- **嵌套 Agent 时间线**：子 Agent 进度进会话瀑布；协作取消与 background task 诊断态。  
+- **Skill Apps（ADR 020）**：`ui/surface.yaml` + VisualBrief；dock / conversation / project pin；`SkillAppPresent` / `Push` / `Read`；hello / ppt / video starter。  
+- **记忆 DATA-02**：热层 **sled → sqlite**；WAL、turn/tool hooks、`promote_fragment_to_hot`。  
+- **瀑布时间线 v1**：`thinking_delta` 升格为时间线旁白；工具簇 settled pill 用 activity recap；按 LLM turn 切思考块。  
+- **MCP 治理壳**：`mcp.governance`（strict / allowlist / `max_calls_per_server`）+ Settings UI；拒绝/超配额写 `~/.anycode/audit/events.jsonl`（`mcp_denied` / `mcp_quota_exceeded`）。
+
+**已移除 / 明确不做（勿再当 backlog）**
+
+- 终端 **CLI REPL / TUI / `run`** 作为主入口（crate 已删）。  
+- 第三方 IM：**微信 / Telegram / Discord** 通道与 OpenClaw 统一 ingress（含 G1 CDN、G12 Discord AskUserQuestion 文本回落）。  
+- 云端 Portal **不**跑 Agent；本地 Desktop App 跑 Agent（纠正旧文案「0.3 不做网页端操作 Agent」——本地 Workbench 已是操作面）。
+
+更早交付（Setup 记忆向导、Digital Workbench V1–V3、cron 调度器、OpenClaw 5.19 对标等）见 `CHANGELOG.md`。
 
 ---
 
@@ -52,7 +61,7 @@
 |------|------------|
 | 子 Agent 真异步 **v1** | **`run_in_background`** + **`TaskOutput`** / **`TaskStop`**（进程内注册表；**`TaskStop`** 置协作式标志 + **`AbortHandle`** 兜底）。 |
 | **嵌套协作取消 v2+v2.1** | 见 §2；**`cancelled`** → **`background_status: cancelled`**；HTTP / syscall 边界见 **`CHANGELOG`**。 |
-| **AskUserQuestion** | TTY dialoguer、流式 REPL、全屏 TUI；**Telegram 通道**内联键盘（`tg_ask`）；无 host 时 **`unsupported_host`**。 |
+| **AskUserQuestion** | Workbench 内 HITL（点选交给 Agent）；通道侧实现随 IM crate **已移除**。 |
 | **LSP 一等配置** | **`config.json` `lsp`** + 文档；回退 **`ANYCODE_LSP_COMMAND`**。 |
 
 **Issue [#3](https://github.com/qingjiuzys/anycode/issues/3)** 正文草稿仍见 [`issue-drafts/001-ask-user-question.md`](issue-drafts/001-ask-user-question.md)（通道卡片选题为非目标）。
@@ -61,7 +70,7 @@
 
 ## 3.5 anyCode **0.3** 迭代范围（2026-06 产品方向）
 
-**原则**：0.3 聚焦 **网页账号控制台** — 用户登录、订阅/用量/账单、API 与企业能力入口。Agent **执行**仍在 CLI / 本地 `AgentRuntime`；**不在 0.3 做网页端操作 Agent**、远程队列执行或云端 Agent 托管。对标参考见 [`openclaw-sync-brief-2026-05.md`](comparisons/openclaw-sync-brief-2026-05.md)、[`claude-reference-brief-2026-06.md`](comparisons/claude-reference-brief-2026-06.md)；技术 hardening 见 §4（**0.4**）。
+**原则**：0.3 聚焦 **云端网页账号控制台（Portal）** — 登录、订阅/用量/账单、API 与企业能力入口。Agent **执行**在本地 **Desktop Workbench** / `AgentRuntime`；**云端 Portal 不跑 Agent**、不做远程队列执行或云端 Agent 托管。对标参考见 [`openclaw-sync-brief-2026-05.md`](comparisons/openclaw-sync-brief-2026-05.md)、[`claude-reference-brief-2026-06.md`](comparisons/claude-reference-brief-2026-06.md)；技术 hardening 见 §4（**0.4**）。
 
 | 包 | 主题 | 完成定义（简） |
 |----|------|----------------|
@@ -80,9 +89,10 @@
 
 ### 3.5.2 明确 Out of scope（0.3 不做）
 
-- **网页端操作 Agent**：Web 触发 run/goal、工具审批收件箱、会话 cancel 等本地控制面能力**不**作为 0.3 产品承诺；继续 CLI + 本地 Workbench 观测。
+- **云端 Portal 操作 Agent**：登录站 / 账单站不触发 run/goal、不托管工具审批；本地 **Desktop App** 才是 Agent 操作面。
 - 远程队列执行、云端 Agent 控制台、OpenClaw Gateway/Codex 式托管。
 - HTTP `anycode daemon`（[ADR 003](adr/018-http-daemon-deprecated.md)）。
+- 第三方 IM 通道（已移除）。
 
 ### 3.5.3 云端产品纠偏（0.3+，[ADR 011](adr/011-cloud-account-platform.md)）
 
@@ -115,7 +125,7 @@
 | C | Agent Runtime | **长任务与持久后台诊断** | overflow single-retry、compaction checkpoint metadata、background task state |
 | D | MCP / LSP | **受控 MCP 与工具生态** | `doctor mcp` / `mcp status`、ADR 007 controlled reconnect、resource UX |
 | E | Automation / Cron | **可审计自动化** | stable cron session、`cron runs` 查询、failure destination、per-job tool profile |
-| F | Channels | **IM 生产可靠性** | WeChat parity closure、Discord / WeChat AskUserQuestion、outbound queue、`channel status` |
+| F | Channels | **已关闭** | IM crate 已移除；勿再排期 WeChat / Discord / Telegram |
 | G | Memory / Terminal / Ops | **上下文、终端与诊断** | evidence index、memory doctor、transcript 负载模型、error taxonomy、doctor 命令 |
 
 **2026-05 已交付**：OpenClaw 对标简报、流式 REPL resize 不变量、DeepSeek `anyOf` schema 规范化、stream→chat fallback transcript、pipeline 向量 WARN、[`cron-runs.jsonl`](ops/cron-observability.md)、`CronCreate` 校验 + IANA 时区、WebFetch 私网/DNS/redirect 防护、provider kebab 别名、微信出站重试、cli_smoke 隔离。详见 [`openclaw-sync-brief-2026-05.md`](comparisons/openclaw-sync-brief-2026-05.md)。
@@ -125,8 +135,8 @@
 1. **Epic A** 先行：评测 harness 会约束后续大改，避免只靠 `cargo test --workspace`。
 2. **Epic B + D** 第二批：工具/MCP 是生产风险面，先做审计和诊断，再做 reconnect。
 3. **Epic C** 第三批：overflow retry 与 durable state，不承诺一步到位恢复执行。
-4. **Epic E + F** 第四批：cron stable session、WeChat / Discord 可靠性。
-5. **Epic G** 收束 release candidate：memory evidence、terminal 负载模型、doctor / release readiness。
+4. **Epic E** 第四批：cron stable session（**Epic F IM 已关闭**）。
+5. **Epic G** 收束 release candidate：memory evidence / provenance、transcript 负载模型、doctor / release readiness。
 
 ---
 
@@ -148,12 +158,12 @@
 ## 5. 后续（Later）
 
 - **真正恢复执行的跨进程后台 Agent**：先完成 diagnostic state，再决定是否恢复执行。
-- **Telegram 可选 draft 工具进度**（默认关）。
-- **memory-wiki 全栈 / 服务端梦境**：仍不做；**本地梦境整理 + Memory Center + E2EE 密文同步**已按 [ADR 014](adr/014-dream-memory-and-experience-packs.md) 落地（替代旧 “不做 dreaming” 决策）。
-- **Transcript 虚拟滚动（ADR 006）**：先跑负载模型，再实现。
+- **memory-wiki 全栈 / 服务端梦境**：仍不做；**本地梦境整理 + Memory Center + E2EE 密文同步**已按 [ADR 014](adr/014-dream-memory-and-experience-packs.md) 落地。
+- **Transcript 虚拟滚动（ADR 006）**：Workbench 已用 `@tanstack/react-virtual`；RFC 仍 Proposed — 补负载目标与估高跳/留白调参后再 Accepted。
 - **会话 rewind（ADR 004）/ `/clear`（ADR 005）**：先统一语义，再改快照。
 - **Webhook / TaskFlow / SQLite ledger**：除非 cron 使用场景明确，不复制 Gateway。
-- **`crates/onboard`** — 单独决议。
+- **execute_turn / execute_task 双实现收敛**、桌面传输去 loopback（custom protocol / UDS）、M4 hidden-split 评测、LLM failover 多跳 — 见 [`planning/audit-2026-07-27.md`](planning/audit-2026-07-27.md)。
+- ~~Telegram 工具进度 / IM 通道~~ — **已关闭**。
 
 ---
 
@@ -171,7 +181,7 @@
 | 主题 | 备注 | ADR / 下一步 |
 |------|------|----------------|
 | **MCP stdio 受控重连（实现）** | 政策已 **Accepted**（ADR 007）；**代码层自动重连**仍待 flag + 原子工具表更新后再开 | [ADR 007](adr/007-mcp-session-reconnect-policy.md) |
-| **通道 AskUserQuestion 扩展** | Telegram 已 MVP；Discord / 微信文本回落等 | [ADR 008](adr/008-channel-ask-user-question-phasing.md) |
+| ~~通道 AskUserQuestion 扩展~~ | **关闭**：IM 已移除；Workbench HITL 为准 | [ADR 008](adr/008-channel-ask-user-question-phasing.md) — 归档 |
 | 会话 **rewind** / 撤销展示 | 与 `sessions` 快照格式兼容性 | [ADR 004](adr/004-session-rewind.md)（Proposed）— **暂缓**：无实现排期前保持 Proposed，改快照前必读。 |
 | **`/clear` vs 纯文本 transcript 缓冲** | 是否需独立于 agent messages 的视口重置 | [ADR 005](adr/005-repl-clear-vs-transcript.md)（Proposed）— **暂缓**：流式 REPL 已有 `turn_transcript_anchor` / `stream_exit_dump_anchor`，产品缺口再开。 |
 | **virtual scroll** | 见 §5 Later | [ADR 006](adr/006-transcript-virtual-scroll-rfc.md)（Proposed）— **暂缓**：与 [`term-smoothness-baseline.md`](ops/term-smoothness-baseline.md) 负载模型挂钩后再审。 |

@@ -46,7 +46,7 @@ export const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
 
-/** Cloud account connect page — not a workbench gate. */
+/** Cloud account connect page — first-run gate when no BYOK and not linked. */
 export const cloudLoginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/cloud-login",
@@ -55,7 +55,7 @@ export const cloudLoginRoute = createRoute({
     try {
       const cloud = await api.cloudSession();
       if (cloud.linked) {
-        throw redirect({ to: "/account", replace: true });
+        throw redirect({ to: "/conversations", replace: true });
       }
     } catch (e) {
       if (e && typeof e === "object" && "to" in e) throw e;
@@ -68,13 +68,25 @@ export const shellRoute = createRoute({
   getParentRoute: () => rootRoute,
   component: Layout,
   beforeLoad: async ({ location }) => {
-    // Local-first: open the workbench without requiring a cloud session.
-    // Cloud features are gated inside account/billing pages only.
     if (shouldOpenControlCenterForLocation(location.pathname, location.searchStr ?? "")) {
       throw redirect({
         ...controlCenterRedirectTarget(location.pathname, location.searchStr ?? ""),
         replace: true,
       });
+    }
+    // Login-ready: no BYOK and no cloud session → cloud login (skip /setup wizard).
+    try {
+      const [cloud, setupRes] = await Promise.all([
+        api.cloudSession(),
+        api.setupStatus(),
+      ]);
+      if (cloud.linked) return;
+      const llmOk = setupRes.setup?.steps?.some((s) => s.id === "llm" && s.complete);
+      if (!llmOk && !setupRes.setup?.setup_completed_at) {
+        throw redirect({ to: "/cloud-login", replace: true });
+      }
+    } catch (e) {
+      if (e && typeof e === "object" && "to" in e) throw e;
     }
   },
 });
@@ -119,18 +131,13 @@ export const setupRoute = createRoute({
   },
   beforeLoad: ({ search }) => {
     const step = search.step?.trim() ?? "";
-    // 仅 legacy 链接（带 step/section 参数）重定向到 /settings；
-    // 裸 /setup 进入首次上手引导页（SetupPage）。
-    if (!step && !search.section) {
-      return;
-    }
+    // Legacy links and bare /setup both go to settings (login-ready: no wizard gate).
     let section: SettingsSection = "model";
     if (step === "memory") {
       section = "data";
     } else if (step === "skills") {
       section = "skills";
     } else if (step === "channels" || step === "wechat" || step === "notify") {
-      // Legacy setup wizard channel steps → notification / channel policies.
       section = "notify";
     } else if (search.section) {
       section = search.section;
@@ -153,6 +160,14 @@ export const indexRoute = createRoute({
         ? search.project.trim()
         : undefined;
     return { project };
+  },
+  beforeLoad: ({ search }) => {
+    // Conversation page is the primary shell — never land on the hero home.
+    throw redirect({
+      to: "/conversations",
+      search: search.project ? { project: search.project } : {},
+      replace: true,
+    });
   },
   component: () => (
     <Page>
