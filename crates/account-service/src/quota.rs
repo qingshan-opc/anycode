@@ -5,6 +5,8 @@ use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
 use sqlx::Row;
 
+// The default is a test fixture; live quota windows come from entitlements.
+#[cfg(test)]
 pub(crate) const DEFAULT_WINDOW_SECS: i32 = 5 * 3600;
 
 #[derive(Debug, Clone)]
