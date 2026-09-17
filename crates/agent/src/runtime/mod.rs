@@ -1,5 +1,8 @@
 //! Agent 运行时（LLM + 工具循环、落盘、回执）。
 
+#[cfg(feature = "harness-v1")]
+pub mod harness_bridge;
+
 mod agentic_loop;
 mod agentic_turn;
 mod artifacts;

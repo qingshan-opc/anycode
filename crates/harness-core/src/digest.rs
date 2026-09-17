@@ -25,5 +25,7 @@ pub fn canonical(value: &Value) -> Value {
     }
 }
 pub fn digest<T: Serialize>(value: &T) -> Result<String> {
-    Ok(bytes_digest(&serde_json::to_vec(&canonical(&serde_json::to_value(value)?))?))
+    Ok(bytes_digest(&serde_json::to_vec(&canonical(
+        &serde_json::to_value(value)?,
+    ))?))
 }

@@ -6,7 +6,11 @@ use serde_json::Value;
 pub type ProviderMessage = Value;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Invocation { pub id: String, pub name: String, pub arguments: Value }
+pub struct Invocation {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolSpec {
     pub name: String,
@@ -17,10 +21,20 @@ pub struct ToolSpec {
     pub read_only: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ToolResult { pub value: Value, pub is_error: bool }
+pub struct ToolResult {
+    pub value: Value,
+    pub is_error: bool,
+}
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct Usage { pub input_tokens: u64, pub output_tokens: u64 }
-impl Usage { pub fn total(self) -> u64 { self.input_tokens.saturating_add(self.output_tokens) } }
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+impl Usage {
+    pub fn total(self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Hop {
     pub assistant: ProviderMessage,
@@ -39,7 +53,14 @@ pub struct Limits {
     pub reservation_per_hop: u64,
 }
 impl Default for Limits {
-    fn default() -> Self { Self { max_turns: 64, max_tools_per_turn: 32,
-        max_context_bytes: 4 * 1024 * 1024, max_result_bytes: 256 * 1024,
-        max_arguments_bytes: 128 * 1024, reservation_per_hop: 32768 } }
+    fn default() -> Self {
+        Self {
+            max_turns: 64,
+            max_tools_per_turn: 32,
+            max_context_bytes: 4 * 1024 * 1024,
+            max_result_bytes: 256 * 1024,
+            max_arguments_bytes: 128 * 1024,
+            reservation_per_hop: 32768,
+        }
+    }
 }
