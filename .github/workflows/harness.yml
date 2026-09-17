@@ -1,0 +1,82 @@
+name: Harness verification
+
+on:
+  push:
+    branches: [main, refactor/harness-v1-merge-20260918]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: harness-foundation
+      - name: Format checks
+        run: cargo fmt --all -- --check
+      - name: Core, extensions, identity and native host contracts
+        run: cargo test --locked -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-cloud818 -p anycode-harness-host
+      - name: Strict Clippy
+        run: cargo clippy --locked -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-cloud818 -p anycode-harness-host --all-targets -- -D warnings
+      - name: Scripted fixture only (no live model or desktop)
+        run: cargo run --locked -p anycode-harness-core --example scripted_run
+
+  agent-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ANYCODE_SKIP_BROWSER_SMOKE: '1'
+      ANYCODE_BUILD_DASHBOARD_UI: '0'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: harness-agent-bridge
+      - name: Existing Agent with opt-in harness enabled
+        run: cargo check --locked -p anycode-agent --features harness-v1
+
+  graph-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Graph transport, stale drafts and approval regressions
+        run: python3 tools/harness/verify.py --mode node
+      - name: Shipped graph examples
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, readdirSync } from 'node:fs';
+          import { parseGraph } from './crates/dashboard-ui/src/features/harness/graph-model.mjs';
+          for (const name of readdirSync('examples/harness/graphs').filter(n => n.endsWith('.json'))) {
+            parseGraph(readFileSync(`examples/harness/graphs/${name}`, 'utf8'));
+            console.log(`validated ${name}`);
+          }
+          JS

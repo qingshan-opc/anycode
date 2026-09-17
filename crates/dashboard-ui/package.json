@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test": "vitest run && npm run test:harness",
+    "test:e2e": "playwright test",
+    "test:harness": "node --test src/features/harness/*.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.66.9",
