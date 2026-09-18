@@ -5,8 +5,6 @@ use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
 use sqlx::Row;
 
-pub(crate) const DEFAULT_WINDOW_SECS: i32 = 5 * 3600;
-
 #[derive(Debug, Clone)]
 pub struct CallQuotaState {
     pub window_secs: i32,
@@ -140,10 +138,15 @@ pub async fn record_model_call(db: &AccountDb, org_id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::DEFAULT_WINDOW_SECS;
-
     #[test]
     fn default_window_is_five_hours() {
-        assert_eq!(DEFAULT_WINDOW_SECS, 18_000);
+        // Runtime reads the persisted window, so verify the shipped SQL rather
+        // than an unused Rust constant that can diverge from the database.
+        let migration = include_str!("../migrations/018_pro_window_quota_disable_v4_pro.sql");
+        let assignment = format!("quota_window_secs = {},", 5 * 3600);
+        assert!(migration.lines().any(|line| line.trim() == assignment));
+        assert!(migration
+            .lines()
+            .any(|line| line.trim() == format!("e.{assignment}")));
     }
 }

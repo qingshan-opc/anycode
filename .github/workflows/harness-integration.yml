@@ -1,0 +1,67 @@
+name: Harness integration validation
+
+on:
+  push:
+    branches: [main, master, 'refactor/harness-*']
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: never
+      ANYCODE_SKIP_BROWSER_SMOKE: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Record exact tested revision
+        run: git rev-parse HEAD
+      - name: Harness formatting
+        run: cargo fmt -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-host -p anycode-harness-cloud818 -- --check
+      - name: Harness contract tests
+        run: cargo test --locked -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-cloud818 -p anycode-harness-host --all-targets
+      - name: Strict Harness Clippy
+        run: cargo clippy --locked -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-cloud818 -p anycode-harness-host --all-targets -- -D warnings
+      - name: Compile real runtime bridge
+        run: cargo check --locked -p anycode-agent --features harness-v1 --all-targets
+      - name: Existing runtime regressions
+        run: cargo test --locked -p anycode-core -p anycode-security -p anycode-agent --lib
+      - name: Deterministic local execution (not live model)
+        run: cargo run --locked -p anycode-harness-core --example scripted_run
+
+  harness-graph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - name: Strict graph/checkpoint contracts
+        run: node --test crates/dashboard-ui/src/features/harness/*.test.mjs
+      - name: Validate shipped graphs through the real editor model
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {parseGraph} from './crates/dashboard-ui/src/features/harness/graph-model.mjs';
+          for (const file of fs.readdirSync('examples/harness/graphs').filter(f => f.endsWith('.json'))) {
+            const graph = parseGraph(fs.readFileSync(`examples/harness/graphs/${file}`, 'utf8'));
+            console.log(`Validated ${file}: ${graph.nodes.length} nodes`);
+          }
+          JS

@@ -2,6 +2,9 @@
 //!
 //! anyCode Agent 运行时：多轮工具循环、路由与内存
 
+#[cfg(feature = "harness-v1")]
+pub use runtime::harness_bridge::{HarnessBoundary, ReadOnlyPilotBoundary};
+
 mod agent_profiles;
 mod agents;
 mod compact;
