@@ -1,0 +1,121 @@
+name: Harness integration validation
+
+on:
+  push:
+    branches: [refactor/harness-v1.1-integration-20260918]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-integration-v1-1
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'qingshan-opc/anycode' && github.ref == 'refs/heads/refactor/harness-v1.1-integration-20260918'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      tested_sha: ${{ steps.commit.outputs.tested_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply exact-baseline wiring
+        run: python3 tools/harness/apply-integration.py
+      - name: Format imported Rust only
+        run: |
+          cargo fmt -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-host -p anycode-harness-cloud818
+          rustfmt --edition 2021 crates/agent/src/runtime/harness_bridge.rs
+      - name: Resolve existing lockfile with new workspace members
+        run: cargo metadata --format-version 1 > "$RUNNER_TEMP/harness-metadata.json"
+      - name: Commit generated source only to the integration branch
+        id: commit
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          allowed = {'Cargo.toml','Cargo.lock','crates/agent/Cargo.toml','crates/agent/src/lib.rs','crates/agent/src/runtime/mod.rs','crates/agent/src/runtime/harness_bridge.rs'}
+          prefixes = ('crates/harness-core/','crates/harness-extensions/','crates/harness-host/','crates/harness-cloud818/')
+          files = subprocess.check_output(['git','diff','--name-only','-z']).decode().split('\0')
+          for path in filter(None,files):
+              if path not in allowed and not (path.startswith(prefixes) and path.endswith('.rs')):
+                  raise SystemExit('Unexpected generated change: '+path)
+          PY
+          git diff --check
+          remote=$(git ls-remote origin refs/heads/refactor/harness-v1.1-integration-20260918 | cut -f1)
+          test "$remote" = "$EXPECTED_HEAD"
+          git add Cargo.toml Cargo.lock crates/agent/Cargo.toml crates/agent/src/lib.rs crates/agent/src/runtime/mod.rs crates/agent/src/runtime/harness_bridge.rs crates/harness-core crates/harness-extensions crates/harness-host crates/harness-cloud818
+          if ! git diff --cached --quiet; then
+            git -c user.name='anycode-harness-integration' -c user.email='anycode-harness-integration@users.noreply.github.com' commit -m 'build(harness): wire opt-in runtime, format source and resolve lockfile'
+            git push origin HEAD:refs/heads/refactor/harness-v1.1-integration-20260918
+          fi
+          sha=$(git rev-parse HEAD)
+          echo "tested_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Prepared exact commit: $sha" >> "$GITHUB_STEP_SUMMARY"
+
+  rust:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: never
+      ANYCODE_SKIP_BROWSER_SMOKE: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tested_sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Record tested revision
+        run: git rev-parse HEAD
+      - name: Harness formatting
+        run: cargo fmt -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-host -p anycode-harness-cloud818 -- --check
+      - name: Harness contract tests
+        run: cargo test --locked -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-cloud818 -p anycode-harness-host --all-targets
+      - name: Harness Clippy
+        run: cargo clippy --locked -p anycode-harness-core -p anycode-harness-extensions -p anycode-harness-cloud818 -p anycode-harness-host --all-targets -- -D warnings
+      - name: Compile real runtime integration
+        run: cargo check --locked -p anycode-agent --features harness-v1 --all-targets
+      - name: Existing core and runtime regressions
+        run: cargo test --locked -p anycode-core -p anycode-security -p anycode-agent --lib
+      - name: Scripted execution demo (not live model)
+        run: cargo run --locked -p anycode-harness-core --example scripted_run
+
+  dashboard:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tested_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: crates/dashboard-ui/package-lock.json
+      - name: Graph model contract tests
+        run: node --test crates/dashboard-ui/src/features/harness/*.test.mjs
+      - name: Dashboard dependencies
+        working-directory: crates/dashboard-ui
+        run: npm ci
+      - name: Existing dashboard tests
+        working-directory: crates/dashboard-ui
+        run: npm test
+      - name: Full dashboard typecheck and build
+        working-directory: crates/dashboard-ui
+        run: npm run build
