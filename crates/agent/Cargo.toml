@@ -3,7 +3,13 @@ name = "anycode-agent"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+harness-v1 = ["dep:anycode-harness-core", "dep:anycode-harness-host"]
+
 [dependencies]
+anycode-harness-core = { path = "../harness-core", optional = true }
+anycode-harness-host = { path = "../harness-host", optional = true }
 anycode-core = { path = "../core" }
 anycode-llm = { path = "../llm" }
 anycode-memory = { path = "../memory" }
