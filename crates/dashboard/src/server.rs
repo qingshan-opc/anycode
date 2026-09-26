@@ -20,7 +20,8 @@ pub struct DashboardConfig {
     /// When false, only `/api/*` (and WS/SSE) are served — no SPA at `/`.
     pub serve_ui: bool,
     pub version: String,
-    /// Optional one-shot Desktop bootstrap token (embedded desktop only).
+    /// Optional Desktop bootstrap token (embedded desktop only; reusable for
+    /// the process lifetime — see `get_desktop_bootstrap`).
     pub desktop_bootstrap_token: Option<String>,
     /// Notified with the OS-assigned port when `port` is `0` (desktop ephemeral bind).
     pub bound_port_tx: Option<tokio::sync::oneshot::Sender<u16>>,
@@ -489,7 +490,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desktop_bootstrap_mints_one_shot_local_session() {
+    async fn desktop_bootstrap_token_is_reusable_and_mints_fresh_sessions() {
         let token = crate::api::auth::generate_desktop_bootstrap_token();
         let dir = tempfile::tempdir().unwrap();
         let app = app_for_test_custom(
@@ -558,7 +559,9 @@ mod tests {
             .unwrap();
         assert_eq!(allowed.status(), axum::http::StatusCode::OK);
 
-        // The token is one-shot: replaying it must not mint another session.
+        // The token is intentionally reusable for the process lifetime:
+        // WKWebView replays the bootstrap request internally, and a consumed
+        // (one-shot) token 401-ing that replay broke desktop sign-in.
         let replay = app
             .oneshot(
                 axum::http::Request::builder()
@@ -569,7 +572,20 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(replay.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(replay.status(), axum::http::StatusCode::SEE_OTHER);
+        let replay_cookie = replay
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find(|v| v.starts_with("dw_session="))
+            .expect("replay dw_session cookie")
+            .to_string();
+        assert_ne!(
+            replay_cookie.split(';').next().unwrap(),
+            session_cookie,
+            "each bootstrap handshake must mint a fresh session cookie"
+        );
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { AuthLayout } from "../components/AuthLayout";
@@ -33,7 +33,8 @@ export function LoginPage() {
   const search = new URLSearchParams(loc.search);
   const deviceCode = search.get("device_code");
   const redirectUri = search.get("redirect_uri");
-  const lxToken = search.get("lx_token");
+  const lxCode = search.get("lx_code");
+  const exchangeRef = useRef<{code:string;promise:Promise<{token:string}>}|null>(null);
   const nextFromQuery = search.get("next");
 
   const goConsole = () => {
@@ -80,13 +81,17 @@ export function LoginPage() {
   };
 
   useEffect(() => {
-    if (!lxToken || claimingLx) return;
+    if (!lxCode) return;
+    let active=true;
     setClaimingLx(true);
-    setToken(lxToken);
-    const dest = safeAppNext(nextFromQuery);
-    // Drop lx_token from the address bar after claiming.
-    nav(dest, { replace: true });
-  }, [lxToken, claimingLx, setToken, nextFromQuery, nav]);
+    if (exchangeRef.current?.code!==lxCode) exchangeRef.current={code:lxCode,promise:api.exchangeHop(lxCode)};
+    void exchangeRef.current.promise.then(result=>{
+      if (!active) return;
+      setToken(result.token);nav(safeAppNext(nextFromQuery),{replace:true});
+    }).catch(()=>{if(active)setError("登录交换码已过期或已使用，请重新使用统一账号登录。");})
+      .finally(()=>{if(active)setClaimingLx(false);});
+    return ()=>{active=false;};
+  }, [lxCode,setToken,nextFromQuery,nav]);
 
   useEffect(() => {
     if (!authenticated || !deviceCode || handoffLink) return;
@@ -95,10 +100,10 @@ export function LoginPage() {
   }, [authenticated, deviceCode, handoffLink]);
 
   useEffect(() => {
-    if (!authenticated || deviceCode || lxToken) return;
+    if (!authenticated || deviceCode || lxCode) return;
     const from = (loc.state as { from?: string } | null)?.from;
     nav(safeAppNext(from || nextFromQuery), { replace: true });
-  }, [authenticated, deviceCode, lxToken, loc.state, nav, nextFromQuery]);
+  }, [authenticated, deviceCode, lxCode, loc.state, nav, nextFromQuery]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,7 +125,7 @@ export function LoginPage() {
     }
   };
 
-  if (lxToken || claimingLx) {
+  if (claimingLx || (lxCode && !error)) {
     return (
       <AuthLayout title={t("auth.loginTitle")} subtitle={t("common.loading")}>
         <p className="muted">{t("auth.wechatFinishing")}</p>
@@ -190,6 +195,7 @@ export function LoginPage() {
           {t("devices.loginHandoffHint")}
         </p>
       ) : null}
+      {error && !showEmailLogin ? <p className="form-error" role="alert">{error}</p> : null}
       <p className="auth-consent-note muted">{t("auth.loginAlgorithmNotice")}</p>
       <a className="btn btn-primary btn-block auth-submit" href={hopLoginUrl(wechatNext())}>
         {t("auth.wechatLogin")}

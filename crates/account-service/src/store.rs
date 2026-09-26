@@ -155,12 +155,21 @@ fn stable_lingxi_join_email(lingxi_user_id: &str) -> String {
 }
 
 /// Resolve or JIT-provision a portal user from lingxi-accounts SSO claims, then mint a session.
-pub async fn login_or_provision_lingxi(
+#[derive(Debug)]
+pub struct IdentityLinkRequired;
+impl std::fmt::Display for IdentityLinkRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("existing account requires verified identity linking")
+    }
+}
+impl std::error::Error for IdentityLinkRequired {}
+
+pub async fn resolve_lingxi_user(
     db: &AccountDb,
     lingxi_user_id: &str,
     email: Option<&str>,
     phone: Option<&str>,
-) -> Result<(AuthUser, String)> {
+) -> Result<AuthUser> {
     let lingxi_user_id = lingxi_user_id.trim();
     if lingxi_user_id.is_empty() {
         return Err(anyhow!("missing lingxi_user_id"));
@@ -168,26 +177,18 @@ pub async fn login_or_provision_lingxi(
 
     if let Some(user) = find_user_by_lingxi_id(db, lingxi_user_id).await? {
         mark_lingxi_identity_verified(db, &user.id).await?;
-        let token = create_session(db, &user.id).await?;
-        return Ok((user, token));
+        return Ok(user);
     }
 
     if let Some(email) = email.map(str::trim).filter(|s| !s.is_empty()) {
         let email = email.to_lowercase();
-        if let Some(user) = find_user_by_email(db, &email).await? {
-            bind_lingxi_user_id(db, &user.id, lingxi_user_id).await?;
-            mark_lingxi_identity_verified(db, &user.id).await?;
-            let token = create_session(db, &user.id).await?;
-            return Ok((user, token));
+        if find_user_by_email(db, &email).await?.is_some() {
+            return Err(anyhow!(IdentityLinkRequired));
         }
     }
-
     let join_email = stable_lingxi_join_email(lingxi_user_id);
-    if let Some(user) = find_user_by_email(db, &join_email).await? {
-        bind_lingxi_user_id(db, &user.id, lingxi_user_id).await?;
-        mark_lingxi_identity_verified(db, &user.id).await?;
-        let token = create_session(db, &user.id).await?;
-        return Ok((user, token));
+    if find_user_by_email(db, &join_email).await?.is_some() {
+        return Err(anyhow!(IdentityLinkRequired));
     }
 
     let display_name = phone
@@ -203,8 +204,7 @@ pub async fn login_or_provision_lingxi(
         .unwrap_or_else(|| lingxi_user_id.chars().take(8).collect::<String>());
 
     let user = provision_lingxi_user(db, lingxi_user_id, &join_email, &display_name).await?;
-    let token = create_session(db, &user.id).await?;
-    Ok((user, token))
+    Ok(user)
 }
 
 async fn find_user_by_lingxi_id(db: &AccountDb, lingxi_user_id: &str) -> Result<Option<AuthUser>> {
@@ -245,17 +245,6 @@ async fn find_user_by_email(db: &AccountDb, email: &str) -> Result<Option<AuthUs
         role: r.get("role"),
         organization_id: r.get("organization_id"),
     }))
-}
-
-async fn bind_lingxi_user_id(db: &AccountDb, user_id: &str, lingxi_user_id: &str) -> Result<()> {
-    sqlx::query(
-        "UPDATE users SET lingxi_user_id = ? WHERE id = ? AND (lingxi_user_id IS NULL OR lingxi_user_id = '')",
-    )
-    .bind(lingxi_user_id)
-    .bind(user_id)
-    .execute(db.pool())
-    .await?;
-    Ok(())
 }
 
 async fn mark_lingxi_identity_verified(db: &AccountDb, user_id: &str) -> Result<()> {
@@ -1117,6 +1106,53 @@ fn current_billing_period() -> (NaiveDate, NaiveDate) {
     .pred_opt()
     .unwrap_or(today);
     (start, end)
+}
+
+/// Mint a short one-use handoff referencing a user, not an existing session.
+pub async fn create_portal_login_code(
+    db: &AccountDb,
+    user_id: &str,
+    browser: &str,
+) -> Result<String> {
+    let code = new_session_token();
+    sqlx::query("DELETE FROM portal_login_codes WHERE expires_at < NOW()")
+        .execute(db.pool())
+        .await?;
+    sqlx::query(
+        "INSERT INTO portal_login_codes(code_hash,user_id,browser_hash,expires_at) VALUES(?,?,?,?)",
+    )
+    .bind(hash_token(&code))
+    .bind(user_id)
+    .bind(hash_token(browser))
+    .bind(Utc::now() + Duration::seconds(90))
+    .execute(db.pool())
+    .await?;
+    Ok(code)
+}
+pub async fn consume_portal_login_code(
+    db: &AccountDb,
+    code: &str,
+    browser: &str,
+) -> Result<Option<String>> {
+    let mut tx = db.pool().begin().await?;
+    let user:Option<String>=sqlx::query_scalar("SELECT user_id FROM portal_login_codes WHERE code_hash=? AND browser_hash=? AND expires_at>NOW() FOR UPDATE")
+        .bind(hash_token(code)).bind(hash_token(browser)).fetch_optional(&mut *tx).await?;
+    let Some(user) = user else { return Ok(None) };
+    sqlx::query("DELETE FROM portal_login_codes WHERE code_hash=?")
+        .bind(hash_token(code))
+        .execute(&mut *tx)
+        .await?;
+    // Issue the session in the same transaction as consuming the exchange code.
+    let token = new_session_token();
+    sqlx::query("INSERT INTO sessions(id,user_id,token_hash,expires_at) VALUES(?,?,?,?)")
+        .bind(format!("sess_{}", Uuid::new_v4()))
+        .bind(user)
+        .bind(hash_token(&token))
+        .bind(Utc::now() + Duration::hours(12))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Some(token))
 }
 
 #[cfg(test)]

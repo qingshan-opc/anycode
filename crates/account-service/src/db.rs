@@ -154,6 +154,11 @@ impl AccountDb {
             include_str!("../migrations/031_wallet_plans.sql"),
         )
         .await?;
+        self.apply_migration(
+            "032_portal_login_codes",
+            include_str!("../migrations/032_portal_login_codes.sql"),
+        )
+        .await?;
         Ok(())
     }
 
