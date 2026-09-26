@@ -230,6 +230,7 @@ pub fn router(state: AppState) -> Router {
         // Outside /api/v1: must match lingxi ANYCODE_SSO_CALLBACK path.
         .route("/api/auth/hop/login", get(crate::hop::hop_login))
         .route("/api/auth/hop/callback", get(crate::hop::hop_callback))
+        .route("/api/auth/hop/exchange", post(crate::hop::hop_exchange))
         .route(
             "/api/v1/remote-chat/ws",
             get(crate::remote_chat::remote_chat_ws),

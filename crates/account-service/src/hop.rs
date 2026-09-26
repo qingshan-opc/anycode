@@ -3,7 +3,7 @@
 
 use crate::api::AppState;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::Deserialize;
@@ -40,6 +40,9 @@ fn is_safe_app_next(raw: &str) -> bool {
         || raw.contains('\n')
         || raw.contains('\r')
         || raw.contains("..")
+        || raw.contains('\\')
+        || raw.chars().any(char::is_control)
+        || raw.contains('%')
     {
         return false;
     }
@@ -125,7 +128,7 @@ pub async fn hop_callback(
             .into_response();
     }
     if !status.is_success() {
-        tracing::warn!(%status, body = %body, "lingxi sso consume rejected");
+        tracing::warn!(%status, "lingxi sso consume rejected");
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "ticket expired or already used" })),
@@ -160,7 +163,7 @@ pub async fn hop_callback(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    let token = match crate::store::login_or_provision_lingxi(
+    let user = match crate::store::resolve_lingxi_user(
         &state.db,
         &lingxi_user_id,
         email.as_deref(),
@@ -168,9 +171,12 @@ pub async fn hop_callback(
     )
     .await
     {
-        Ok((_user, token)) => token,
+        Ok(user) => user,
         Err(e) => {
-            tracing::error!(error = %e, "lingxi hop provision failed");
+            if e.is::<crate::store::IdentityLinkRequired>() {
+                return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"existing account requires verified identity linking"}))).into_response();
+            }
+            tracing::error!("lingxi hop provision failed");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "provision failed" })),
@@ -179,13 +185,110 @@ pub async fn hop_callback(
         }
     };
 
-    let portal = state.config.portal_url.trim_end_matches('/');
-    let dest = format!(
-        "{portal}/login?lx_token={}&next={}",
-        urlencoding::encode(&token),
-        urlencoding::encode(&next)
+    let browser = crate::auth::new_session_token();
+    let code = match crate::store::create_portal_login_code(&state.db, &user.id, &browser).await {
+        Ok(code) => code,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error":"handoff unavailable"})),
+            )
+                .into_response()
+        }
+    };
+    let portal = match reqwest::Url::parse(&state.config.portal_url) {
+        Ok(url) => url,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let mut dest = portal.clone();
+    dest.set_path("/login");
+    dest.set_query(None);
+    dest.set_fragment(None);
+    dest.query_pairs_mut()
+        .append_pair("lx_code", &code)
+        .append_pair("next", &next);
+    let mut response = Redirect::temporary(dest.as_str()).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+        .headers_mut()
+        .insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        proof_cookie(&portal, &browser, 90).parse().unwrap(),
     );
-    Redirect::temporary(&dest).into_response()
+    response.into_response()
+}
+
+fn proof_cookie(portal: &reqwest::Url, value: &str, ttl: u32) -> String {
+    format!(
+        "anycode_hop_proof={value}; Path=/api/auth/hop; HttpOnly; SameSite=Lax; Max-Age={ttl}{}",
+        if portal.scheme() == "https" {
+            "; Secure"
+        } else {
+            ""
+        }
+    )
+}
+fn proof_cookie_value(headers: &HeaderMap) -> Option<&str> {
+    let mut found = None;
+    for line in headers.get_all(header::COOKIE) {
+        for part in line.to_str().ok()?.split(';') {
+            if let Some(value) = part.trim().strip_prefix("anycode_hop_proof=") {
+                if found.is_some() || !valid_exchange(value) {
+                    return None;
+                }
+                found = Some(value);
+            }
+        }
+    }
+    found
+}
+fn valid_exchange(raw: &str) -> bool {
+    (32..=128).contains(&raw.len())
+        && raw
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Exchange {
+    code: String,
+}
+pub async fn hop_exchange(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Exchange>,
+) -> Response {
+    let portal = match reqwest::Url::parse(&state.config.portal_url) {
+        Ok(url) => url,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if headers.get(header::ORIGIN).and_then(|v| v.to_str().ok())
+        != Some(portal.origin().ascii_serialization().as_str())
+        || !valid_exchange(&body.code)
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(browser) = proof_cookie_value(&headers) else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let token = match crate::store::consume_portal_login_code(&state.db, &body.code, browser).await
+    {
+        Ok(Some(token)) => token,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let mut response = Json(serde_json::json!({"token":token})).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        proof_cookie(&portal, "", 0).parse().unwrap(),
+    );
+    response
 }
 
 mod urlencoding {
@@ -206,7 +309,33 @@ mod urlencoding {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_next;
+    use super::*;
+
+    #[test]
+    fn proof_is_host_only_and_exchange_requires_well_formed_values() {
+        let portal = reqwest::Url::parse("https://anycode.work").unwrap();
+        let value = proof_cookie(&portal, "opaque", 90);
+        assert!(value.contains("HttpOnly") && value.contains("Secure"));
+        assert!(!value.contains("Domain="));
+        for raw in ["", "../auth", "a b", "a;Secure"] {
+            assert!(!valid_exchange(raw));
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("anycode_hop_proof={}", "x".repeat(43))
+                .parse()
+                .unwrap(),
+        );
+        assert!(proof_cookie_value(&headers).is_some());
+        headers.append(
+            header::COOKIE,
+            format!("anycode_hop_proof={}", "x".repeat(43))
+                .parse()
+                .unwrap(),
+        );
+        assert!(proof_cookie_value(&headers).is_none());
+    }
 
     #[test]
     fn safe_next_defaults_and_rejects_open_redirect() {

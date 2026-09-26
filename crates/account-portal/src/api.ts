@@ -88,6 +88,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 }
 
 export const api = {
+  exchangeHop: (code:string) => apiFetch<{token:string}>("/api/auth/hop/exchange", {method:"POST",credentials:"same-origin",body:JSON.stringify({code})}),
   sendRegistrationCode: (email: string) =>
     apiFetch<{ ok: boolean; expires_in: number }>("/api/v1/auth/email/send-code", {
       method: "POST",
