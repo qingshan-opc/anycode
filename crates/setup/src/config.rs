@@ -30,8 +30,12 @@ fn registry_has_cloud_chat(cfg: &Value) -> bool {
 
 /// Whether config (or a linked anyCode Cloud session) is enough to run a chat.
 pub fn has_usable_model_config(cfg: &Value) -> bool {
+    has_usable_model_config_for_link(cfg, cloud_linked())
+}
+
+fn has_usable_model_config_for_link(cfg: &Value, linked: bool) -> bool {
     // Linked cloud device + hosted catalog (or anycode_cloud provider) counts as ready.
-    if cloud_linked() {
+    if linked {
         let provider = string_field(cfg, "provider", "provider").unwrap_or_default();
         if normalize_provider_id(&provider) == "anycode_cloud" || registry_has_cloud_chat(cfg) {
             return true;
@@ -73,7 +77,7 @@ mod tests {
             "model": "glm-5",
             "api_key": ""
         });
-        assert!(!has_usable_model_config(&cfg));
+        assert!(!has_usable_model_config_for_link(&cfg, false));
     }
 
     #[test]
@@ -84,7 +88,7 @@ mod tests {
             "api_key": "",
             "provider_credentials": { "openai": "sk-test" }
         });
-        assert!(has_usable_model_config(&cfg));
+        assert!(has_usable_model_config_for_link(&cfg, false));
     }
 
     #[test]
@@ -94,7 +98,7 @@ mod tests {
             "model": "glm-5",
             "api_key": "secret"
         });
-        assert!(has_usable_model_config(&cfg));
+        assert!(has_usable_model_config_for_link(&cfg, false));
     }
 
     #[test]

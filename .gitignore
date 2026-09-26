@@ -71,3 +71,6 @@ crates/dashboard/mindmap-*.json
 
 # Windows updater signatures (generated locally)
 crates/account-portal/public/downloads/update/*.exe.sig
+
+# Local cross compilation cache; never a source artifact.
+/target-linux/
