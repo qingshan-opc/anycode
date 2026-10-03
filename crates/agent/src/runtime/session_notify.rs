@@ -104,6 +104,9 @@ async fn dispatch_http(
         .ok()
         .and_then(|u| u.host_str().map(std::string::ToString::to_string))
         .unwrap_or_else(|| "?".to_string());
+    // Loopback webhooks must never be routed through a proxy: reqwest picks up
+    // system/env proxies by default, and a global proxy 502s local hooks.
+    let loopback = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
     let ev = payload.get("event").and_then(|x| x.as_str()).unwrap_or("?");
     let truncated = payload
         .get("excerpt_truncated")
@@ -117,9 +120,12 @@ async fn dispatch_http(
         "session notify http start"
     );
     let t0 = Instant::now();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(settings.http_timeout_ms.max(100)))
-        .build()?;
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_millis(settings.http_timeout_ms.max(100)));
+    if loopback {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build()?;
     let mut req = client.post(url).json(payload);
     for (k, v) in &settings.http_headers {
         let k = k.trim();

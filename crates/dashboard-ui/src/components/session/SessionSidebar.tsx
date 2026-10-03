@@ -43,8 +43,8 @@ export function SessionSidebar() {
 
   const quickActions: QuickAction[] = [
     {
-      id: "new-agent",
-      labelKey: "sidebar.newAgent",
+      id: "new-session",
+      labelKey: "sidebar.newSession",
       icon: "edit",
       onClick: () => {
         if (projectId) {

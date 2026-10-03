@@ -6,7 +6,6 @@ import { ConversationComposer } from "@/components/ConversationComposer";
 import { ConversationTranscript } from "@/components/ConversationTranscript";
 import { Icon } from "@/components/Icon";
 import { NewProjectDialog } from "@/components/NewProjectDialog";
-import { ProjectPicker } from "@/components/ProjectPicker";
 import { SecurityApprovalInbox } from "@/components/SecurityApprovalInbox";
 import { AskUserQuestionInbox } from "@/components/AskUserQuestionInbox";
 import { SessionTitleMenu } from "@/components/session/SessionTitleMenu";
@@ -334,20 +333,15 @@ export function ConversationThread({
         </div>
         <div className="conv-thread-composer-dock">
           <div className="conv-thread-composer">
-            <div className="px-2 pb-2">
-              <ProjectPicker
-                value={effectiveProjectId}
-                onChange={goHome}
-                options={projectOptions.map((p) => ({ id: p.id, name: p.name }))}
-                onSelectDirectory={() => setNewProjectOpen(true)}
-              />
-            </div>
             {effectiveProjectId ? (
               <ConversationComposer
                 mode="start"
                 projectId={effectiveProjectId}
                 initialPrompt={startPromptSeed || undefined}
                 onStreamingStart={markSessionStreaming ?? markShellStreaming}
+                projectOptions={projectOptions.map((p) => ({ id: p.id, name: p.name }))}
+                onProjectChange={goHome}
+                onSelectDirectory={() => setNewProjectOpen(true)}
                 onSuccess={(result) => {
                   beginPendingSession(result.session, {
                     id: effectiveProjectId,
