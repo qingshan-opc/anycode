@@ -6,6 +6,7 @@ import { ConversationComposer } from "@/components/ConversationComposer";
 import { ConversationTranscript } from "@/components/ConversationTranscript";
 import { Icon } from "@/components/Icon";
 import { NewProjectDialog } from "@/components/NewProjectDialog";
+import { ProjectPicker } from "@/components/ProjectPicker";
 import { SecurityApprovalInbox } from "@/components/SecurityApprovalInbox";
 import { AskUserQuestionInbox } from "@/components/AskUserQuestionInbox";
 import { SessionTitleMenu } from "@/components/session/SessionTitleMenu";
@@ -353,9 +354,12 @@ export function ConversationThread({
                 }}
               />
             ) : (
-              <p className="text-xs text-secondary px-3 pb-3 m-0">
-                {t("home.hero.selectDirectory")}
-              </p>
+              <ProjectPicker
+                value={effectiveProjectId}
+                onChange={goHome}
+                options={projectOptions.map((p) => ({ id: p.id, name: p.name }))}
+                onSelectDirectory={() => setNewProjectOpen(true)}
+              />
             )}
           </div>
         </div>

@@ -245,7 +245,7 @@ export const conversationsRoute = createRoute({
         : undefined;
     const cc =
       typeof search.cc === "string" && search.cc.trim() ? search.cc.trim() : undefined;
-    const fresh = search.new === true || search.new === "1";
+    const fresh = search.new === true || search.new === "1" || search.new === 1;
     const base = { project, session, agent, cc, new: fresh || undefined };
 
     const f = typeof search.filter === "string" ? search.filter.trim() : "";
