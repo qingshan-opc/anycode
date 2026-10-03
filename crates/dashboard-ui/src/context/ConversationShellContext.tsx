@@ -261,9 +261,11 @@ function useConversationShellState(): ConversationShellContextValue {
         setProjectId(nextProjectId);
       }
       // Stay on the conversation page — clear session for a fresh start composer.
+      // `new` is load-bearing: without it the pinned/first-session fallback
+      // resurrects the previous conversation and the fresh composer never shows.
       void navigate({
         to: "/conversations",
-        search: nextProjectId ? { project: nextProjectId } : {},
+        search: nextProjectId ? { project: nextProjectId, new: true } : { new: true },
       });
     },
     [navigate],
@@ -293,6 +295,7 @@ function useConversationShellState(): ConversationShellContextValue {
         queueMicrotask(() => {
           navigateSearch({
             ...effectiveSearch,
+            new: undefined,
             session: undefined,
           });
         });
@@ -303,6 +306,7 @@ function useConversationShellState(): ConversationShellContextValue {
         const hit = sidebarRows.find((s) => s.id === sessionId);
         navigateSearch({
           ...effectiveSearch,
+          new: undefined,
           project: hit?.project_id ?? effectiveSearch.project,
           session: sessionId,
         });
@@ -371,6 +375,11 @@ function useConversationShellState(): ConversationShellContextValue {
   }, [listSearch, sidebarRows]);
 
   const urlSessionId = useMemo(() => {
+    // Explicit "new session" intent wins over pinned/restored session — this is
+    // what makes the sidebar 新建会话 button actually show the fresh composer.
+    if (search.new) {
+      return null;
+    }
     const pool = sidebarRows.length > 0 ? sidebarRows : rows;
     const fallback = pool.length > 0 ? pool[0]!.id : null;
     return resolveShellSessionId({
@@ -379,7 +388,7 @@ function useConversationShellState(): ConversationShellContextValue {
       pinnedSessionId,
       fallbackSessionId: fallback,
     });
-  }, [pathname, pinnedSessionId, rows, sidebarRows, search.session]);
+  }, [pathname, pinnedSessionId, rows, sidebarRows, search.new, search.session]);
 
   useEffect(() => {
     if (pendingSessionId && search.session === pendingSessionId) {

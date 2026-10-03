@@ -31,12 +31,25 @@ describe("conversationSearchParams", () => {
       }),
     ).toEqual({ filter: "needs_approval" });
   });
+
+  it("keeps new-session intent through canonical search", () => {
+    expect(conversationSearchParams({ project: "p1", new: true })).toEqual({
+      project: "p1",
+      new: true,
+    });
+  });
 });
 
 describe("buildConversationsHref", () => {
   it("uses only filter in URL", () => {
     expect(buildConversationsHref({ filter: "needs_approval" })).toBe(
       "/conversations?filter=needs_approval",
+    );
+  });
+
+  it("round-trips new-session intent", () => {
+    expect(buildConversationsHref({ project: "p1", new: true })).toBe(
+      "/conversations?project=p1&new=1",
     );
   });
 });

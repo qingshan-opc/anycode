@@ -219,6 +219,14 @@ async fn fixture_api_smoke() {
         "ANYCODE_DASHBOARD_PREFERENCES_PATH",
         prefs_path.display().to_string(),
     );
+    // conversations/start builds the embedded AgentRuntime from the real
+    // ~/.anycode/config.json; isolate ANYCODE_HOME so a developer-host cloud
+    // provider (e.g. unlinked anyCode Cloud) cannot 500 the fixture, matching
+    // the no-config defaults CI runs with.
+    let _anycode_home = EnvVarGuard::set(
+        "ANYCODE_HOME",
+        dir.path().join("anycode-home").display().to_string(),
+    );
     let app = app_for_test(&db).await.unwrap();
 
     let health = get_json(app.clone(), "/api/health").await;
@@ -1225,6 +1233,12 @@ async fn session_message_with_text_files() {
     let state_dir = dir.path().join("dashboard-state");
     std::fs::create_dir_all(&state_dir).unwrap();
     let _state_dir = EnvVarGuard::set("ANYCODE_DASHBOARD_STATE_DIR", &state_dir);
+    // Same isolation as fixture_api_smoke: the message dispatch builds an
+    // embedded runtime from the host's real ~/.anycode config.
+    let _anycode_home = EnvVarGuard::set(
+        "ANYCODE_HOME",
+        dir.path().join("anycode-home").display().to_string(),
+    );
 
     let db = dir.path().join("text_files.db");
     let app = app_for_test(&db).await.unwrap();

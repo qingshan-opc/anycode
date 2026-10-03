@@ -229,6 +229,7 @@ export const conversationsRoute = createRoute({
     agent?: string;
     filter?: string;
     cc?: string;
+    new?: boolean;
   } => {
     const project =
       typeof search.project === "string" && search.project.trim()
@@ -244,7 +245,8 @@ export const conversationsRoute = createRoute({
         : undefined;
     const cc =
       typeof search.cc === "string" && search.cc.trim() ? search.cc.trim() : undefined;
-    const base = { project, session, agent, cc };
+    const fresh = search.new === true || search.new === "1";
+    const base = { project, session, agent, cc, new: fresh || undefined };
 
     const f = typeof search.filter === "string" ? search.filter.trim() : "";
     if (f) return { ...base, filter: f };

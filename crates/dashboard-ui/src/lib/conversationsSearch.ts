@@ -8,6 +8,8 @@ export type ConversationSearch = {
   session?: string;
   agent?: string;
   filter?: string;
+  /** 「新建会话」意图:压过 pinned/fallback 会话解析,强制显示全新 composer。 */
+  new?: boolean;
 };
 
 /** Read active filter chip directly from the location search string (instant, no router merge lag). */
@@ -63,6 +65,7 @@ export function conversationSearchParams(search: ConversationSearch): Conversati
   if (search.kind) out.kind = search.kind;
   if (search.needs_approval) out.needs_approval = true;
   if (search.budget_exceeded) out.budget_exceeded = true;
+  if (search.new) out.new = true;
   return out;
 }
 
@@ -103,6 +106,7 @@ export function buildConversationsHref(search: ConversationSearch = {}): string 
   if (canon.project) params.set("project", canon.project);
   if (canon.session) params.set("session", canon.session);
   if (canon.agent) params.set("agent", canon.agent);
+  if (canon.new) params.set("new", "1");
   const q = params.toString();
   return q ? `/conversations?${q}` : "/conversations";
 }
@@ -115,6 +119,7 @@ export function parseConversationSearch(searchStr: string): ConversationSearch {
     project: params.get("project") ?? undefined,
     session: params.get("session") ?? undefined,
     agent: params.get("agent") ?? undefined,
+    new: params.get("new") === "1" || undefined,
   };
   const filter = params.get("filter")?.trim() || undefined;
   if (filter) return { ...base, filter };
