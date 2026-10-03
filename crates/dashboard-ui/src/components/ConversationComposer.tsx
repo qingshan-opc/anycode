@@ -7,6 +7,7 @@ import type { SessionDetail, SessionWithProject } from "@/api/types";
 import { FollowUpQueueCard } from "@/components/FollowUpQueueCard";
 import { Icon } from "@/components/Icon";
 import { ModelPicker } from "@/components/ModelPicker";
+import { ProjectPicker } from "@/components/ProjectPicker";
 import { mergeVoiceTranscript, VoiceInputButton } from "@/components/VoiceInputButton";
 import { appendOcrToMessage, ImageOcrButton } from "@/components/ImageOcrButton";
 import { agentDisplayLabel, isPrimaryAgentId } from "@/lib/agentCatalog";
@@ -108,11 +109,14 @@ type StartProps = {
   projectId: string;
   initialAgent?: string;
   initialPrompt?: string;
-  compact?: boolean;
   onSuccess?: (result: ConversationStartSuccess) => void;
   onCancel?: () => void;
   hideWaitingIndicator?: boolean;
   onStreamingStart?: (sessionId: string) => void;
+  /** Toolbar project picker (start mode): options + change/new-directory hooks. */
+  projectOptions?: { id: string; name: string }[];
+  onProjectChange?: (projectId: string) => void;
+  onSelectDirectory?: () => void;
 };
 
 type Props = FollowUpProps | StartProps;
@@ -171,7 +175,6 @@ export function ConversationComposer(props: Props) {
   const t = useT();
   const locale = useLocale();
   const queryClient = useQueryClient();
-  const titleTouched = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isStart = props.mode === "start";
@@ -181,7 +184,6 @@ export function ConversationComposer(props: Props) {
   // Draft cache scope: per-session for follow-up, per-project for start.
   const draftScope = isStart ? `project:${projectId}` : session?.id;
 
-  const [sessionTitle, setSessionTitle] = useState("");
   const [message, setMessage] = useState(() => {
     const draft = loadComposerDraft(draftScope);
     if (draft.trim()) return draft;
@@ -625,7 +627,6 @@ export function ConversationComposer(props: Props) {
       plan: boolean;
     }) =>
       api.startConversation(projectId, {
-        title: sessionTitle.trim() || undefined,
         prompt: vars.prompt,
         agent: vars.goal ? GOAL_AGENT_ID : agent.trim() || undefined,
         agent_ephemeral: vars.goal ? true : undefined,
@@ -875,9 +876,6 @@ export function ConversationComposer(props: Props) {
 
   function onMessageChange(value: string) {
     setMessage(value);
-    if (isStart && !titleTouched.current) {
-      setSessionTitle(value.trim().slice(0, 120));
-    }
     setSlashOpen(value.trimStart().startsWith("/"));
   }
 
@@ -950,20 +948,6 @@ export function ConversationComposer(props: Props) {
         />
       ) : null}
       <form className="dw-composer" onSubmit={onSubmit}>
-      {isStart && !props.compact && (
-        <div className="px-4 pt-3 pb-1">
-          <input
-            className="dw-input w-full text-sm"
-            placeholder={t("conversations.sessionNamePlaceholder")}
-            value={sessionTitle}
-            onChange={(e) => {
-              titleTouched.current = true;
-              setSessionTitle(e.target.value);
-            }}
-          />
-        </div>
-      )}
-
       <div className="dw-composer-input-wrap relative">
         {running && !hideWaiting && !waitingForQuestion && (
           <p className="text-xs text-secondary m-0 mb-2 flex items-center gap-2">
@@ -1257,6 +1241,14 @@ export function ConversationComposer(props: Props) {
 
       <div className="dw-composer-toolbar">
         <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+          {isStart && props.onProjectChange ? (
+            <ProjectPicker
+              value={projectId}
+              onChange={props.onProjectChange}
+              options={props.projectOptions ?? []}
+              onSelectDirectory={props.onSelectDirectory}
+            />
+          ) : null}
           <label className="sr-only" htmlFor={`composer-agent-${projectId}`}>
             {t("conversations.agentPicker")}
           </label>

@@ -17,7 +17,7 @@ export const zh = {
   },
   sidebar: {
     quickNav: "快捷入口",
-    newAgent: "新建 Agent",
+    newSession: "新建会话",
     search: "搜索",
     automations: "自动化",
     plugins: "插件",

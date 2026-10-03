@@ -206,33 +206,69 @@ pub fn detect_runtime_status() -> RuntimeStatus {
 mod tests {
     use super::*;
 
+    /// 本模块所有测试都会改写进程级环境变量(`ANYCODE_RUNTIMES_DIR` /
+    /// `ANYCODE_PROVISION_RUNTIMES` / `PATH`),而 cargo test 默认并行跑
+    /// 测试线程,不串行化会互相覆盖导致随机失败。
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII 恢复环境变量:断言 panic 也能还原,不污染同进程其他测试。
+    struct EnvRestore {
+        vars: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvRestore {
+        fn new(keys: &[&'static str]) -> Self {
+            Self {
+                vars: keys
+                    .iter()
+                    .copied()
+                    .map(|k| (k, std::env::var(k).ok()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, saved) in self.vars.drain(..) {
+                match saved {
+                    Some(val) => std::env::set_var(key, val),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     #[test]
     fn runtime_bin_dirs_only_lists_existing_dirs() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = EnvRestore::new(&["ANYCODE_RUNTIMES_DIR"]);
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("python/bin")).unwrap();
         std::env::set_var("ANYCODE_RUNTIMES_DIR", dir.path().display().to_string());
         let dirs = runtime_bin_dirs();
         assert_eq!(dirs.len(), 1);
         assert!(dirs[0].ends_with("python/bin"));
-        std::env::remove_var("ANYCODE_RUNTIMES_DIR");
     }
 
     #[test]
     fn provision_script_resolution_prefers_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = EnvRestore::new(&["ANYCODE_PROVISION_RUNTIMES"]);
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("provision-runtimes.sh");
         std::fs::write(&script, "#!/usr/bin/env bash\n").unwrap();
         std::env::set_var("ANYCODE_PROVISION_RUNTIMES", script.display().to_string());
         assert_eq!(resolve_provision_script().unwrap(), script);
-        std::env::remove_var("ANYCODE_PROVISION_RUNTIMES");
     }
 
     #[test]
     fn prepend_runtime_paths_is_idempotent_under_lock() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = EnvRestore::new(&["ANYCODE_RUNTIMES_DIR", "PATH"]);
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("python/bin")).unwrap();
         std::env::set_var("ANYCODE_RUNTIMES_DIR", dir.path().display().to_string());
-        let before = std::env::var("PATH").unwrap_or_default();
         prepend_runtime_paths();
         prepend_runtime_paths();
         let after = std::env::var("PATH").unwrap_or_default();
@@ -242,12 +278,12 @@ mod tests {
             1,
             "managed bin 目录只应被前置一次: {after}"
         );
-        std::env::set_var("PATH", before);
-        std::env::remove_var("ANYCODE_RUNTIMES_DIR");
     }
 
     #[tokio::test]
     async fn duplicate_provision_spawn_is_suppressed() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = EnvRestore::new(&["ANYCODE_PROVISION_RUNTIMES", "ANYCODE_RUNTIMES_DIR"]);
         assert!(!provisioning_in_progress());
         let dir = tempfile::tempdir().unwrap();
         // 脚本 sleep:第一次 spawn 后 handle 未完成,第二次调用必须被抑制。
@@ -275,7 +311,5 @@ mod tests {
         if let Some(h) = handle {
             h.abort();
         }
-        std::env::remove_var("ANYCODE_PROVISION_RUNTIMES");
-        std::env::remove_var("ANYCODE_RUNTIMES_DIR");
     }
 }

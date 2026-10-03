@@ -1698,6 +1698,12 @@
     @apply flex flex-wrap items-center justify-between gap-2 border-0 bg-transparent px-2.5 py-2.5;
   }
 
+  /* Project picker lives in the composer toolbar (start mode) — chip-sized,
+     not the full-width standalone pill. */
+  .dw-composer-toolbar .dw-project-picker {
+    @apply flex-none w-auto min-w-0 max-w-[13rem];
+  }
+
   .dw-composer {
     @apply flex flex-col border-0 bg-transparent;
   }

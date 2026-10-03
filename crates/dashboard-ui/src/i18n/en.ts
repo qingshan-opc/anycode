@@ -17,7 +17,7 @@ export const en = {
   },
   sidebar: {
     quickNav: "Quick actions",
-    newAgent: "New Agent",
+    newSession: "New session",
     search: "Search",
     automations: "Automations",
     plugins: "Plugins",
